@@ -6,14 +6,20 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import hashlib
+import io
 import json
 import os
+import re
+import shlex
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -30,6 +36,26 @@ CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
 RUNNER = ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
 TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace.sh"
 OBSERVER = ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
+RELOAD_RUNUSER = ROOT / "scripts/ci-cloud/rocky-reload-runuser.py"
+RELOAD_SYSTEMCTL = ROOT / "scripts/ci-cloud/rocky-reload-systemctl.py"
+START_RUNUSER = ROOT / "scripts/ci-cloud/rocky-start-runuser.py"
+START_ENV = ROOT / "scripts/ci-cloud/rocky-start-env.py"
+START_SYSTEMCTL = ROOT / "scripts/ci-cloud/rocky-start-systemctl.py"
+ACTIVE_RUNUSER = ROOT / "scripts/ci-cloud/rocky-active-runuser.py"
+ACTIVE_ENV = ROOT / "scripts/ci-cloud/rocky-active-env.py"
+ACTIVE_SYSTEMCTL = ROOT / "scripts/ci-cloud/rocky-active-systemctl.py"
+PRIMARY_RUNUSER = ROOT / "scripts/ci-cloud/rocky-primary-runuser.py"
+PRIMARY_RUNTIME = ROOT / "scripts/ci-cloud/rocky-primary-runtime.py"
+QUALIFICATION_HARNESS = ROOT / "scripts/qualify-production-host.sh"
+QUADLET_AUTHORITY = ROOT / "scripts/quadlet_authority_contract.py"
+SELINUX_ISOLATION = ROOT / "scripts/selinux_isolation_contract.py"
+
+
+class RetainedBytesIO(io.BytesIO):
+    """Retain protocol output after production closes its admitted channel."""
+
+    def close(self) -> None:
+        pass
 
 
 def load_classifier():
@@ -65,11 +91,322 @@ def load_rocky_control():
     return module
 
 
+def load_script(path: Path, name: str):
+    specification = importlib.util.spec_from_file_location(name, path)
+    if specification is None or specification.loader is None:
+        raise RuntimeError(f"cannot load {path.name}")
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
 class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.classifier = load_classifier()
         cls.observer = load_observer()
+        cls.quadlet_authority = load_script(
+            QUADLET_AUTHORITY, "quadlet_authority_contract"
+        )
+        cls.selinux_isolation = load_script(
+            SELINUX_ISOLATION, "selinux_isolation_contract"
+        )
+
+    def run_authority_contract(
+        self, command: str, *arguments: str, environment: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        invocation = " ".join(shlex.quote(argument) for argument in arguments)
+        return subprocess.run(
+            [
+                "bash",
+                "-c",
+                f"source {shlex.quote(os.fspath(QUALIFICATION_HARNESS))}; "
+                f"{command} {invocation}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, **(environment or {})},
+        )
+
+    def test_quadlet_authority_rejects_unsafe_ancestor_classes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ancestor = root / "etc"
+            leaf = ancestor / "containers" / "systemd" / "users" / "20000"
+            leaf.mkdir(parents=True)
+            component = root
+            component.chmod(0o755)
+            for name in leaf.relative_to(root).parts:
+                component /= name
+                component.chmod(0o755)
+            uid = str(os.getuid())
+            gid = str(os.getgid())
+
+            valid = self.run_authority_contract(
+                "administrator_path_admitted", leaf.as_posix(), root.as_posix(), uid, gid
+            )
+            self.assertEqual(0, valid.returncode, valid.stderr)
+
+            ancestor.chmod(0o775)
+            writable = self.run_authority_contract(
+                "administrator_path_admitted", leaf.as_posix(), root.as_posix(), uid, gid
+            )
+            self.assertNotEqual(0, writable.returncode)
+            ancestor.chmod(0o755)
+
+            ancestor.chmod(0o757)
+            world_writable = self.run_authority_contract(
+                "administrator_path_admitted", leaf.as_posix(), root.as_posix(), uid, gid
+            )
+            self.assertNotEqual(0, world_writable.returncode)
+            ancestor.chmod(0o755)
+
+            wrong_owner = self.run_authority_contract(
+                "administrator_path_admitted",
+                leaf.as_posix(),
+                root.as_posix(),
+                str(os.getuid() + 1),
+                gid,
+            )
+            self.assertNotEqual(0, wrong_owner.returncode)
+
+            real_leaf = leaf.parent / "real"
+            leaf.rename(real_leaf)
+            leaf.symlink_to(real_leaf, target_is_directory=True)
+            redirected = self.run_authority_contract(
+                "administrator_path_admitted", leaf.as_posix(), root.as_posix(), uid, gid
+            )
+            self.assertNotEqual(0, redirected.returncode)
+
+            leaf.unlink()
+            real_leaf.rename(leaf)
+            containers = ancestor / "containers"
+            real_containers = ancestor / "real-containers"
+            containers.rename(real_containers)
+            containers.symlink_to(real_containers, target_is_directory=True)
+            ancestor_redirected = self.run_authority_contract(
+                "administrator_path_admitted", leaf.as_posix(), root.as_posix(), uid, gid
+            )
+            self.assertNotEqual(0, ancestor_redirected.returncode)
+
+    def test_effective_quadlet_service_admission_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            properties = Path(directory) / "service.properties"
+            evidence_path = Path(directory) / "quadlet-authority.json"
+            unit_name = "secpal-host-qualification-Ab12Cd"
+            expected_fragment = (
+                "/run/user/20000/systemd/generator/"
+                f"{unit_name}.service"
+            )
+            expected_source = (
+                "/etc/containers/systemd/users/20000/"
+                f"{unit_name}.container"
+            )
+            baseline = {
+                "FragmentPath": expected_fragment,
+                "SourcePath": expected_source,
+                "DropInPaths": "",
+                "ExecStart": (
+                    "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run "
+                    f"--name {unit_name} --replace --rm --cgroups=split "
+                    "--pull never --network none --sdnotify=conmon -d "
+                    "--cap-drop all --user 65532:65532 "
+                    "--security-opt=no-new-privileges "
+                    f"{self.quadlet_authority.FIXTURE_IMAGE} sleep infinity ; "
+                    "ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; "
+                    "pid=0 ; code=(null) ; status=0/0 }"
+                ),
+            }
+
+            def representation(values: dict[str, str]) -> str:
+                return "".join(
+                    f"{name}={value}\n" for name, value in values.items()
+                )
+
+            admitted = self.quadlet_authority.admit_quadlet_authority(
+                representation(baseline), expected_fragment, expected_source
+            )
+            self.quadlet_authority.validate_authority_evidence(admitted)
+            for path, value in (
+                (("schema_version",), True),
+                (("exec_start", "ignore_errors"), 0),
+                (("exec_start", "pid"), False),
+            ):
+                with self.subTest(closed_type=path):
+                    candidate = json.loads(json.dumps(admitted))
+                    location = candidate
+                    for component in path[:-1]:
+                        location = location[component]
+                    location[path[-1]] = value
+                    with self.assertRaises(self.quadlet_authority.AuthorityError):
+                        self.quadlet_authority.validate_authority_evidence(candidate)
+            properties.write_text(representation(baseline), encoding="utf-8")
+            wrapper = self.run_authority_contract(
+                "effective_quadlet_service_admitted",
+                properties.as_posix(),
+                expected_fragment,
+                expected_source,
+                evidence_path.as_posix(),
+            )
+            self.assertEqual(0, wrapper.returncode, wrapper.stderr)
+            self.assertEqual(
+                admitted,
+                json.loads(evidence_path.read_text(encoding="utf-8")),
+            )
+
+            outside_uid_bound = "4294967295"
+            outside_fragment = expected_fragment.replace("20000", outside_uid_bound)
+            outside_source = expected_source.replace("20000", outside_uid_bound)
+            outside_representation = representation(
+                {
+                    **baseline,
+                    "FragmentPath": outside_fragment,
+                    "SourcePath": outside_source,
+                }
+            )
+            with self.assertRaises(self.quadlet_authority.AuthorityError):
+                self.quadlet_authority.admit_quadlet_authority(
+                    outside_representation, outside_fragment, outside_source
+                )
+
+            missing_properties = self.run_authority_contract(
+                "effective_quadlet_service_admitted",
+                (Path(directory) / "missing.properties").as_posix(),
+                expected_fragment,
+                expected_source,
+                evidence_path.as_posix(),
+            )
+            self.assertEqual(125, missing_properties.returncode)
+
+            mutations = {
+                "shadowed fragment": {
+                    "FragmentPath": (
+                        "/home/secpal-deploy/.config/systemd/user/"
+                        "secpal-host-qualification-fixture.service"
+                    )
+                },
+                "substituted source": {
+                    "SourcePath": "/home/secpal-deploy/fixture.container"
+                },
+                "runtime drop-in": {
+                    "DropInPaths": (
+                        "/home/secpal-deploy/.config/systemd/user/"
+                        "secpal-host-qualification-fixture.service.d/override.conf"
+                    )
+                },
+                "substituted execution": {
+                    "ExecStart": "{ path=/usr/bin/sh ; argv[]=/usr/bin/sh -c true ; }"
+                },
+                "generated argv drift": {
+                    "ExecStart": baseline["ExecStart"].replace(
+                        "--network none", "--network host", 1
+                    )
+                },
+                "execution metadata drift": {
+                    "ExecStart": baseline["ExecStart"].replace(
+                        "ignore_errors=no", "ignore_errors=yes", 1
+                    )
+                },
+            }
+            for name, mutation in mutations.items():
+                with self.subTest(name=name):
+                    with self.assertRaises(self.quadlet_authority.AuthorityError):
+                        self.quadlet_authority.admit_quadlet_authority(
+                            representation({**baseline, **mutation}),
+                            expected_fragment,
+                            expected_source,
+                        )
+
+            duplicate = dict(baseline)
+            duplicate["FragmentPath"] += f"\nFragmentPath={expected_fragment}"
+            with self.assertRaises(self.quadlet_authority.AuthorityError):
+                self.quadlet_authority.admit_quadlet_authority(
+                    representation(duplicate), expected_fragment, expected_source
+                )
+
+    def test_quadlet_authority_rejects_effective_service_account_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            leaf = root / "etc" / "containers" / "systemd" / "users" / "20000"
+            leaf.mkdir(parents=True)
+            result = self.run_authority_contract(
+                "run_as_service_account() { [[ \"${*: -1}\" == \"$WRITABLE_PATH\" ]]; }; "
+                "service_account_cannot_write_path",
+                leaf.as_posix(),
+                root.as_posix(),
+                environment={"WRITABLE_PATH": leaf.parent.as_posix()},
+            )
+            self.assertNotEqual(0, result.returncode)
+
+    def test_rootless_runtime_identity_admission_fails_closed(self) -> None:
+        for facts in (
+            ("false", "20000", "20000", "20000", "20000"),
+            ("true", "0", "0", "0", "0"),
+            ("true", "20001", "20000", "20000", "20000"),
+            ("true", "20000", "20001", "20000", "20000"),
+        ):
+            with self.subTest(facts=facts):
+                result = self.run_authority_contract(
+                    "runtime_identity_admitted", *facts
+                )
+                self.assertNotEqual(0, result.returncode)
+
+        valid = self.run_authority_contract(
+            "runtime_identity_admitted", "true", "20000", "20000", "20000", "20000"
+        )
+        self.assertEqual(0, valid.returncode, valid.stderr)
+
+    def test_effective_workload_least_authority_admission(self) -> None:
+        baseline = {
+            "Uid": "65532\t65532\t65532\t65532",
+            "Gid": "65532\t65532\t65532\t65532",
+            "NoNewPrivs": "1",
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000",
+            "Seccomp": "2",
+        }
+        mutations = (
+            ("Uid", "65532\t0\t65532\t65532"),
+            ("Gid", "65532\t0\t65532\t65532"),
+            ("NoNewPrivs", "0"),
+            ("CapInh", "0000000000000001"),
+            ("CapPrm", "0000000000000001"),
+            ("CapEff", "0000000000000001"),
+            ("CapBnd", "0000000000000001"),
+            ("CapAmb", "0000000000000001"),
+            ("Seccomp", "0"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            status_path = Path(directory) / "status"
+
+            def write_status(fields: dict[str, str]) -> None:
+                status_path.write_text(
+                    "".join(f"{name}:\t{value}\n" for name, value in fields.items()),
+                    encoding="ascii",
+                )
+
+            write_status(baseline)
+            valid = self.run_authority_contract(
+                "least_authority_process_admitted",
+                status_path.as_posix(),
+                "65532",
+                "65532",
+            )
+            self.assertEqual(0, valid.returncode, valid.stderr)
+            for field, value in mutations:
+                with self.subTest(field=field):
+                    write_status({**baseline, field: value})
+                    result = self.run_authority_contract(
+                        "least_authority_process_admitted",
+                        status_path.as_posix(),
+                        "65532",
+                        "65532",
+                    )
+                    self.assertNotEqual(0, result.returncode)
 
     @staticmethod
     def reload_observation_fields() -> dict[str, object]:
@@ -96,6 +433,233 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "reload_access_avc_ambiguous": False,
         }
 
+    @staticmethod
+    def primary_podman_arguments(suffix: str = "Ab12Cd") -> list[str]:
+        return [
+            "run", "--detach", "--name",
+            f"secpal-host-qualification-{suffix}-a",
+            "--security-opt", "no-new-privileges", "--cap-drop", "all",
+            "--user", "65532:65532", "--network", "pasta", "-v",
+            f"/var/tmp/secpal-host-qualification-{suffix}/state-a:/state:Z",
+            "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1",
+            "sleep", "infinity",
+        ]
+
+    @classmethod
+    def primary_runuser_arguments(cls, runtime: object) -> list[str]:
+        return [
+            "--user", "secpal-runtime", "--", "env",
+            "-u", "CONTAINER_HOST", "-u", "CONTAINER_CONNECTION",
+            f"HOME={runtime.pw_dir}",
+            f"XDG_RUNTIME_DIR=/run/user/{runtime.pw_uid}",
+            f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{runtime.pw_uid}/bus",
+            "podman", *cls.primary_podman_arguments(),
+        ]
+
+    def test_primary_router_admits_only_the_exact_immutable_request(self) -> None:
+        router = load_script(PRIMARY_RUNUSER, "rocky_primary_router_contract")
+        runtime = types.SimpleNamespace(pw_uid=1001, pw_dir="/var/lib/secpal-runtime")
+        arguments = self.primary_runuser_arguments(runtime)
+        self.assertEqual(
+            self.primary_podman_arguments(), router.exact_primary(arguments, runtime)
+        )
+        for index in (0, 3, 8, 11, 12, 15, 25, 28):
+            mutated = list(arguments)
+            mutated[index] += "-mutated"
+            with self.subTest(index=index):
+                self.assertIsNone(router.exact_primary(mutated, runtime))
+        self.assertIsNone(router.exact_primary(arguments + ["extra"], runtime))
+
+    def test_primary_runtime_maps_podman_status_without_copying_output(self) -> None:
+        runtime_helper = load_script(PRIMARY_RUNTIME, "rocky_primary_runtime_contract")
+        runtime = types.SimpleNamespace(
+            pw_uid=1001, pw_gid=1001, pw_dir="/var/lib/secpal-runtime"
+        )
+        arguments = self.primary_podman_arguments()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for status, stage in (
+                (0, "success"),
+                (125, "podman-internal-failed"),
+                (126, "podman-oci-status-126"),
+                (127, "podman-oci-status-127"),
+                (42, "podman-request-failed"),
+            ):
+                executable = root / f"podman-{status}"
+                executable.write_text(f"#!/bin/sh\nexit {status}\n", encoding="ascii")
+                executable.chmod(0o755)
+                with self.subTest(status=status), mock.patch.object(
+                    runtime_helper.os, "getresuid", return_value=(1001,) * 3
+                ), mock.patch.object(
+                    runtime_helper.os, "getresgid", return_value=(1001,) * 3
+                ):
+                    self.assertEqual(
+                        (status, stage, status),
+                        runtime_helper.execute(
+                            arguments, runtime=runtime, podman_path=executable
+                        ),
+                    )
+            missing = root / "missing-podman"
+            with mock.patch.object(
+                runtime_helper.os, "getresuid", return_value=(1001,) * 3
+            ), mock.patch.object(
+                runtime_helper.os, "getresgid", return_value=(1001,) * 3
+            ):
+                self.assertEqual(
+                    (127, "podman-exec-failed", None),
+                    runtime_helper.execute(
+                        arguments, runtime=runtime, podman_path=missing
+                    ),
+                )
+
+    def test_primary_router_forwards_only_the_closed_control_environment(self) -> None:
+        router = load_script(PRIMARY_RUNUSER, "rocky_primary_closed_environment")
+        payload = (
+            b'{"kind":"runtime","schema_version":1,"stage":"runtime-entered"}\n'
+            b'{"kind":"runtime","podman_status":0,"schema_version":1,'
+            b'"stage":"success"}\n'
+        )
+        with mock.patch.object(
+            router.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, stdout=payload),
+        ) as run:
+            status, facts = router.execute_primary(self.primary_podman_arguments())
+        self.assertEqual(0, status)
+        self.assertEqual("success", facts["stage"])
+        self.assertEqual(
+            {
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+                "LC_ALL": "C",
+            },
+            run.call_args.kwargs["env"],
+        )
+        runtime_helper = load_script(
+            PRIMARY_RUNTIME, "rocky_primary_runtime_closed_environment"
+        )
+        runtime = types.SimpleNamespace(
+            pw_uid=1001, pw_gid=1001, pw_dir="/home/secpal-runtime"
+        )
+        with mock.patch.object(
+            runtime_helper.os, "getresuid", return_value=(1001,) * 3
+        ), mock.patch.object(
+            runtime_helper.os, "getresgid", return_value=(1001,) * 3
+        ):
+            self.assertEqual(
+                {
+                    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+                    "LC_ALL": "C",
+                    "HOME": "/home/secpal-runtime",
+                    "XDG_RUNTIME_DIR": "/run/user/1001",
+                    "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1001/bus",
+                },
+                runtime_helper.runtime_environment(runtime),
+            )
+
+    def test_primary_protocol_closes_runuser_env_and_podman_boundaries(self) -> None:
+        router = load_script(PRIMARY_RUNUSER, "rocky_primary_protocol_contract")
+        entered = {"kind": "runtime", "schema_version": 1, "stage": "runtime-entered"}
+        cases = (
+            (b"", 126, "runuser-invocation-failed", None),
+            (
+                entered,
+                {"kind": "runtime", "podman_status": None,
+                 "schema_version": 1, "stage": "env-preparation-failed"},
+                126,
+                "env-preparation-failed",
+                None,
+            ),
+            (
+                entered,
+                {"kind": "runtime", "podman_status": None,
+                 "schema_version": 1, "stage": "podman-exec-failed"},
+                127,
+                "podman-exec-failed",
+                None,
+            ),
+        )
+        empty_payload, empty_status, empty_stage, empty_podman = cases[0]
+        empty = router.parse_protocol(empty_payload, empty_status)
+        self.assertEqual((empty_stage, empty_podman), (
+            empty["stage"], empty["podman_status"]
+        ))
+        for first, second, status, stage, podman_status in cases[1:]:
+            payload = "\n".join(
+                json.dumps(item, sort_keys=True, separators=(",", ":"))
+                for item in (first, second)
+            ).encode("ascii") + b"\n"
+            with self.subTest(stage=stage):
+                observed = router.parse_protocol(payload, status)
+                self.assertEqual(stage, observed["stage"])
+                self.assertEqual(podman_status, observed["podman_status"])
+        self.assertEqual(
+            "diagnostic-unavailable",
+            router.parse_protocol(b"x" * (router.MAX_PROTOCOL_BYTES + 1), 126)[
+                "stage"
+            ],
+        )
+
+    def test_primary_observation_failure_never_replays_the_request(self) -> None:
+        router = load_script(PRIMARY_RUNUSER, "rocky_primary_no_replay_contract")
+        runtime = types.SimpleNamespace(pw_uid=1001, pw_dir="/runtime")
+        arguments = self.primary_runuser_arguments(runtime)
+        with mock.patch.object(router.sys, "argv", ["router", *arguments]), \
+             mock.patch.object(router.pwd, "getpwnam", return_value=runtime), \
+             mock.patch.object(router.os, "geteuid", return_value=0), \
+             mock.patch.object(router, "admitted_observation_path", return_value=Path("/obs")), \
+             mock.patch.object(
+                 router,
+                 "execute_primary",
+                 return_value=(126, router.diagnostic("podman-oci-status-126", 126, 126)),
+             ) as execute, mock.patch.object(
+                 router, "write_observation", side_effect=OSError("full")
+             ), mock.patch.object(router, "fallback") as fallback:
+            self.assertEqual(126, router.main())
+        execute.assert_called_once_with(self.primary_podman_arguments())
+        fallback.assert_not_called()
+
+    def test_primary_classifier_admits_only_status_consistent_facts(self) -> None:
+        cases = (
+            ("runuser-exec-failed", None, None, 126,
+             "qualify-workload-primary-runuser", "exec-failed"),
+            ("runuser-invocation-failed", 126, None, 126,
+             "qualify-workload-primary-runuser", "invocation-failed"),
+            ("env-preparation-failed", 126, None, 126,
+             "qualify-workload-primary-env", "invariant-failed"),
+            ("podman-exec-failed", 127, None, 127,
+             "qualify-workload-primary-podman", "exec-failed"),
+            ("podman-internal-failed", 125, 125, 125,
+             "qualify-workload-primary-podman", "request-failed"),
+            ("podman-oci-status-126", 126, 126, 126,
+             "qualify-workload-primary-podman-oci", "invocation-failed"),
+            ("podman-oci-status-127", 127, 127, 127,
+             "qualify-workload-primary-podman-oci", "command-exec-failed"),
+        )
+        for stage, runuser_status, podman_status, status, operation, reason in cases:
+            raw = {
+                "schema_version": 1,
+                "stage": stage,
+                "runuser_status": runuser_status,
+                "podman_status": podman_status,
+            }
+            with self.subTest(stage=stage):
+                observed_operation, observed_reason, diagnostic = (
+                    self.classifier.admit_primary_workload_observation(raw, status)
+                )
+                self.assertEqual(
+                    (operation, reason), (observed_operation, observed_reason)
+                )
+                self.classifier.validate_admitted_primary_workload_diagnostic(
+                    diagnostic, operation, reason, status
+                )
+                mutated = dict(raw, runuser_status=1)
+                self.assertEqual(
+                    ("qualify-workload-primary", "diagnostic-unavailable"),
+                    self.classifier.admit_primary_workload_observation(
+                        mutated, status
+                    )[:2],
+                )
+
     def classify(
         self,
         output: str = "",
@@ -111,7 +675,829 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             status,
             target_bound=target_bound,
             trusted_marker=marker,
+            line_rules=self.classifier.HISTORICAL_LINE_RULES,
         )
+
+    def classify_current(
+        self, trace: str, output: str = "", exit_status: int = 1
+    ) -> tuple[str, str]:
+        return self.classifier.classify_failure(
+            output.encode(), trace.encode(), exit_status, target_bound=True,
+            line_rules=self.classifier.LINE_RULES,
+        )
+
+    def build_avc_failure(self, root: Path) -> tuple[dict[str, object], Path]:
+        process_a = "system_u:system_r:container_t:s0:c0"
+        process_b = "system_u:system_r:container_t:s0:c1023"
+        storage_a = "system_u:object_r:container_file_t:s0:c0"
+        identity = "msg=audit(08/31/26 00:43:39.673:41) :"
+        audit = "\n".join(
+            (
+                f"type=AVC {identity} avc: denied {{ synthetic-permission }} "
+                f'pid=4242 name="synthetic-name" scontext={process_b} '
+                f"tcontext={storage_a} tclass=synthetic_class permissive=0",
+                f"type=PROCTITLE {identity} proctitle=cat /foreign/marker",
+                f'type=SYSCALL {identity} pid=4242 comm="head"',
+            )
+        )
+        projection = self.selinux_isolation.diagnose_avc_correlation(
+            process_a=process_a,
+            process_b=process_b,
+            storage_a=storage_a,
+            audit_text=audit,
+            attempt=12,
+        )
+        diagnostic = root / "avc-diagnostic.json"
+        diagnostic.write_bytes(self.selinux_isolation.canonical_bytes(projection))
+        stdout = root / "stdout"
+        stdout.write_bytes(b"")
+        trace = root / "trace"
+        trace.write_text(
+            "SECPAL_TARGET_ERR_V2:1:375,690,772\n", encoding="ascii"
+        )
+        output = root / "failure.json"
+        result = subprocess.run(
+            [
+                CLASSIFIER,
+                "--target-sha",
+                self.classifier.EXPECTED_TARGET_SHA,
+                "--control-sha",
+                "c" * 40,
+                "--run-id",
+                "12345",
+                "--run-attempt",
+                "1",
+                "--harness",
+                QUALIFICATION_HARNESS,
+                "--stdout",
+                stdout,
+                "--trace",
+                trace,
+                "--exit-status",
+                "3",
+                "--avc-correlation-diagnostic",
+                diagnostic,
+                "--output",
+                output,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        return json.loads(output.read_text(encoding="utf-8")), output
+
+    def observer_arguments(self, directory: str) -> types.SimpleNamespace:
+        return types.SimpleNamespace(
+            event=Path(directory) / "event",
+            ack=Path(directory) / "ack",
+            output=Path(directory) / "observation.json",
+            target_sha=self.classifier.EXPECTED_TARGET_SHA,
+            control_sha="c" * 40,
+            run_id="12345",
+            run_attempt="1",
+            boot_id="12345678-1234-1234-1234-123456789abc",
+            journal_baseline="2026-08-30 00:00:00.000000 UTC",
+        )
+
+    @staticmethod
+    def reload_event(frame: int | str) -> bytes:
+        return (
+            b"SECPAL_QUADLET_RELOAD_CLIENT_V1:4242\n"
+            + b"SECPAL_QUADLET_RELOAD_FAILURE_V3:1:31337:40960:"
+            + b"20260830000000:s=abc;i=1;b=def;m=2;t=3;x=4:"
+            + str(frame).encode("ascii")
+            + b"\n"
+        )
+
+    def test_missing_nss_account_preserves_bounded_failure_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            acknowledgement = RetainedBytesIO()
+            with (
+                mock.patch.object(
+                    self.observer,
+                    "admitted_fifo",
+                    side_effect=[io.BytesIO(self.reload_event("614,620")), acknowledgement],
+                ),
+                mock.patch.object(
+                    self.observer, "validate_client_identity", create=True
+                ),
+                mock.patch.object(
+                    self.observer, "collect_observation", side_effect=KeyError("secpal-runtime")
+                ),
+            ):
+                self.assertEqual(
+                    1, self.observer.observe(self.observer_arguments(directory))
+                )
+            self.assertEqual(
+                b"SECPAL_RELOAD_CLIENT_ADMITTED_V1\n"
+                b"SECPAL_RELOAD_ADJACENCY_FAILED_V1\n",
+                acknowledgement.getvalue(),
+            )
+
+    def test_historical_reload_frame_cannot_satisfy_current_observer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            acknowledgement = RetainedBytesIO()
+            with (
+                mock.patch.object(
+                    self.observer,
+                    "admitted_fifo",
+                    side_effect=[io.BytesIO(self.reload_event(242)), acknowledgement],
+                ),
+                mock.patch.object(
+                    self.observer, "validate_client_identity", create=True
+                ),
+                mock.patch.object(self.observer, "collect_observation", return_value={}),
+                mock.patch.object(self.observer, "write_document"),
+            ):
+                self.assertEqual(
+                    1, self.observer.observe(self.observer_arguments(directory))
+                )
+            self.assertEqual(
+                b"SECPAL_RELOAD_CLIENT_ADMITTED_V1\n"
+                b"SECPAL_RELOAD_ADJACENCY_FAILED_V1\n",
+                acknowledgement.getvalue(),
+            )
+
+    def test_direct_user_record_transport_has_exact_trusted_helpers(self) -> None:
+        self.assertTrue(RELOAD_RUNUSER.is_file())
+        self.assertTrue(RELOAD_SYSTEMCTL.is_file())
+        trace = TRACE.read_text(encoding="utf-8")
+        runner = RELOAD_RUNUSER.read_text(encoding="utf-8")
+        client = RELOAD_SYSTEMCTL.read_text(encoding="utf-8")
+        self.assertIn("/opt/secpal-control/libexec/rocky-reload-runuser", trace)
+        self.assertNotIn('export PATH="/opt/secpal-control/libexec:$PATH"', trace)
+        self.assertIn("os.dup2(RECORD_FD, 1", runner)
+        self.assertIn("os.dup2(ACK_FD, 0", runner)
+        self.assertIn("/usr/local/libexec/secpal-control/rocky-reload-systemctl", runner)
+        self.assertNotIn("SECPAL_RELOAD_EXACT_CALL", trace + runner + client)
+        self.assertIn("os.execve(REAL_RUNUSER", runner)
+        self.assertIn('REAL_SYSTEMCTL = "/usr/bin/systemctl"', client)
+        self.assertIn("os.execv(REAL_SYSTEMCTL", client)
+
+    def test_runuser_proxy_maps_only_admitted_channels_and_uses_absolute_helper(
+        self,
+    ) -> None:
+        proxy = load_script(RELOAD_RUNUSER, "rocky_reload_runuser")
+        runtime = types.SimpleNamespace(pw_uid=994, pw_gid=994, pw_dir="/var/lib/secpal-runtime")
+        expected = [
+            "--user", "secpal-runtime", "--", "env",
+            "-u", "CONTAINER_HOST", "-u", "CONTAINER_CONNECTION",
+            "HOME=/var/lib/secpal-runtime",
+            "XDG_RUNTIME_DIR=/run/user/994",
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/994/bus",
+            "systemctl", "--user", "daemon-reload",
+        ]
+        fifo = types.SimpleNamespace(
+            st_mode=stat.S_IFIFO | 0o600, st_uid=0, st_gid=0
+        )
+        execution = RuntimeError("exec")
+        with (
+            mock.patch.object(proxy.sys, "argv", [str(RELOAD_RUNUSER), *expected]),
+            mock.patch.object(proxy.os, "geteuid", return_value=0),
+            mock.patch.object(proxy.pwd, "getpwnam", return_value=runtime),
+            mock.patch.object(proxy.os, "fstat", return_value=fifo),
+            mock.patch.object(proxy.fcntl, "fcntl", return_value=os.O_RDWR),
+            mock.patch.object(proxy.os, "dup2") as duplicate,
+            mock.patch.object(proxy.os, "closerange") as close_range,
+            mock.patch.object(proxy.os, "sysconf", return_value=64),
+            mock.patch.object(proxy.os, "execve", side_effect=execution) as execute,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "exec"):
+                proxy.main()
+        duplicate.assert_has_calls(
+            [mock.call(proxy.ACK_FD, 0, inheritable=True),
+             mock.call(proxy.RECORD_FD, 1, inheritable=True)]
+        )
+        close_range.assert_called_once_with(3, 64)
+        executed = execute.call_args.args[1]
+        self.assertEqual(
+            {
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+                "LC_ALL": "C",
+            },
+            execute.call_args.args[2],
+        )
+        self.assertEqual(proxy.REAL_RUNUSER, executed[0])
+        self.assertEqual(proxy.TRUSTED_SYSTEMCTL, executed[-3])
+        self.assertNotIn("systemctl", executed)
+
+    def test_runtime_helper_keeps_pid_and_rejects_wrong_semantic_actor(self) -> None:
+        client = load_script(RELOAD_SYSTEMCTL, "rocky_reload_systemctl")
+        runtime = types.SimpleNamespace(pw_uid=994, pw_gid=994)
+        execution = RuntimeError("exec")
+        with (
+            mock.patch.object(client.sys, "argv", [str(RELOAD_SYSTEMCTL), "--user", "daemon-reload"]),
+            mock.patch.object(client.pwd, "getpwnam", return_value=runtime),
+            mock.patch.object(client.os, "getresuid", return_value=(994, 994, 994)),
+            mock.patch.object(client.os, "getresgid", return_value=(994, 994, 994)),
+            mock.patch.object(client, "admitted_fifo"),
+            mock.patch.object(client.os, "getpid", return_value=4242),
+            mock.patch.object(client.os, "write", return_value=40) as write,
+            mock.patch.object(client, "read_acknowledgement", return_value=client.ACK),
+            mock.patch.object(client.os, "close"),
+            mock.patch.object(client.os, "execv", side_effect=execution) as execute,
+        ):
+            record = b"SECPAL_QUADLET_RELOAD_CLIENT_V1:4242\n"
+            write.return_value = len(record)
+            with self.assertRaisesRegex(RuntimeError, "exec"):
+                client.main()
+            write.assert_called_once_with(1, record)
+            execute.assert_called_once_with(
+                client.REAL_SYSTEMCTL,
+                [client.REAL_SYSTEMCTL, "--user", "daemon-reload"],
+            )
+
+        with (
+            mock.patch.object(client.sys, "argv", [str(RELOAD_SYSTEMCTL), "--user", "daemon-reload"]),
+            mock.patch.object(client.pwd, "getpwnam", return_value=runtime),
+            mock.patch.object(client.os, "getresuid", return_value=(0, 0, 0)),
+            mock.patch.object(client.os, "getresgid", return_value=(0, 0, 0)),
+            mock.patch.object(client.os, "execv") as execute,
+        ):
+            self.assertEqual(126, client.main())
+            execute.assert_not_called()
+
+    def test_observer_rejects_forged_or_wrong_pid_actor(self) -> None:
+        runtime = types.SimpleNamespace(pw_uid=994, pw_gid=994)
+        wrong_actor = (
+            b"Name:\tsystemctl\nUid:\t0\t0\t0\t0\n"
+            b"Gid:\t0\t0\t0\t0\n"
+        )
+        with (
+            mock.patch.object(self.observer.Path, "read_bytes", return_value=wrong_actor),
+            mock.patch.object(self.observer.pwd, "getpwnam", return_value=runtime),
+        ):
+            with self.assertRaises(self.observer.ObservationError):
+                self.observer.validate_client_identity(4242)
+
+    def test_observer_distinguishes_malformed_identity_from_mismatch(self) -> None:
+        runtime = types.SimpleNamespace(pw_uid=994, pw_gid=994)
+        incomplete_identity = b"Name:\tsystemctl\nUid:\t994\t994\t994\t994\n"
+        with (
+            mock.patch.object(
+                self.observer.Path, "read_bytes", return_value=incomplete_identity
+            ),
+            mock.patch.object(self.observer.pwd, "getpwnam", return_value=runtime),
+        ):
+            with self.assertRaisesRegex(
+                self.observer.ObservationError,
+                "daemon-reload client identity is malformed",
+            ):
+                self.observer.validate_client_identity(4242)
+        with mock.patch.object(
+            self.observer.Path, "read_bytes", side_effect=FileNotFoundError
+        ):
+            with self.assertRaises(self.observer.ObservationError):
+                self.observer.validate_client_identity(4242)
+
+    def test_current_target_line_map_is_private_relabel_only(self) -> None:
+        cases = (
+            (614, "qualify-quadlet-daemon-reload"),
+            (638, "qualify-quadlet-start"),
+            (639, "qualify-quadlet-active-state"),
+            (659, "qualify-seccomp"),
+            (670, "qualify-workload-primary"),
+            (680, "qualify-selinux-storage"),
+        )
+        for line, operation in cases:
+            with self.subTest(line=line):
+                self.assertEqual(
+                    (operation, "command-failed"),
+                    self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}"),
+                )
+        for line in (668, 669, 670):
+            self.assertNotEqual("qualify-selinux-storage-fcontext-add", self.classifier.operation_for_line(line))
+
+    def test_current_target_messages_preserve_invariant_semantics(self) -> None:
+        invariant_cases = (
+            (
+                "ERROR: service account must resolve to a non-root runtime identity.\n",
+                487,
+                "qualify-service-account",
+            ),
+            (
+                "ERROR: effective Podman runtime is not the admitted rootless service identity.\n",
+                535,
+                "qualify-rootless-runtime",
+            ),
+            (
+                "ERROR: effective Quadlet runtime identity contradicts the service account.\n",
+                651,
+                "qualify-quadlet-authority",
+            ),
+            (
+                "ERROR: representative workload lacks the effective least-authority process state.\n",
+                662,
+                "qualify-seccomp",
+            ),
+        )
+        for message, line, operation in invariant_cases:
+            with self.subTest(line=line):
+                self.assertEqual(
+                    (operation, "invariant-failed"),
+                    self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}", message),
+                )
+        self.assertEqual(
+            ("qualify-avc-correlation", "command-failed"),
+            self.classify_current(
+                "SECPAL_TARGET_ERR_V2:1:375,690,772",
+                "ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial.\n",
+                exit_status=3,
+            ),
+        )
+
+    def test_every_current_line_range_is_closed_nonoverlapping_and_reachable(
+        self,
+    ) -> None:
+        previous_last = 0
+        for first, last, operation in self.classifier.LINE_RULES:
+            with self.subTest(first=first, last=last, operation=operation):
+                self.assertGreater(first, previous_last)
+                self.assertLessEqual(first, last)
+                self.assertIn(operation, self.classifier.OPERATIONS)
+                for line in {first, last}:
+                    self.assertEqual(
+                        (operation, "command-failed"),
+                        self.classify_current(
+                            f"SECPAL_TARGET_ERR_V2:1:{line}"
+                        ),
+                    )
+                previous_last = last
+
+        harness_lines = QUALIFICATION_HARNESS.read_text(encoding="utf-8").splitlines()
+        anchors = {
+            456: ("read_os_release_value", "qualify-host-identity"),
+            614: ("user_systemctl daemon-reload", "qualify-quadlet-daemon-reload"),
+            638: ("user_systemctl start", "qualify-quadlet-start"),
+            639: ("user_systemctl is-active", "qualify-quadlet-active-state"),
+            656: ("rootless_podman exec", "qualify-workload-primary"),
+            668: ("install -d", "qualify-selinux-storage-directory-create"),
+            670: ("rootless_podman run", "qualify-workload-primary"),
+            675: ("rootless_podman run", "qualify-workload-secondary"),
+            680: ("rootless_podman top", "qualify-selinux-storage"),
+            690: ("observe_denied_access", "qualify-avc-correlation"),
+            749: ("rootless_podman inspect", "qualify-runtime-fallback-absence"),
+            765: ("return 3", "qualify-avc-correlation"),
+        }
+        for line, (source, operation) in anchors.items():
+            with self.subTest(line=line):
+                self.assertIn(source, harness_lines[line - 1])
+                self.assertEqual(
+                    operation, self.classifier.operation_for_line(line)
+                )
+
+    def test_historical_202_start_boundary_retains_its_original_mapping(self) -> None:
+        executable_failures = {
+            self.classifier.classify_failure(
+                b"", b"SECPAL_TARGET_ERR_V2:126:51,238\n", 126,
+                target_bound=True,
+                line_rules=self.classifier.HISTORICAL_202_LINE_RULES,
+            )
+            for _producer in ("runuser", "env", "systemctl")
+        }
+        completed_client_failures = {
+            self.classifier.classify_failure(
+                b"", b"SECPAL_TARGET_ERR_V2:1:51,238\n", 1,
+                target_bound=True,
+                line_rules=self.classifier.HISTORICAL_202_LINE_RULES,
+            )
+            for _producer in ("manager-request", "service-exec-main-status-126")
+        }
+        self.assertEqual(
+            {("qualify-quadlet-start", "command-failed")}, executable_failures
+        )
+        self.assertEqual(
+            {("qualify-quadlet-start", "command-failed")},
+            completed_client_failures,
+        )
+
+    def test_start_observers_distinguish_real_exec_boundaries_and_job_status(
+        self,
+    ) -> None:
+        self.assertTrue(START_RUNUSER.is_file())
+        self.assertTrue(START_ENV.is_file())
+        self.assertTrue(START_SYSTEMCTL.is_file())
+        runuser = load_script(START_RUNUSER, "rocky_start_runuser")
+        env_helper = load_script(START_ENV, "rocky_start_env")
+        systemctl = load_script(START_SYSTEMCTL, "rocky_start_systemctl")
+        runtime = types.SimpleNamespace(
+            pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(Path.home())
+        )
+        unit = "secpal-host-qualification-abc123.service"
+        target_arguments = runuser.target_arguments(runtime, unit)
+        env_arguments = target_arguments[4:]
+        systemctl_arguments = ["--user", "start", unit]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def executable(name: str, body: str) -> Path:
+                path = root / name
+                path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+                path.chmod(0o700)
+                return path
+
+            cannot_execute = root / "cannot-execute"
+            cannot_execute.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            cannot_execute.chmod(0o600)
+            missing_executable = root / "missing-executable"
+            fake_runuser = executable(
+                "runuser",
+                'while [ "$1" != -- ]; do shift; done; shift; exec "$@"',
+            )
+            runuser_rejects = executable("runuser-rejects", "exit 1")
+            env_succeeds = Path("/usr/bin/env")
+            client_fails = executable(
+                "systemctl-request-fails",
+                'case " $* " in\n'
+                '  *" --property=Result "*)\n'
+                "    printf '%s\\n' 'Result=success' 'ExecMainCode=0' "
+                "'ExecMainStatus=0'; exit 0;;\n"
+                '  *) exit 1;;\n'
+                "esac",
+            )
+            property_observation_fails = executable(
+                "systemctl-show-fails", "exit 1"
+            )
+            service_exits_126 = executable(
+                "systemctl-service-fails",
+                'case " $* " in\n'
+                '  *" --property=Result "*)\n'
+                "    printf '%s\\n' 'Result=exit-code' 'ExecMainCode=1' "
+                "'ExecMainStatus=126'; exit 0;;\n"
+                '  *) exit 1;;\n'
+                "esac",
+            )
+            client_succeeds = executable("systemctl-success", "exit 0")
+
+            status, facts = runuser.execute_start(
+                target_arguments,
+                runtime=runtime,
+                runuser_path=cannot_execute,
+                env_helper_path=START_ENV,
+            )
+            self.assertEqual(126, status)
+            self.assertEqual("runuser-exec-failed", facts["stage"])
+
+            status, facts = runuser.execute_start(
+                target_arguments,
+                runtime=runtime,
+                runuser_path=missing_executable,
+                env_helper_path=START_ENV,
+            )
+            self.assertEqual(127, status)
+            self.assertEqual("runuser-exec-failed", facts["stage"])
+
+            status, facts = runuser.execute_start(
+                target_arguments,
+                runtime=runtime,
+                runuser_path=runuser_rejects,
+                env_helper_path=START_ENV,
+            )
+            self.assertEqual(1, status)
+            self.assertEqual("runuser-invocation-failed", facts["stage"])
+
+            status, records = env_helper.execute_env(
+                env_arguments,
+                runtime=runtime,
+                env_path=cannot_execute,
+                systemctl_helper_path=START_SYSTEMCTL,
+            )
+            self.assertEqual(126, status)
+            self.assertEqual(("env-entered", "env-exec-failed"), records)
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=cannot_execute,
+            )
+            self.assertEqual(126, status)
+            self.assertEqual("systemctl-exec-failed", facts["stage"])
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=missing_executable,
+            )
+            self.assertEqual(127, status)
+            self.assertEqual("systemctl-exec-failed", facts["stage"])
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=client_fails,
+            )
+            self.assertEqual(1, status)
+            self.assertEqual("systemctl-request-failed", facts["stage"])
+            self.assertIsNone(facts["service_result"])
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=property_observation_fails,
+            )
+            self.assertEqual(1, status)
+            self.assertEqual("diagnostic-unavailable", facts["stage"])
+            self.assertIsNone(facts["service_result"])
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=service_exits_126,
+            )
+            self.assertEqual(1, status)
+            self.assertEqual("service-job-failed", facts["stage"])
+            self.assertEqual("exit-code", facts["service_result"])
+            self.assertEqual(1, facts["exec_main_code"])
+            self.assertEqual(126, facts["exec_main_status"])
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=client_succeeds,
+            )
+            self.assertEqual(0, status)
+            self.assertEqual("success", facts["stage"])
+
+            with open(os.devnull, "w", encoding="ascii") as devnull, mock.patch.object(
+                env_helper.sys, "stderr", devnull
+            ):
+                status, records = env_helper.execute_env(
+                    env_arguments,
+                    runtime=runtime,
+                    env_path=env_succeeds,
+                    systemctl_helper_path=cannot_execute,
+                )
+            self.assertEqual(126, status)
+            self.assertEqual(("env-entered",), records)
+
+            self.assertTrue(fake_runuser.is_file())
+
+    def test_start_protocol_setup_failure_never_claims_an_exec_failure(self) -> None:
+        runuser = load_script(START_RUNUSER, "rocky_start_runuser_setup_failure")
+        env_helper = load_script(START_ENV, "rocky_start_env_setup_failure")
+        runtime = types.SimpleNamespace(
+            pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(Path.home())
+        )
+        unit = "secpal-host-qualification-abc123.service"
+        target_arguments = runuser.target_arguments(runtime, unit)
+
+        with mock.patch.object(
+            runuser.tempfile, "TemporaryFile", side_effect=OSError("full")
+        ):
+            with self.assertRaises(runuser.DiagnosticUnavailable):
+                runuser.execute_start(target_arguments, runtime=runtime)
+
+        with mock.patch.object(
+            env_helper.tempfile, "TemporaryFile", side_effect=OSError("full")
+        ):
+            with self.assertRaises(env_helper.DiagnosticUnavailable):
+                env_helper.execute_env(target_arguments[4:], runtime=runtime)
+
+    def test_active_observers_distinguish_real_exec_boundaries_and_request_status(
+        self,
+    ) -> None:
+        runuser = load_script(ACTIVE_RUNUSER, "rocky_active_runuser")
+        env_helper = load_script(ACTIVE_ENV, "rocky_active_env")
+        systemctl = load_script(ACTIVE_SYSTEMCTL, "rocky_active_systemctl")
+        runtime = types.SimpleNamespace(
+            pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(Path.home())
+        )
+        unit = "secpal-host-qualification-abc123.service"
+        target_arguments = runuser.target_arguments(runtime, unit)
+        env_arguments = target_arguments[4:]
+        systemctl_arguments = ["--user", "is-active", "--quiet", unit]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def executable(name: str, body: str) -> Path:
+                path = root / name
+                path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+                path.chmod(0o700)
+                return path
+
+            cannot_execute = root / "cannot-execute"
+            cannot_execute.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            cannot_execute.chmod(0o600)
+            missing_executable = root / "missing-executable"
+            runuser_rejects = executable("runuser-rejects", "exit 1")
+            request_fails = executable("systemctl-request-fails", "exit 3")
+            request_succeeds = executable("systemctl-success", "exit 0")
+
+            status, facts = runuser.execute_active(
+                target_arguments, runtime=runtime, runuser_path=cannot_execute
+            )
+            self.assertEqual(126, status)
+            self.assertEqual("runuser-exec-failed", facts["stage"])
+
+            status, facts = runuser.execute_active(
+                target_arguments, runtime=runtime, runuser_path=missing_executable
+            )
+            self.assertEqual(127, status)
+            self.assertEqual("runuser-exec-failed", facts["stage"])
+
+            status, facts = runuser.execute_active(
+                target_arguments, runtime=runtime, runuser_path=runuser_rejects
+            )
+            self.assertEqual(1, status)
+            self.assertEqual("runuser-invocation-failed", facts["stage"])
+
+            output = RetainedBytesIO()
+            status = env_helper.execute_env(
+                env_arguments,
+                runtime=runtime,
+                env_path=cannot_execute,
+                systemctl_helper_path=ACTIVE_SYSTEMCTL,
+                output=output,
+            )
+            self.assertEqual(126, status)
+            self.assertEqual(
+                ["env-entered", "env-exec-failed"],
+                [json.loads(line)["stage"] for line in output.getvalue().splitlines()],
+            )
+
+            output = RetainedBytesIO()
+            with open(os.devnull, "w", encoding="ascii") as devnull, mock.patch.object(
+                env_helper.sys, "stderr", devnull
+            ):
+                status = env_helper.execute_env(
+                    env_arguments,
+                    runtime=runtime,
+                    env_path=Path("/usr/bin/env"),
+                    systemctl_helper_path=cannot_execute,
+                    output=output,
+                )
+            self.assertEqual(126, status)
+            self.assertEqual(
+                ["env-entered"],
+                [json.loads(line)["stage"] for line in output.getvalue().splitlines()],
+            )
+
+            status, stage = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=cannot_execute,
+            )
+            self.assertEqual((126, "systemctl-exec-failed"), (status, stage))
+            status, stage = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=missing_executable,
+            )
+            self.assertEqual((127, "systemctl-exec-failed"), (status, stage))
+            status, stage = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=request_fails,
+            )
+            self.assertEqual((3, "systemctl-request-failed"), (status, stage))
+            status, stage = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=request_succeeds,
+            )
+            self.assertEqual((0, "success"), (status, stage))
+
+    def test_active_protocol_frames_each_exact_numeric_producer(self) -> None:
+        runuser = load_script(ACTIVE_RUNUSER, "rocky_active_protocol")
+        cases = (
+            (b"", 126, "runuser-invocation-failed"),
+            (
+                b'{"kind":"env","schema_version":1,"stage":"env-entered"}\n',
+                126,
+                "env-command-exec-failed",
+            ),
+            (
+                b'{"kind":"env","schema_version":1,"stage":"env-entered"}\n'
+                b'{"kind":"env","schema_version":1,"stage":"env-exec-failed"}\n',
+                126,
+                "env-exec-failed",
+            ),
+            (
+                b'{"kind":"env","schema_version":1,"stage":"env-entered"}\n'
+                b'{"kind":"systemctl","schema_version":1,'
+                b'"stage":"systemctl-exec-failed","systemctl_client_status":null}\n',
+                126,
+                "systemctl-exec-failed",
+            ),
+            (
+                b'{"kind":"env","schema_version":1,"stage":"env-entered"}\n'
+                b'{"kind":"systemctl","schema_version":1,'
+                b'"stage":"systemctl-request-failed","systemctl_client_status":3}\n',
+                3,
+                "systemctl-request-failed",
+            ),
+        )
+        for payload, status, expected in cases:
+            with self.subTest(stage=expected):
+                self.assertEqual(expected, runuser.parse_protocol(payload, status)["stage"])
+
+    def test_active_protocol_setup_failure_cannot_replace_the_target_request(
+        self,
+    ) -> None:
+        runuser = load_script(ACTIVE_RUNUSER, "rocky_active_setup_failure")
+        runtime = types.SimpleNamespace(
+            pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(Path.home())
+        )
+        arguments = runuser.target_arguments(
+            runtime, "secpal-host-qualification-abc123.service"
+        )
+        with mock.patch.object(
+            runuser.tempfile, "TemporaryFile", side_effect=OSError("full")
+        ):
+            with self.assertRaises(runuser.DiagnosticUnavailable):
+                runuser.execute_active(arguments, runtime=runtime)
+        env_helper = load_script(ACTIVE_ENV, "rocky_active_env_setup_failure")
+        with mock.patch.object(
+            env_helper.tempfile, "TemporaryFile", side_effect=OSError("full")
+        ):
+            with self.assertRaises(env_helper.DiagnosticUnavailable):
+                env_helper.execute_env(
+                    arguments[4:], runtime=runtime, output=RetainedBytesIO()
+                )
+
+    def test_start_protocol_explicitly_frames_diagnostic_unavailability(self) -> None:
+        runuser = load_script(START_RUNUSER, "rocky_start_runuser_unavailable")
+        unavailable = (
+            b'{"kind":"env","schema_version":1,'
+            b'"stage":"diagnostic-unavailable"}\n'
+        )
+        facts = runuser.parse_protocol(unavailable, 1)
+        self.assertEqual("diagnostic-unavailable", facts["stage"])
+        self.assertEqual(1, facts["runuser_status"])
+        self.assertIsNone(facts["systemctl_client_status"])
+
+    def test_runtime_start_helpers_use_isolated_python_startup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "sitecustomize-loaded"
+            (root / "sitecustomize.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('loaded', encoding='ascii')\n",
+                encoding="utf-8",
+            )
+            for helper in (
+                START_RUNUSER,
+                START_ENV,
+                START_SYSTEMCTL,
+                ACTIVE_RUNUSER,
+                ACTIVE_ENV,
+                ACTIVE_SYSTEMCTL,
+            ):
+                with self.subTest(helper=helper.name):
+                    self.assertTrue(
+                        helper.read_bytes().startswith(b"#!/usr/bin/python3 -I\n")
+                    )
+                    result = subprocess.run(
+                        [helper, "--help"],
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        env={**os.environ, "PYTHONPATH": str(root)},
+                        timeout=10,
+                    )
+                    self.assertIn(result.returncode, range(128))
+                    self.assertFalse(marker.exists())
+
+    def test_start_observation_fd_exists_only_for_the_exact_helper(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        trace = TRACE.read_text(encoding="utf-8")
+        self.assertNotIn('6>"$start_observation"', runner)
+        self.assertIn(
+            'exec 6>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json',
+            trace,
+        )
+        self.assertIn('/usr/sbin/runuser "$@"', trace)
+        self.assertNotIn("SECPAL_START_OBSERVATION_PATH", runner + trace)
+
+    def test_active_observation_fd_exists_only_for_the_exact_helper(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        trace = TRACE.read_text(encoding="utf-8")
+        self.assertNotIn('7>"$active_observation"', runner)
+        self.assertIn(
+            'exec 7>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json',
+            trace,
+        )
+        self.assertIn('/usr/sbin/runuser "$@"', trace)
+        self.assertNotIn("SECPAL_ACTIVE_OBSERVATION_PATH", runner + trace)
+        with tempfile.TemporaryDirectory() as directory:
+            observation = Path(directory) / "observation.json"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "if { : >&7; } 2>/dev/null; then exit 99; fi",
+                ],
+                check=False,
+                env={
+                    **os.environ,
+                    "BASH_ENV": str(TRACE),
+                },
+            )
+            self.assertEqual(0, result.returncode)
+            self.assertFalse(observation.exists())
 
     def run_traced_bash(
         self, script: str
@@ -210,7 +1596,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 executable = fake_bin / name
                 executable.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
                 executable.chmod(0o700)
-            lines = ["set -euo pipefail"] + [""] * 241
+            lines = ["set -euo pipefail"] + [""] * 618
             definitions = {
                 52: "user_systemctl() {",
                 53: "  false",
@@ -222,7 +1608,10 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 66: "}",
                 204: "trap cleanup EXIT",
                 216: 'printf "actual input\\n" >"$FIXTURE_INPUT"',
-                242: "user_systemctl daemon-reload",
+                589: "main() {",
+                614: "user_systemctl daemon-reload",
+                618: "}",
+                619: "main",
             }
             for line_number, source in definitions.items():
                 lines[line_number - 1] = source
@@ -1312,7 +2701,11 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             ("", "SECPAL_TARGET_ERR_V2:1:242", "qualify-quadlet-daemon-reload", "command-failed"),
             ("", "SECPAL_TARGET_ERR_V2:1:243", "qualify-quadlet-start", "command-failed"),
             ("", "SECPAL_TARGET_ERR_V2:1:244", "qualify-quadlet-active-state", "command-failed"),
-            ("", "SECPAL_TARGET_ERR_V2:1:251", "qualify-selinux-storage", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:249", "qualify-selinux-storage-directory-create", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:250", "qualify-selinux-storage-fcontext-add", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:252", "qualify-selinux-storage-restorecon", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:253", "qualify-selinux-storage-matchpathcon", "command-failed"),
+            ("ERROR: representative process or storage label is not container-confined.", "", "qualify-selinux-storage", "invariant-failed"),
             ("", "SECPAL_TARGET_ERR_V2:1:257", "qualify-workload-primary", "command-failed"),
             ("ERROR: representative rootless workload is not effectively seccomp-confined.", "", "qualify-seccomp", "invariant-failed"),
             ("", "SECPAL_TARGET_ERR_V2:1:269", "qualify-workload-secondary", "command-failed"),
@@ -1333,6 +2726,157 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                     marker=marker[0] if marker else None,
                 )
                 self.assertEqual((operation, reason), result)
+                observed.add(operation)
+        self.assertEqual(
+            ("qualify-quadlet-authority", "command-failed"),
+            self.classify_current(
+                "", "ERROR: unable to evaluate effective Quadlet service authority."
+            ),
+        )
+        self.assertEqual(
+            ("qualification-harness", "representation-invalid"),
+            self.classify(
+                status=0,
+                marker="qualify-workload-primary command-failed",
+            ),
+        )
+        self.assertEqual(
+            ("qualify-avc-correlation", "invariant-failed"),
+            self.classify(
+                status=0,
+                marker="qualify-avc-correlation invariant-failed",
+            ),
+        )
+        start_cases = (
+            (
+                {
+                    "schema_version": 1, "stage": "runuser-exec-failed",
+                    "runuser_status": None, "systemctl_client_status": None,
+                    "service_result": None, "exec_main_code": None,
+                    "exec_main_status": None,
+                },
+                126, "qualify-quadlet-start-runuser", "exec-failed",
+            ),
+            (
+                {
+                    "schema_version": 1, "stage": "env-exec-failed",
+                    "runuser_status": 126, "systemctl_client_status": None,
+                    "service_result": None, "exec_main_code": None,
+                    "exec_main_status": None,
+                },
+                126, "qualify-quadlet-start-env", "exec-failed",
+            ),
+            (
+                {
+                    "schema_version": 1, "stage": "systemctl-request-failed",
+                    "runuser_status": 1, "systemctl_client_status": 1,
+                    "service_result": None, "exec_main_code": None,
+                    "exec_main_status": None,
+                },
+                1, "qualify-quadlet-start-systemctl", "request-failed",
+            ),
+            (
+                {
+                    "schema_version": 1, "stage": "service-job-failed",
+                    "runuser_status": 1, "systemctl_client_status": 1,
+                    "service_result": "exit-code", "exec_main_code": 1,
+                    "exec_main_status": 126,
+                },
+                1, "qualify-quadlet-start-service-job", "job-failed",
+            ),
+        )
+        for observation, status, operation, reason in start_cases:
+            with self.subTest(operation=operation):
+                actual_operation, actual_reason, diagnostic = (
+                    self.classifier.admit_quadlet_start_observation(
+                        observation, status
+                    )
+                )
+                self.assertEqual((operation, reason), (actual_operation, actual_reason))
+                self.classifier.validate_admitted_quadlet_start_diagnostic(
+                    diagnostic, operation, reason, status
+                )
+                observed.add(operation)
+        active_cases = (
+            (
+                {
+                    "schema_version": 1,
+                    "stage": "runuser-exec-failed",
+                    "runuser_status": None,
+                    "systemctl_client_status": None,
+                },
+                126,
+                "qualify-quadlet-active-state-runuser",
+                "exec-failed",
+            ),
+            (
+                {
+                    "schema_version": 1,
+                    "stage": "env-exec-failed",
+                    "runuser_status": 126,
+                    "systemctl_client_status": None,
+                },
+                126,
+                "qualify-quadlet-active-state-env",
+                "exec-failed",
+            ),
+            (
+                {
+                    "schema_version": 1,
+                    "stage": "systemctl-request-failed",
+                    "runuser_status": 3,
+                    "systemctl_client_status": 3,
+                },
+                3,
+                "qualify-quadlet-active-state-systemctl",
+                "request-failed",
+            ),
+        )
+        for observation, status, operation, reason in active_cases:
+            with self.subTest(operation=operation):
+                actual_operation, actual_reason, diagnostic = (
+                    self.classifier.admit_quadlet_active_observation(
+                        observation, status
+                    )
+                )
+                self.assertEqual((operation, reason), (actual_operation, actual_reason))
+                self.classifier.validate_admitted_quadlet_active_diagnostic(
+                    diagnostic, operation, reason, status
+                )
+                observed.add(operation)
+        primary_cases = (
+            (
+                {"schema_version": 1, "stage": "runuser-exec-failed",
+                 "runuser_status": None, "podman_status": None},
+                126, "qualify-workload-primary-runuser", "exec-failed",
+            ),
+            (
+                {"schema_version": 1, "stage": "env-preparation-failed",
+                 "runuser_status": 126, "podman_status": None},
+                126, "qualify-workload-primary-env", "invariant-failed",
+            ),
+            (
+                {"schema_version": 1, "stage": "podman-internal-failed",
+                 "runuser_status": 125, "podman_status": 125},
+                125, "qualify-workload-primary-podman", "request-failed",
+            ),
+            (
+                {"schema_version": 1, "stage": "podman-oci-status-126",
+                 "runuser_status": 126, "podman_status": 126},
+                126, "qualify-workload-primary-podman-oci", "invocation-failed",
+            ),
+        )
+        for observation, status, operation, reason in primary_cases:
+            with self.subTest(operation=operation):
+                actual_operation, actual_reason, diagnostic = (
+                    self.classifier.admit_primary_workload_observation(
+                        observation, status
+                    )
+                )
+                self.assertEqual((operation, reason), (actual_operation, actual_reason))
+                self.classifier.validate_admitted_primary_workload_diagnostic(
+                    diagnostic, operation, reason, status
+                )
                 observed.add(operation)
         self.assertEqual(self.classifier.OPERATIONS - {"qualification-harness"}, observed)
 
@@ -1372,8 +2916,20 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
     def test_every_reviewed_message_and_call_site_has_a_closed_mapping(self) -> None:
         for prefix, operation, reason in self.classifier.EXPLICIT_RULES:
             with self.subTest(prefix=prefix):
+                self.assertEqual(
+                    (operation, reason),
+                    self.classifier.classify_failure(
+                        prefix.encode(),
+                        b"",
+                        1,
+                        target_bound=True,
+                        line_rules=self.classifier.LINE_RULES,
+                    ),
+                )
+        for prefix, operation, reason in self.classifier.HISTORICAL_EXPLICIT_RULES:
+            with self.subTest(historical_prefix=prefix):
                 self.assertEqual((operation, reason), self.classify(prefix))
-        for first, last, operation in self.classifier.LINE_RULES:
+        for first, last, operation in self.classifier.HISTORICAL_LINE_RULES:
             with self.subTest(line=first):
                 self.assertEqual(
                     (operation, "command-failed"),
@@ -1402,6 +2958,338 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             self.assertRegex(
                 trace.read_text(encoding="ascii"),
                 r"^SECPAL_TARGET_ERR_V2:1:[0-9]+(?:,[0-9]+){0,7}\n$",
+            )
+
+    def test_exact_start_trigger_is_consumed_once_across_runtime_subshell(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = root / "qualify-production-host.sh"
+            trace = root / "rocky-target-qualification-trace.sh"
+            helper = root / "rocky-start-runuser"
+            real_runuser = root / "runuser"
+            helper_log = root / "helper.log"
+            observation = root / "start-observation.json"
+            lines = ["set -euo pipefail"] + [""] * 238
+            for line_number, source in {
+                37: "run_as_service_account() (",
+                38: (
+                    "  runuser --user secpal-runtime -- env "
+                    "-u CONTAINER_HOST -u CONTAINER_CONNECTION "
+                    'HOME=/home/secpal-runtime XDG_RUNTIME_DIR=/run/user/1001 '
+                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus "
+                    '"$@"'
+                ),
+                39: ")",
+                50: "user_systemctl() {",
+                51: '  run_as_service_account systemctl --user "$@"',
+                52: "}",
+                236: 'unit_name="secpal-host-qualification-Ab12Cd"',
+                238: 'user_systemctl start "${unit_name}.service"',
+                239: "run_as_service_account test later-runtime-call",
+            }.items():
+                lines[line_number - 1] = source
+            harness.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            helper.write_text(
+                "#!/bin/sh\n"
+                "printf 'helper\\n' >>\"$SECPAL_HELPER_LOG\"\n"
+                "case \"$*\" in\n"
+                "  *'systemctl --user start'*) printf 'observed\\n' >&6 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            real_runuser.write_text(
+                "#!/bin/sh\n"
+                "printf 'real\\n' >>\"$SECPAL_HELPER_LOG\"\n",
+                encoding="utf-8",
+            )
+            helper.chmod(0o755)
+            real_runuser.chmod(0o755)
+            trace.write_text(
+                TRACE.read_text(encoding="utf-8")
+                .replace(
+                    "/opt/secpal-control/libexec/rocky-start-runuser",
+                    os.fspath(helper),
+                )
+                .replace(
+                    "/var/lib/secpal-rocky/evidence/quadlet-start-observation.json",
+                    os.fspath(observation),
+                )
+                .replace(
+                    "/opt/secpal-control/libexec/rocky-primary-runuser",
+                    os.fspath(real_runuser),
+                )
+                .replace("/usr/sbin/runuser", os.fspath(real_runuser)),
+                encoding="utf-8",
+            )
+            trace.chmod(0o755)
+            observation.write_bytes(b"")
+            observation.chmod(0o600)
+            event_read, event_write = os.pipe()
+            ack_read, ack_write = os.pipe()
+            try:
+                result = subprocess.run(
+                    ["bash", harness],
+                    check=False,
+                    env={
+                        **os.environ,
+                        "BASH_ENV": os.fspath(trace),
+                        "SECPAL_HELPER_LOG": os.fspath(helper_log),
+                    },
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    pass_fds=tuple({4, 5, event_write, ack_read}),
+                    close_fds=True,
+                    preexec_fn=lambda: (
+                        os.dup2(event_write, 4),
+                        os.dup2(ack_read, 5),
+                    ),
+                )
+            finally:
+                os.close(event_read)
+                os.close(event_write)
+                os.close(ack_read)
+                os.close(ack_write)
+            self.assertEqual(0, result.returncode)
+            self.assertEqual(
+                ["helper", "real"],
+                helper_log.read_text(encoding="ascii").splitlines(),
+            )
+            self.assertEqual(b"observed\n", observation.read_bytes())
+
+    def test_exact_active_trigger_is_consumed_once_across_runtime_subshell(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = root / "qualify-production-host.sh"
+            trace = root / "rocky-target-qualification-trace.sh"
+            helper = root / "rocky-active-runuser"
+            real_runuser = root / "runuser"
+            helper_log = root / "helper.log"
+            observation = root / "active-observation.json"
+            lines = ["set -euo pipefail"] + [""] * 240
+            for line_number, source in {
+                37: "run_as_service_account() (",
+                38: (
+                    "  runuser --user secpal-runtime -- env "
+                    "-u CONTAINER_HOST -u CONTAINER_CONNECTION "
+                    'HOME=/home/secpal-runtime XDG_RUNTIME_DIR=/run/user/1001 '
+                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus "
+                    '"$@"'
+                ),
+                39: ")",
+                50: "user_systemctl() {",
+                51: '  run_as_service_account systemctl --user "$@"',
+                52: "}",
+                236: 'unit_name="secpal-host-qualification-Ab12Cd"',
+                239: 'user_systemctl is-active --quiet "${unit_name}.service"',
+                240: "run_as_service_account test later-runtime-call",
+            }.items():
+                lines[line_number - 1] = source
+            harness.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            helper.write_text(
+                "#!/bin/sh\n"
+                "printf 'helper\\n' >>\"$SECPAL_HELPER_LOG\"\n"
+                "printf 'observed\\n' >&7\n",
+                encoding="utf-8",
+            )
+            real_runuser.write_text(
+                "#!/bin/sh\n"
+                "printf 'real\\n' >>\"$SECPAL_HELPER_LOG\"\n",
+                encoding="utf-8",
+            )
+            helper.chmod(0o755)
+            real_runuser.chmod(0o755)
+            trace.write_text(
+                TRACE.read_text(encoding="utf-8")
+                .replace(
+                    "/opt/secpal-control/libexec/rocky-active-runuser",
+                    os.fspath(helper),
+                )
+                .replace(
+                    "/var/lib/secpal-rocky/evidence/quadlet-active-observation.json",
+                    os.fspath(observation),
+                )
+                .replace(
+                    "/opt/secpal-control/libexec/rocky-primary-runuser",
+                    os.fspath(real_runuser),
+                )
+                .replace("/usr/sbin/runuser", os.fspath(real_runuser)),
+                encoding="utf-8",
+            )
+            trace.chmod(0o755)
+            observation.write_bytes(b"")
+            observation.chmod(0o600)
+            event_read, event_write = os.pipe()
+            ack_read, ack_write = os.pipe()
+            try:
+                result = subprocess.run(
+                    ["bash", harness],
+                    check=False,
+                    env={
+                        **os.environ,
+                        "BASH_ENV": os.fspath(trace),
+                        "SECPAL_HELPER_LOG": os.fspath(helper_log),
+                    },
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    pass_fds=tuple({4, 5, event_write, ack_read}),
+                    close_fds=True,
+                    preexec_fn=lambda: (
+                        os.dup2(event_write, 4),
+                        os.dup2(ack_read, 5),
+                    ),
+                )
+            finally:
+                os.close(event_read)
+                os.close(event_write)
+                os.close(ack_read)
+                os.close(ack_write)
+            self.assertEqual(0, result.returncode)
+            self.assertEqual(
+                ["helper", "real"],
+                helper_log.read_text(encoding="ascii").splitlines(),
+            )
+            self.assertEqual(b"observed\n", observation.read_bytes())
+
+    def test_reload_trigger_cannot_capture_later_primary_workload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = root / "qualify-production-host.sh"
+            trace = root / "rocky-target-qualification-trace.sh"
+            helper_log = root / "helper.log"
+            start_observation = root / "start-observation.json"
+            active_observation = root / "active-observation.json"
+            primary_observation = root / "primary-observation.json"
+            paths = {
+                "reload": root / "rocky-reload-runuser",
+                "start": root / "rocky-start-runuser",
+                "active": root / "rocky-active-runuser",
+                "primary": root / "rocky-primary-runuser",
+                "real": root / "runuser",
+            }
+            lines = ["set -euo pipefail"] + [""] * 248
+            for line_number, source in {
+                37: "run_as_service_account() (",
+                38: (
+                    "  runuser --user secpal-runtime -- env "
+                    "-u CONTAINER_HOST -u CONTAINER_CONNECTION "
+                    'HOME=/home/secpal-runtime XDG_RUNTIME_DIR=/run/user/1001 '
+                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus "
+                    '"$@"'
+                ),
+                39: ")",
+                46: "rootless_podman() {",
+                47: '  run_as_service_account podman "$@"',
+                48: "}",
+                50: "user_systemctl() {",
+                51: '  run_as_service_account systemctl --user "$@"',
+                52: "}",
+                236: (
+                    'unit_name=secpal-host-qualification-Ab12Cd '
+                    'container_a=secpal-host-qualification-Ab12Cd-a '
+                    'state_a=/var/tmp/secpal-host-qualification-Ab12Cd/state-a '
+                    'image=docker.io/library/alpine@sha256:' + "a" * 64
+                ),
+                237: "user_systemctl daemon-reload",
+                238: 'user_systemctl start "${unit_name}.service"',
+                239: 'user_systemctl is-active --quiet "${unit_name}.service"',
+                245: 'rootless_podman run --detach --name "$container_a" \\',
+                246: "  --security-opt no-new-privileges --cap-drop all \\",
+                247: "  --user 65532:65532 --network pasta \\",
+                248: '  -v "${state_a}:/state:Z" "$image" sleep infinity >/dev/null',
+            }.items():
+                lines[line_number - 1] = source
+            harness.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            for name, path in paths.items():
+                descriptor = ""
+                if name == "start":
+                    descriptor = "printf 'observed\\n' >&6\n"
+                elif name == "active":
+                    descriptor = "printf 'observed\\n' >&7\n"
+                path.write_text(
+                    "#!/bin/sh\n"
+                    f"printf '{name}\\n' >>\"$SECPAL_HELPER_LOG\"\n"
+                    + descriptor,
+                    encoding="utf-8",
+                )
+                path.chmod(0o755)
+            rendered = TRACE.read_text(encoding="utf-8")
+            for installed, replacement in (
+                ("/opt/secpal-control/libexec/rocky-reload-runuser", paths["reload"]),
+                ("/opt/secpal-control/libexec/rocky-start-runuser", paths["start"]),
+                ("/opt/secpal-control/libexec/rocky-active-runuser", paths["active"]),
+                ("/opt/secpal-control/libexec/rocky-primary-runuser", paths["primary"]),
+                ("/var/lib/secpal-rocky/evidence/quadlet-start-observation.json", start_observation),
+                ("/var/lib/secpal-rocky/evidence/quadlet-active-observation.json", active_observation),
+                ("/usr/sbin/runuser", paths["real"]),
+            ):
+                rendered = rendered.replace(installed, os.fspath(replacement))
+            trace.write_text(rendered, encoding="utf-8")
+            trace.chmod(0o755)
+            for observation in (
+                start_observation,
+                active_observation,
+                primary_observation,
+            ):
+                observation.write_bytes(b"")
+                observation.chmod(0o600)
+            event_read, event_write = os.pipe()
+            ack_read, ack_write = os.pipe()
+            try:
+                result = subprocess.run(
+                    ["bash", harness],
+                    check=False,
+                    env={
+                        **os.environ,
+                        "BASH_ENV": os.fspath(trace),
+                        "SECPAL_HELPER_LOG": os.fspath(helper_log),
+                    },
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    pass_fds=tuple({4, 5, event_write, ack_read}),
+                    close_fds=True,
+                    preexec_fn=lambda: (
+                        os.dup2(event_write, 4),
+                        os.dup2(ack_read, 5),
+                    ),
+                )
+            finally:
+                os.close(event_read)
+                os.close(event_write)
+                os.close(ack_read)
+                os.close(ack_write)
+            self.assertEqual(0, result.returncode)
+            self.assertEqual(
+                ["reload", "start", "active", "primary"],
+                helper_log.read_text(encoding="ascii").splitlines(),
+            )
+            self.assertEqual(b"observed\n", start_observation.read_bytes())
+            self.assertEqual(b"observed\n", active_observation.read_bytes())
+
+            helper_log.write_bytes(b"")
+            runtime = types.SimpleNamespace(
+                pw_uid=os.getuid(), pw_dir=os.fspath(Path.home())
+            )
+            stale = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'export SECPAL_RELOAD_EXACT_CALL=1; runuser "$@"',
+                    "bash",
+                    *self.primary_runuser_arguments(runtime),
+                ],
+                check=False,
+                env={
+                    **os.environ,
+                    "BASH_ENV": os.fspath(trace),
+                    "SECPAL_HELPER_LOG": os.fspath(helper_log),
+                },
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self.assertEqual(0, stale.returncode)
+            self.assertEqual(
+                ["primary"],
+                helper_log.read_text(encoding="ascii").splitlines(),
             )
 
     def test_helper_frames_resolve_only_through_reviewed_outer_call_sites(self) -> None:
@@ -1478,6 +3366,101 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                     self.classify(trace=f"SECPAL_TARGET_ERR_V2:1:{frames}"),
                 )
 
+    def test_selinux_storage_setup_lines_have_distinct_closed_operations(self) -> None:
+        operations = (
+            (249, "qualify-selinux-storage-directory-create"),
+            (250, "qualify-selinux-storage-fcontext-add"),
+            (252, "qualify-selinux-storage-restorecon"),
+            (253, "qualify-selinux-storage-matchpathcon"),
+        )
+        for line, operation in operations:
+            with self.subTest(line=line):
+                self.assertEqual(
+                    (operation, "command-failed"),
+                    self.classify(trace=f"SECPAL_TARGET_ERR_V2:1:{line}"),
+                )
+        for index, first in enumerate(operations):
+            for second in operations[index + 1 :]:
+                with self.subTest(lines=(first[0], second[0])):
+                    self.assertEqual(
+                        ("qualification-harness", "unclassified-target-failure"),
+                        self.classify(
+                            trace=f"SECPAL_TARGET_ERR_V2:1:{first[0]},{second[0]}"
+                        ),
+                    )
+
+    def test_semanage_fcontext_add_reasons_are_closed_and_path_free(self) -> None:
+        roots = (
+            "/var/tmp/secpal-host-qualification-a1B2c3",
+            "/var/tmp/secpal-host-qualification-Z9y8X7",
+        )
+        cases = (
+            ("SELinux policy is not managed or store cannot be accessed.", "semanage-store-access-failed"),
+            ("Cannot read policy store.", "semanage-store-access-failed"),
+            ("Could not establish semanage connection", "semanage-store-access-failed"),
+            ("Could not test MLS enabled status", "semanage-store-access-failed"),
+            ("Could not start semanage transaction", "semanage-transaction-begin-failed"),
+            ("Could not create key for {expression}", "semanage-fcontext-key-create-failed"),
+            ("Could not check if file context for {expression} is defined", "semanage-fcontext-existence-check-failed"),
+            ("Could not create file context for {expression}", "semanage-fcontext-record-create-failed"),
+            ("Could not create context for {expression}", "semanage-fcontext-context-create-failed"),
+            ("Could not set type in file context for {expression}", "semanage-fcontext-type-set-failed"),
+            ("Could not set file context for {expression}", "semanage-fcontext-context-attach-failed"),
+            ("Could not add file context for {expression}", "semanage-fcontext-local-add-failed"),
+            ("Could not commit semanage transaction", "semanage-transaction-commit-failed"),
+        )
+        for root in roots:
+            expression = root + "(/.*)?"
+            for shape, reason in cases:
+                with self.subTest(root=root, reason=reason):
+                    output = "ValueError: " + shape.format(expression=expression)
+                    operation, actual_reason = self.classify(
+                        output,
+                        "SECPAL_TARGET_ERR_V2:1:250",
+                    )
+                    self.assertEqual("qualify-selinux-storage-fcontext-add", operation)
+                    self.assertEqual(reason, actual_reason)
+                    self.assertNotIn(root, actual_reason)
+                    self.assertNotIn(expression, actual_reason)
+                    self.assertEqual(
+                        reason,
+                        self.classify(output + "\n", "SECPAL_TARGET_ERR_V2:1:250")[1],
+                    )
+
+    def test_semanage_fcontext_add_equivalency_is_closed_and_path_free(self) -> None:
+        expression = "/var/tmp/secpal-host-qualification-a1B2c3(/.*)?"
+        output = (
+            "ValueError: File spec " + expression
+            + " conflicts with equivalency rule '/var/tmp /home'; Try adding '/home(/.*)?' instead"
+        )
+        self.assertEqual(
+            ("qualify-selinux-storage-fcontext-add", "semanage-fcontext-equivalency-conflict"),
+            self.classify(output, "SECPAL_TARGET_ERR_V2:1:250"),
+        )
+
+    def test_semanage_fcontext_add_rejects_near_matches_wrong_operations_and_unknowns(self) -> None:
+        expression = "/var/tmp/secpal-host-qualification-a1B2c3(/.*)?"
+        exact = "ValueError: Could not add file context for " + expression
+        rejected = (
+            "prefix " + exact,
+            exact + " suffix",
+            "ValueError: Could not add file context for /var/tmp/unrelated(/.*)?",
+            "ValueError: arbitrary failure for " + expression,
+            "RuntimeError: Could not add file context for " + expression,
+        )
+        for output in rejected:
+            with self.subTest(output=output):
+                self.assertEqual(
+                    ("qualify-selinux-storage-fcontext-add", "command-failed"),
+                    self.classify(output, "SECPAL_TARGET_ERR_V2:1:250"),
+                )
+        for line in (249, 252, 253):
+            with self.subTest(line=line):
+                self.assertEqual(
+                    (self.classifier.operation_for_line(line, self.classifier.HISTORICAL_LINE_RULES), "command-failed"),
+                    self.classify(exact, f"SECPAL_TARGET_ERR_V2:1:{line}"),
+                )
+
     def test_explicit_message_and_stack_must_agree(self) -> None:
         self.assertEqual(
             ("qualify-selinux-host", "invariant-failed"),
@@ -1502,9 +3485,10 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         malformed = (
             "SECPAL_TARGET_ERR_V1:183:1",
             "SECPAL_TARGET_ERR_V2:0:183",
-            "SECPAL_TARGET_ERR_V2:2:183",
+            "SECPAL_TARGET_ERR_V2:256:183",
             "SECPAL_TARGET_ERR_V2:1:183,command",
             "SECPAL_TARGET_ERR_V2:1:" + ",".join(["183"] * 9),
+            "SECPAL_TARGET_ERR_V2:1:183\nSECPAL_TARGET_ERR_V2:2:187",
         )
         for trace in malformed:
             with self.subTest(trace=trace):
@@ -1519,6 +3503,22 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 "SECPAL_TARGET_ERR_V1:153:1",
             ),
         )
+
+    def test_inner_status_transition_is_bound_to_the_avc_observation_path(self) -> None:
+        rejected = (
+            (64, b"SECPAL_TARGET_ERR_V2:7:614\n"),
+            (3, b"SECPAL_TARGET_ERR_V2:1:375,690\n"),
+            (3, b"SECPAL_TARGET_ERR_V2:1:375,690,754,772\n"),
+            (3, b"SECPAL_TARGET_ERR_V2:2:375,690,772\n"),
+        )
+        for exit_status, trace in rejected:
+            with self.subTest(exit_status=exit_status, trace=trace):
+                self.assertEqual(
+                    ("qualification-harness", "representation-invalid"),
+                    self.classifier.classify_failure(
+                        b"", trace, exit_status, target_bound=True
+                    ),
+                )
 
     def test_failure_schema_is_closed_bounded_and_run_bound(self) -> None:
         schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
@@ -1539,7 +3539,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         document = {
             "schema_version": 1,
             "phase": "target-qualification",
-            "target_sha": "d" * 40,
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
             "trusted_control_sha": "c" * 40,
             "qualification_run_id": "12345",
             "qualification_run_attempt": "1",
@@ -1551,14 +3551,136 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             "diagnostic_input_bytes": 100,
         }
         self.assertEqual([], list(validator.iter_errors(document)))
+        admitted_native_failure = dict(
+            document,
+            target_sha="b8f5a505d318d06a64a5975cfaba9f1e5ba0041f",
+            trusted_control_sha="1a81531cad3a7f1604456799b447815726708168",
+            qualification_run_id="34716784934",
+            harness_sha256=(
+                "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+            ),
+            operation="qualify-quadlet-authority",
+            reason="invariant-failed",
+            diagnostic_input_sha256=(
+                "b41e05e0a6d722b4a824aa71e7c71b5da4dfd3143a4d26033cc59fc4b011bc59"
+            ),
+            diagnostic_input_bytes=162,
+        )
+        self.assertEqual([], list(validator.iter_errors(admitted_native_failure)))
+        zero_status_diagnostic = dict(
+            document,
+            operation="qualification-harness",
+            reason="representation-invalid",
+            exit_status=0,
+        )
+        self.assertEqual(
+            [], list(validator.iter_errors(zero_status_diagnostic))
+        )
+        self.assertTrue(list(validator.iter_errors(dict(
+            zero_status_diagnostic,
+            operation="qualify-workload-primary",
+            reason="command-failed",
+        ))))
         for mutation in (
             dict(document, stdout="untrusted"),
             dict(document, operation="arbitrary-command"),
             dict(document, reason="some-error-text"),
             dict(document, qualification_run_id="0"),
-            dict(document, diagnostic_input_bytes=135_425),
+            dict(document, diagnostic_input_bytes=145_671),
         ):
             self.assertTrue(list(validator.iter_errors(mutation)))
+        historical_semanage_document = dict(
+            document,
+            target_sha=self.classifier.HISTORICAL_TARGET_SHA,
+            harness_sha256=self.classifier.HISTORICAL_HARNESS_SHA256,
+            operation="qualify-selinux-storage-fcontext-add",
+            reason="semanage-fcontext-local-add-failed",
+        )
+        self.assertEqual([], list(validator.iter_errors(historical_semanage_document)))
+        historical_current_start = dict(
+            document,
+            target_sha=self.classifier.HISTORICAL_TARGET_SHA,
+            harness_sha256=self.classifier.HISTORICAL_HARNESS_SHA256,
+            operation="qualify-quadlet-start-service-job",
+            reason="job-failed",
+            quadlet_start_diagnostic={
+                "classification": "service-job-failed",
+                "observation_complete": True,
+                "runuser_status": 1,
+                "systemctl_client_status": 1,
+                "service_result": "exit-code",
+                "exec_main_code": 1,
+                "exec_main_status": 126,
+            },
+        )
+        self.assertTrue(list(validator.iter_errors(historical_current_start)))
+        current_active = dict(
+            document,
+            operation="qualify-quadlet-active-state-systemctl",
+            reason="request-failed",
+            exit_status=3,
+            quadlet_active_state_diagnostic={
+                "classification": "systemctl-request-failed",
+                "observation_complete": True,
+                "runuser_status": 3,
+                "systemctl_client_status": 3,
+            },
+        )
+        self.assertEqual([], list(validator.iter_errors(current_active)))
+        historical_202_active = dict(
+            current_active,
+            target_sha=self.classifier.HISTORICAL_202_TARGET_SHA,
+            harness_sha256=self.classifier.HISTORICAL_202_HARNESS_SHA256,
+        )
+        self.assertEqual([], list(validator.iter_errors(historical_202_active)))
+        self.assertTrue(
+            list(
+                validator.iter_errors(
+                    dict(
+                        current_active,
+                        operation="qualify-quadlet-active-state-env",
+                    )
+                )
+            )
+        )
+        self.assertTrue(
+            list(
+                validator.iter_errors(
+                    dict(
+                        historical_semanage_document,
+                        operation="qualify-selinux-storage-restorecon",
+                    )
+                )
+            )
+        )
+        for mixed_authority in (
+            dict(document, harness_sha256=self.classifier.HISTORICAL_HARNESS_SHA256),
+            dict(
+                document,
+                harness_sha256=self.classifier.HISTORICAL_202_HARNESS_SHA256,
+            ),
+            dict(
+                historical_202_active,
+                harness_sha256=self.classifier.EXPECTED_HARNESS_SHA256,
+            ),
+            dict(
+                historical_semanage_document,
+                harness_sha256=self.classifier.EXPECTED_HARNESS_SHA256,
+            ),
+        ):
+            with self.subTest(mixed_authority=mixed_authority):
+                self.assertTrue(list(validator.iter_errors(mixed_authority)))
+        self.assertTrue(
+            list(
+                validator.iter_errors(
+                    dict(
+                        document,
+                        operation="qualify-selinux-storage-fcontext-add",
+                        reason="semanage-fcontext-local-add-failed",
+                    )
+                )
+            )
+        )
         unbound = dict(
             document,
             harness_sha256="a" * 64,
@@ -1584,11 +3706,419 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             "the exact daemon-reload failure must carry its pre-cleanup adjacency",
         )
 
+    def test_avc_failure_artifact_retains_only_bound_closed_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            document, path = self.build_avc_failure(Path(directory))
+            validator = Draft202012Validator(
+                json.loads(SCHEMA.read_text(encoding="utf-8"))
+            )
+            self.assertEqual([], list(validator.iter_errors(document)))
+            self.assertEqual(4, document["schema_version"])
+            self.assertEqual("qualify-avc-correlation", document["operation"])
+            self.assertEqual("command-failed", document["reason"])
+            diagnostic = document["avc_correlation_diagnostic"]
+            self.assertEqual(2, diagnostic["schema_version"])
+            self.assertEqual(2, diagnostic["projection"]["schema_version"])
+            self.assertEqual(
+                ["syscall-mismatch"],
+                diagnostic["projection"]["rejection_facts"],
+            )
+            self.assertEqual(
+                document["diagnostic_input_sha256"],
+                diagnostic["projection_sha256"],
+            )
+            self.assertEqual(
+                document["diagnostic_input_bytes"],
+                diagnostic["projection_bytes"],
+            )
+            encoded = json.dumps(document, sort_keys=True)
+            for forbidden in (
+                "avc: denied",
+                "proctitle=",
+                "type=SYSCALL",
+                "stdout",
+                "stderr",
+                "environment",
+                "journal",
+            ):
+                self.assertNotIn(forbidden, encoded)
+            for mixed in (
+                {**document, "schema_version": 3},
+                {
+                    **document,
+                    "avc_correlation_diagnostic": {
+                        **diagnostic,
+                        "schema_version": 1,
+                    },
+                },
+            ):
+                self.assertTrue(list(validator.iter_errors(mixed)))
+            load_rocky_control().validate_target_qualification_failure(
+                path,
+                self.classifier.EXPECTED_TARGET_SHA,
+                "c" * 40,
+                "12345",
+                "1",
+            )
+
+    def test_retained_273_avc_failure_is_admitted_without_mixed_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            document, path = self.build_avc_failure(Path(directory))
+            historical = copy.deepcopy(document)
+            historical["schema_version"] = 3
+            historical["target_sha"] = self.classifier.HISTORICAL_273_TARGET_SHA
+            diagnostic = historical["avc_correlation_diagnostic"]
+            diagnostic["schema_version"] = 1
+            diagnostic["target_sha"] = self.classifier.HISTORICAL_273_TARGET_SHA
+            projection = diagnostic["projection"]
+            projection["schema_version"] = 1
+            for event in projection["events"]:
+                for record in event["avc_records"]:
+                    record.pop("denial_match")
+                event["candidate"] = False
+                event["rejection_facts"] = []
+            projection["candidate_event_count"] = 0
+            projection["rejection_facts"] = []
+            self.selinux_isolation._finalize_record_diagnostic(projection)
+            projection_bytes = self.selinux_isolation.canonical_bytes(projection)
+            diagnostic["projection_bytes"] = len(projection_bytes)
+            diagnostic["projection_sha256"] = hashlib.sha256(
+                projection_bytes
+            ).hexdigest()
+            historical["diagnostic_input_bytes"] = len(projection_bytes)
+            historical["diagnostic_input_sha256"] = hashlib.sha256(
+                projection_bytes
+            ).hexdigest()
+            path.write_text(json.dumps(historical), encoding="utf-8")
+
+            control = load_rocky_control()
+            control.validate_target_qualification_failure(
+                path,
+                self.classifier.HISTORICAL_273_TARGET_SHA,
+                "c" * 40,
+                "12345",
+                "1",
+            )
+            mixed = copy.deepcopy(historical)
+            mixed["target_sha"] = self.classifier.EXPECTED_TARGET_SHA
+            path.write_text(json.dumps(mixed), encoding="utf-8")
+            with self.assertRaises(control.ControlError):
+                control.validate_target_qualification_failure(
+                    path,
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "c" * 40,
+                    "12345",
+                    "1",
+                )
+
+    def test_avc_failure_verifier_recomputes_binding_hash_and_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            document, path = self.build_avc_failure(root)
+            control = load_rocky_control()
+            mutations: list[dict[str, object]] = []
+            wrong_binding = copy.deepcopy(document)
+            wrong_binding["avc_correlation_diagnostic"]["qualification_run_id"] = "9"
+            mutations.append(wrong_binding)
+            wrong_hash = copy.deepcopy(document)
+            wrong_hash["avc_correlation_diagnostic"]["projection_sha256"] = "0" * 64
+            mutations.append(wrong_hash)
+            wrong_reason = copy.deepcopy(document)
+            wrong_reason["avc_correlation_diagnostic"]["projection"][
+                "rejection_facts"
+            ] = ["target-class-mismatch"]
+            mutations.append(wrong_reason)
+            wrong_context = copy.deepcopy(document)
+            wrong_context["avc_correlation_diagnostic"]["projection"][
+                "process_contexts"
+            ][0]["mcs_categories"] = [1024]
+            mutations.append(wrong_context)
+            wrong_event = copy.deepcopy(document)
+            wrong_event["avc_correlation_diagnostic"]["projection"]["events"][0][
+                "serial"
+            ] = "0"
+            mutations.append(wrong_event)
+            admitted = copy.deepcopy(document)
+            admitted["avc_correlation_diagnostic"]["projection"][
+                "correlation_outcome"
+            ] = "admitted"
+            mutations.append(admitted)
+            wrong_final = copy.deepcopy(document)
+            wrong_final["exit_status"] = 1
+            mutations.append(wrong_final)
+            for mutation in mutations:
+                with self.subTest(mutation=mutation):
+                    path.write_text(json.dumps(mutation), encoding="utf-8")
+                    with self.assertRaises(control.ControlError):
+                        control.validate_target_qualification_failure(
+                            path,
+                            self.classifier.EXPECTED_TARGET_SHA,
+                            "c" * 40,
+                            "12345",
+                            "1",
+                        )
+
+    def test_avc_failure_verifier_rejects_duplicate_projection_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _document, path = self.build_avc_failure(root)
+            payload = path.read_bytes()
+            marker = b'"projection":'
+            self.assertEqual(1, payload.count(marker))
+            path.write_bytes(
+                payload.replace(
+                    marker,
+                    b'"projection":{"raw_audit":"avc: denied"},"projection":',
+                    1,
+                )
+            )
+            control = load_rocky_control()
+            with self.assertRaisesRegex(
+                control.ControlError, "duplicate object key"
+            ):
+                control.validate_target_qualification_failure(
+                    path,
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "c" * 40,
+                    "12345",
+                    "1",
+                )
+
+    def test_classifier_never_retains_malformed_or_oversized_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stdout = root / "stdout"
+            stdout.write_bytes(b"")
+            trace = root / "trace"
+            trace.write_text(
+                "SECPAL_TARGET_ERR_V2:1:375,690,772\n", encoding="ascii"
+            )
+            output = root / "failure.json"
+            diagnostic = root / "diagnostic.json"
+            base = [
+                CLASSIFIER,
+                "--target-sha",
+                self.classifier.EXPECTED_TARGET_SHA,
+                "--control-sha",
+                "c" * 40,
+                "--run-id",
+                "12345",
+                "--run-attempt",
+                "1",
+                "--harness",
+                QUALIFICATION_HARNESS,
+                "--stdout",
+                stdout,
+                "--trace",
+                trace,
+                "--exit-status",
+                "3",
+                "--avc-correlation-diagnostic",
+                diagnostic,
+                "--output",
+                output,
+            ]
+            for payload in (
+                None,
+                b"",
+                b'{"stdout":"unrestricted audit output"}\n',
+                b"x" * (self.classifier.MAX_AVC_CORRELATION_DIAGNOSTIC_BYTES + 1),
+            ):
+                with self.subTest(size=None if payload is None else len(payload)):
+                    if payload is None:
+                        diagnostic.unlink(missing_ok=True)
+                    else:
+                        diagnostic.write_bytes(payload)
+                    output.unlink(missing_ok=True)
+                    result = subprocess.run(
+                        base, check=False, capture_output=True, text=True
+                    )
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertFalse(output.exists())
+
+    def test_target_publishes_only_semantic_avc_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process_a = "system_u:system_r:container_t:s0:c0"
+            process_b = "system_u:system_r:container_t:s0:c1023"
+            storage_a = "system_u:object_r:container_file_t:s0:c0"
+            identity = "msg=audit(08/31/26 00:43:39.673:41) :"
+            raw = (
+                f"type=AVC {identity} avc: denied {{ synthetic-permission }} "
+                f'pid=4242 name="synthetic-name" scontext={process_b} '
+                f"tcontext={storage_a} tclass=synthetic_class permissive=0\n"
+                f"type=PROCTITLE {identity} proctitle=cat /foreign/marker\n"
+                f'type=SYSCALL {identity} pid=4242 comm="head"\n'
+            )
+            audit = root / "audit"
+            isolation = root / "isolation"
+            diagnostic = root / "diagnostic"
+            published = root / "published"
+            audit.write_text(raw, encoding="utf-8")
+            shell = r'''
+source "$1"
+process_a="$2"
+process_b="$3"
+storage_a="$4"
+avc_correlation_diagnostic="$7"
+set +e
+admit_audit_observation "$5" "$6" "$7" 12
+status=$?
+set -e
+[[ "$status" -eq 2 ]]
+exec 6>"$8"
+SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6
+publish_avc_correlation_diagnostic
+exec 6>&-
+'''
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    shell,
+                    "bash",
+                    QUALIFICATION_HARNESS,
+                    process_a,
+                    process_b,
+                    storage_a,
+                    audit,
+                    isolation,
+                    diagnostic,
+                    published,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertFalse(isolation.exists())
+            self.assertEqual(diagnostic.read_bytes(), published.read_bytes())
+            self.assertNotIn(b"avc: denied", published.read_bytes())
+            projection = json.loads(published.read_text(encoding="utf-8"))
+            self.assertEqual(["syscall-mismatch"], projection["rejection_facts"])
+            self.selinux_isolation.validate_avc_correlation_diagnostic(projection)
+
+    def test_avc_no_result_returns_to_caller_before_projection_publication(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            ausearch = fake_bin / "ausearch"
+            ausearch.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            ausearch.chmod(0o700)
+            state = root / "state"
+            state.mkdir()
+            (state / "marker").write_text("marker", encoding="utf-8")
+            published = root / "published"
+            trace = root / "trace"
+            shell_path = root / "exercise-target-path.sh"
+            lines = [""] * 772
+            definitions = {
+                1: 'source "$1"',
+                2: 'PATH="$2:$PATH"',
+                3: 'process_a="system_u:system_r:container_t:s0:c0"',
+                4: 'process_b="system_u:system_r:container_t:s0:c1023"',
+                5: 'storage_a="system_u:object_r:container_file_t:s0:c0"',
+                6: 'container_b="fixture-b"',
+                7: 'state_a="$3"',
+                8: 'audit_observation="$4/audit"',
+                9: 'isolation_document="$4/isolation"',
+                10: 'avc_correlation_diagnostic="$4/diagnostic"',
+                11: 'rootless_podman() { return 1; }',
+                12: 'sleep() { :; }',
+                13: 'exec 6>"$5"',
+                14: 'SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6',
+                680: "test_main() {",
+                689: "  set +e",
+                690: "  observe_denied_access",
+                691: "  status=$?",
+                692: '  [[ "$-" != *e* ]] || return 90',
+                693: "  set -e",
+                694: '  [[ "$status" -eq 3 ]]',
+                711: '  reject_avc_observation "$status"',
+                712: "}",
+                772: "test_main",
+            }
+            for line_number, source in definitions.items():
+                lines[line_number - 1] = source
+            shell_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            with trace.open("wb") as trace_descriptor:
+                result = subprocess.run(
+                    [
+                        "bash",
+                        shell_path,
+                        QUALIFICATION_HARNESS,
+                        fake_bin,
+                        state,
+                        root,
+                        published,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    env={**os.environ, "BASH_ENV": os.fspath(TRACE)},
+                    pass_fds=(trace_descriptor.fileno(),),
+                    close_fds=True,
+                    preexec_fn=lambda: os.dup2(trace_descriptor.fileno(), 3),
+                )
+            self.assertEqual(3, result.returncode, result.stderr.decode())
+            projection = json.loads(published.read_text(encoding="utf-8"))
+            self.assertEqual("ausearch-no-result", projection["capture_outcome"])
+            self.assertEqual(12, projection["attempt"])
+            self.selinux_isolation.validate_avc_correlation_diagnostic(projection)
+            stdout = root / "stdout"
+            stdout.write_bytes(result.stdout + result.stderr)
+            output = root / "failure.json"
+            classified = subprocess.run(
+                [
+                    CLASSIFIER,
+                    "--target-sha",
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "--control-sha",
+                    "c" * 40,
+                    "--run-id",
+                    "12345",
+                    "--run-attempt",
+                    "1",
+                    "--harness",
+                    QUALIFICATION_HARNESS,
+                    "--stdout",
+                    stdout,
+                    "--trace",
+                    trace,
+                    "--exit-status",
+                    "3",
+                    "--avc-correlation-diagnostic",
+                    published,
+                    "--output",
+                    output,
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(0, classified.returncode, classified.stderr.decode())
+            document = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(
+                4,
+                document["schema_version"],
+                (document, trace.read_text(encoding="ascii")),
+            )
+            self.assertEqual("qualify-avc-correlation", document["operation"])
+            self.assertEqual("command-failed", document["reason"])
+            load_rocky_control().validate_target_qualification_failure(
+                output,
+                self.classifier.EXPECTED_TARGET_SHA,
+                "c" * 40,
+                "12345",
+                "1",
+            )
+
     def test_trusted_validator_binds_the_exact_control_target_and_run(self) -> None:
         document = {
             "schema_version": 1,
             "phase": "target-qualification",
-            "target_sha": "d" * 40,
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
             "trusted_control_sha": "c" * 40,
             "qualification_run_id": "12345",
             "qualification_run_attempt": "1",
@@ -1607,7 +4137,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 "validate-target-qualification-failure",
                 path,
                 "--target-sha",
-                "d" * 40,
+                self.classifier.EXPECTED_TARGET_SHA,
                 "--control-sha",
                 "c" * 40,
                 "--run-id",
@@ -1623,6 +4153,136 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             self.assertNotEqual(
                 0,
                 subprocess.run(command, check=False, capture_output=True).returncode,
+            )
+            document["harness_sha256"] = self.classifier.HISTORICAL_HARNESS_SHA256
+            path.write_text(json.dumps(document), encoding="utf-8")
+            command[-1] = "1"
+            self.assertNotEqual(
+                0,
+                subprocess.run(command, check=False, capture_output=True).returncode,
+            )
+
+    def test_trusted_validator_recomputes_quadlet_start_classification(self) -> None:
+        operation, reason, diagnostic = (
+            self.classifier.admit_quadlet_start_observation(
+                {
+                    "schema_version": 1,
+                    "stage": "service-job-failed",
+                    "runuser_status": 1,
+                    "systemctl_client_status": 1,
+                    "service_result": "exit-code",
+                    "exec_main_code": 1,
+                    "exec_main_status": 126,
+                },
+                1,
+            )
+        )
+        valid_diagnostic = dict(diagnostic)
+        document = {
+            "schema_version": 1,
+            "phase": "target-qualification",
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+            "trusted_control_sha": "c" * 40,
+            "qualification_run_id": "12345",
+            "qualification_run_attempt": "1",
+            "harness_sha256": self.classifier.EXPECTED_HARNESS_SHA256,
+            "operation": operation,
+            "reason": reason,
+            "exit_status": 1,
+            "diagnostic_input_sha256": "b" * 64,
+            "diagnostic_input_bytes": 100,
+            "quadlet_start_diagnostic": diagnostic,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "failure.json"
+            command = [
+                CONTROL,
+                "validate-target-qualification-failure",
+                path,
+                "--target-sha",
+                self.classifier.EXPECTED_TARGET_SHA,
+                "--control-sha",
+                "c" * 40,
+                "--run-id",
+                "12345",
+                "--run-attempt",
+                "1",
+            ]
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
+            document["quadlet_start_diagnostic"]["service_result"] = "success"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertNotEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
+            document["quadlet_start_diagnostic"] = valid_diagnostic
+            document["operation"] = "qualify-quadlet-start-systemctl"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertNotEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
+
+    def test_trusted_validator_recomputes_quadlet_active_classification(self) -> None:
+        operation, reason, diagnostic = (
+            self.classifier.admit_quadlet_active_observation(
+                {
+                    "schema_version": 1,
+                    "stage": "systemctl-request-failed",
+                    "runuser_status": 3,
+                    "systemctl_client_status": 3,
+                },
+                3,
+            )
+        )
+        valid_diagnostic = dict(diagnostic)
+        document = {
+            "schema_version": 1,
+            "phase": "target-qualification",
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+            "trusted_control_sha": "c" * 40,
+            "qualification_run_id": "12345",
+            "qualification_run_attempt": "1",
+            "harness_sha256": self.classifier.EXPECTED_HARNESS_SHA256,
+            "operation": operation,
+            "reason": reason,
+            "exit_status": 3,
+            "diagnostic_input_sha256": "b" * 64,
+            "diagnostic_input_bytes": 100,
+            "quadlet_active_state_diagnostic": diagnostic,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "failure.json"
+            command = [
+                CONTROL,
+                "validate-target-qualification-failure",
+                path,
+                "--target-sha",
+                self.classifier.EXPECTED_TARGET_SHA,
+                "--control-sha",
+                "c" * 40,
+                "--run-id",
+                "12345",
+                "--run-attempt",
+                "1",
+            ]
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
+            document["quadlet_active_state_diagnostic"][
+                "systemctl_client_status"
+            ] = 1
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertNotEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
+            document["quadlet_active_state_diagnostic"] = valid_diagnostic
+            document["operation"] = "qualify-quadlet-active-state-env"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertNotEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
             )
 
     def test_trusted_validator_recomputes_daemon_reload_classification(self) -> None:
@@ -1960,13 +4620,14 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         )
         self.assertNotIn("qualification.json", failure["run"])
         self.assertNotIn("target-qualification-failure.json", success["run"])
-        self.assertIn("head -c 4097", failure["run"])
-        self.assertIn("-le 4096", failure["run"])
+        self.assertIn("head -c 16385", failure["run"])
+        self.assertIn("-le 16384", failure["run"])
 
         runner = RUNNER.read_text(encoding="utf-8")
-        direct_failure = runner.split('if [[ "$status" -ne 0 ]]; then', 1)[1].split(
-            "fi", 1
-        )[0]
+        direct_failure = runner.split(
+            'if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then',
+            1,
+        )[1].split("fi", 1)[0]
         self.assertNotIn("--trusted-marker", direct_failure)
         self.assertIn(
             'rm -f -- "$source_failure" "$qualification_failure" '
@@ -1979,6 +4640,13 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         )
         self.assertIn('rm -f -- "$qualification_marker"\nset +e\npython3 -', runner)
         self.assertIn("representation_option=(--representation-invalid)", runner)
+        self.assertIn(
+            '--exit-status "$status" --trusted-marker "$qualification_marker"',
+            runner,
+        )
+        self.assertNotIn(
+            '--exit-status "$admission_status" --trusted-marker', runner
+        )
 
     def test_trace_overflow_and_unsafe_inputs_fail_closed(self) -> None:
         self.assertEqual(
@@ -2018,6 +4686,471 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             )
             self.assertEqual(1, result.returncode)
             self.assertNotIn("Bad file descriptor", result.stderr)
+
+    def test_target_capture_bounds_output_without_limiting_target_files(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        self.assertNotIn("ulimit -f 128", runner)
+        self.assertIn("capture_bounded() {", runner)
+        self.assertIn('/usr/bin/head -c "$maximum"', runner)
+        self.assertIn("/usr/bin/cat >/dev/null", runner)
+        self.assertIn('capture_bounded 65537 "$stdout"', runner)
+        self.assertIn(
+            'capture_bounded 4097 "$qualification_trace" <"$trace_fifo"', runner
+        )
+        self.assertIn('pipeline_statuses=("${PIPESTATUS[@]}")', runner)
+        self.assertIn('wait "$trace_capture_pid"', runner)
+        self.assertIn(
+            'wait "$observer_pid" >/dev/null 2>&1\n  observer_pid=""',
+            runner,
+        )
+        self.assertNotIn("\n  status=1\n", runner)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            execution = subprocess.run(
+                [
+                    "bash",
+                    "-ceu",
+                    r"""
+stdout="$1/stdout"
+trace="$1/trace"
+trace_fifo="$1/trace.fifo"
+policy="$1/policy"
+cleanup_policy="$1/cleanup-policy"
+capture_bounded() {
+  local maximum="$1" output="$2" head_status=0 drain_status=0
+  head -c "$maximum" >"$output" || head_status=$?
+  cat >/dev/null || drain_status=$?
+  ((head_status == 0 && drain_status == 0))
+}
+mkfifo -m 0600 "$trace_fifo"
+capture_bounded 4097 "$trace" <"$trace_fifo" &
+trace_capture_pid=$!
+set +e
+bash -ceu '
+  policy="$1"
+  cleanup_policy="$2"
+  cleanup() {
+    dd if=/dev/zero of="$cleanup_policy" bs=1024 count=256 status=none
+  }
+  trap cleanup EXIT
+  dd if=/dev/zero of="$policy" bs=1024 count=256 status=none
+  printf trace >&3
+  printf pass
+' bash "$policy" "$cleanup_policy" 3>"$trace_fifo" 2>&1 |
+  capture_bounded 65537 "$stdout"
+pipeline_statuses=("${PIPESTATUS[@]}")
+wait "$trace_capture_pid"
+trace_capture_status=$?
+set -e
+test "${pipeline_statuses[0]}" -eq 0
+test "${pipeline_statuses[1]}" -eq 0
+test "$trace_capture_status" -eq 0
+""",
+                    "bash",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, execution.returncode, execution.stderr)
+            self.assertEqual(256 * 1024, (root / "policy").stat().st_size)
+            self.assertEqual(256 * 1024, (root / "cleanup-policy").stat().st_size)
+            self.assertEqual(b"pass", (root / "stdout").read_bytes())
+            self.assertEqual(b"trace", (root / "trace").read_bytes())
+
+            overflow = subprocess.run(
+                [
+                    "bash",
+                    "-ceu",
+                    r'''
+set +e
+capture_bounded() {
+  local maximum="$1" output="$2" head_status=0 drain_status=0
+  head -c "$maximum" >"$output" || head_status=$?
+  cat >/dev/null || drain_status=$?
+  ((head_status == 0 && drain_status == 0))
+}
+python3 -c 'import os; os.write(1, b"x" * 70000)' 2>&1 |
+  capture_bounded 65537 "$1/overflow"
+statuses=("${PIPESTATUS[@]}")
+set -e
+test "${statuses[0]}" -eq 0
+test "${statuses[1]}" -eq 0
+test "$(stat -c %s "$1/overflow")" -eq 65537
+''',
+                    "bash",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, overflow.returncode, overflow.stderr)
+
+    def test_success_observers_drain_bounded_output_and_timeout(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        function = re.search(
+            r"\ndef run_bounded\(.*?(?=\n\npayload =)", runner, re.DOTALL
+        )
+        self.assertIsNotNone(function)
+        namespace = {
+            "os": os,
+            "signal": __import__("signal"),
+            "subprocess": subprocess,
+            "threading": threading,
+            "time": __import__("time"),
+        }
+        exec(function.group(0), namespace)
+        run_bounded = namespace["run_bounded"]
+        status, stdout, stderr, invalid = run_bounded(
+            [
+                sys.executable,
+                "-c",
+                "import os; os.write(1, b'x' * 70000); "
+                "os.write(2, b'y' * 70000)",
+            ],
+            stdout_limit=64,
+            stderr_limit=32,
+            timeout=5,
+        )
+        self.assertEqual(0, status)
+        self.assertLessEqual(len(stdout), 65)
+        self.assertLessEqual(len(stderr), 33)
+        self.assertTrue(invalid)
+        status, _stdout, _stderr, invalid = run_bounded(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdout_limit=64,
+            stderr_limit=32,
+            timeout=0.1,
+        )
+        self.assertNotEqual(0, status)
+        self.assertTrue(invalid)
+        started = __import__("time").monotonic()
+        status, _stdout, _stderr, invalid = run_bounded(
+            [
+                sys.executable,
+                "-c",
+                "import subprocess, sys; "
+                "subprocess.Popen([sys.executable, '-c', "
+                "'import time; time.sleep(30)'], stdout=sys.stdout, stderr=sys.stderr)",
+            ],
+            stdout_limit=64,
+            stderr_limit=32,
+            timeout=5,
+        )
+        self.assertEqual(0, status)
+        self.assertTrue(invalid)
+        self.assertLess(__import__("time").monotonic() - started, 4)
+        acquire = namespace["acquire_audit_events"]
+        event = {"invariant_owner": "owner"}
+        no_avc = type("NoMatchingAvc", (ValueError,), {})
+        invalid_avc = type("IsolationError", (ValueError,), {})
+        contract = types.SimpleNamespace(
+            NoMatchingAvc=no_avc,
+            IsolationError=invalid_avc,
+            admit_selinux_isolation=mock.Mock(return_value=event),
+        )
+        namespace["selinux_isolation_contract"] = contract
+        acquire_arguments = {
+            "process_a": "process-a",
+            "process_b": "process-b",
+            "storage_a": "storage-a",
+        }
+        no_match = (1, b"", b"<no matches>\n", False)
+        namespace["run_bounded"] = mock.Mock(
+            side_effect=(no_match, (0, b"event", b"", False))
+        )
+        with mock.patch.object(namespace["time"], "sleep") as pause:
+            self.assertEqual(
+                (b"event", event),
+                acquire(["/usr/sbin/ausearch"], **acquire_arguments),
+            )
+        pause.assert_called_once_with(0.5)
+        namespace["run_bounded"] = mock.Mock(
+            side_effect=(
+                (0, b"unrelated", b"", False),
+                (0, b"event", b"", False),
+            )
+        )
+        contract.admit_selinux_isolation = mock.Mock(
+            side_effect=(no_avc(), event)
+        )
+        with mock.patch.object(namespace["time"], "sleep") as pause:
+            self.assertEqual(
+                (b"event", event),
+                acquire(["/usr/sbin/ausearch"], **acquire_arguments),
+            )
+        pause.assert_called_once_with(0.5)
+        namespace["run_bounded"] = mock.Mock(
+            return_value=(1, b"unexpected", b"", False)
+        )
+        self.assertEqual(
+            (None, None),
+            acquire(["/usr/sbin/ausearch"], **acquire_arguments),
+        )
+        namespace["run_bounded"] = mock.Mock(
+            return_value=(1, b"", b"warning\n", False)
+        )
+        self.assertEqual(
+            (None, None),
+            acquire(["/usr/sbin/ausearch"], **acquire_arguments),
+        )
+        namespace["run_bounded"] = mock.Mock(
+            return_value=(0, b"malformed", b"", False)
+        )
+        contract.admit_selinux_isolation = mock.Mock(side_effect=invalid_avc())
+        self.assertEqual(
+            (None, None),
+            acquire(["/usr/sbin/ausearch"], **acquire_arguments),
+        )
+        namespace["run_bounded"] = mock.Mock(return_value=no_match)
+        with mock.patch.object(namespace["time"], "sleep") as pause:
+            self.assertEqual(
+                (b"", None),
+                acquire(["/usr/sbin/ausearch"], **acquire_arguments),
+            )
+        self.assertEqual(11, pause.call_count)
+        self.assertIn('timeout=10,\n        cwd=str(runtime_home)', runner)
+
+    def test_avc_admission_uses_the_canonical_isolation_owner(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        contract_path = ROOT / "scripts/selinux_isolation_contract.py"
+        specification = importlib.util.spec_from_file_location(
+            "selinux_isolation_contract", contract_path
+        )
+        self.assertIsNotNone(specification)
+        assert specification is not None and specification.loader is not None
+        contract = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(contract)
+        self.assertIn(
+            "/opt/secpal-control/scripts/selinux_isolation_contract.py",
+            runner,
+        )
+        self.assertIn(
+            "selinux_isolation_contract.admit_selinux_isolation",
+            (ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json").read_text(
+                encoding="utf-8"
+            ),
+        )
+
+        process_a = "system_u:system_r:container_t:s0:c0"
+        process_b = "system_u:system_r:container_t:s0:c1023"
+        storage_a = "system_u:object_r:container_file_t:s0:c0"
+        identity = "msg=audit(08/31/26 00:43:39.673:41) :"
+        audit = "\n".join(
+            (
+                f"type=AVC {identity} avc: denied {{ read }} pid=4242 "
+                f'name="marker" scontext={process_b} tcontext={storage_a} '
+                "tclass=file permissive=0",
+                f"type=PROCTITLE {identity} proctitle=cat /foreign/marker",
+                f'type=SYSCALL {identity} pid=4242 comm="cat"',
+            )
+        )
+        admitted = contract.admit_selinux_isolation(
+            process_a=process_a,
+            process_b=process_b,
+            storage_a=storage_a,
+            audit_text=audit,
+        )
+        self.assertEqual("41", admitted["denial"]["serial"])
+        nonlegacy = contract.admit_selinux_isolation(
+            process_a=process_a,
+            process_b=process_b,
+            storage_a=storage_a,
+            audit_text=audit.replace("{ read }", "{ write }"),
+        )
+        self.assertEqual("41", nonlegacy["denial"]["serial"])
+        for mutation in (
+            audit.replace("pid=4242", "pid=999", 1),
+            audit.replace("permissive=0", "permissive=1"),
+            audit.replace("/foreign/marker", "/foreign/other"),
+            audit.replace(":41) :", ":42) :", 1),
+        ):
+            with self.subTest(mutation=mutation), self.assertRaises(
+                contract.IsolationError
+            ):
+                contract.admit_selinux_isolation(
+                    process_a=process_a,
+                    process_b=process_b,
+                    storage_a=storage_a,
+                    audit_text=mutation,
+                )
+
+    def test_target_module_is_authenticated_before_root_execution(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        comparison = (
+            '/usr/bin/cmp --silent -- "$work_root/scripts/'
+            'selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"'
+        )
+        self.assertIn(comparison, runner)
+        self.assertLess(
+            runner.index(comparison),
+            runner.index('bash "$work_root/scripts/qualify-production-host.sh"'),
+        )
+
+    def test_outer_timeout_preserves_the_complete_cleanup_bound(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("timeout --signal=TERM --kill-after=180s 45m", runner)
+
+
+    def test_avc_admission_reads_logs_when_python_stdin_is_a_heredoc(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        self.assertIn(
+            'audit_date, audit_time = audit_checkpoint.groups()',
+            runner,
+        )
+        self.assertIn(
+            '"/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",',
+            runner,
+        )
+        self.assertIn('stderr in {b"", b"<no matches>\\n"}', runner)
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "ausearch"
+            executable.write_text(
+                "#!/bin/sh\n"
+                "if test \"$#\" -eq 7 && test \"$1\" = --input-logs && "
+                "test \"$5\" = 01/01/2026 && test \"$6\" = 00:00:00 && "
+                "test \"$7\" = -i; then\n"
+                "  printf '%s\\n' 'type=AVC msg=audit(1.2:41): admitted'\n"
+                "  exit 0\n"
+                "fi\n"
+                "cat\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{directory}:{os.environ.get('PATH', os.defpath)}",
+            }
+            script = r'''
+python3 - <<'PY'
+import subprocess
+without_logs = subprocess.run(
+    ["ausearch", "-m", "AVC", "-ts", "01/01/2026", "00:00:00"],
+    check=False, capture_output=True, text=True,
+)
+combined = subprocess.run(
+    ["ausearch", "--input-logs", "-m", "AVC", "-ts", "01/01/2026 00:00:00"],
+    check=False, capture_output=True, text=True,
+)
+with_logs = subprocess.run(
+    ["ausearch", "--input-logs", "-m", "AVC", "-ts", "01/01/2026", "00:00:00", "-i"],
+    check=False, capture_output=True, text=True,
+)
+if without_logs.returncode != 1 or without_logs.stdout != "":
+    raise SystemExit(1)
+if combined.returncode != 1 or combined.stdout != "":
+    raise SystemExit(2)
+if with_logs.returncode != 0 or not with_logs.stdout.startswith("type=AVC "):
+    raise SystemExit(3)
+PY
+'''
+            result = subprocess.run(
+                ["bash", "-ceu", script],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_cleanup_podman_observer_uses_validated_runtime_home_cwd(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        self.assertIn(
+            'runtime_home = Path(runtime_account.pw_dir)',
+            runner,
+        )
+        self.assertIn(
+            'home_metadata.st_uid == runtime_account.pw_uid',
+            runner,
+        )
+        self.assertIn('runtime_home == Path("/home/secpal-runtime")', runner)
+        self.assertIn(
+            'cwd=str(runtime_home) if name == "podman" else None',
+            runner,
+        )
+        function = re.search(
+            r"\ndef runtime_home_admitted\(.*?(?=\n\npayload =)",
+            runner,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(function)
+        fake_pwd = types.SimpleNamespace(getpwnam=mock.Mock())
+        namespace = {"os": os, "Path": Path, "pwd": fake_pwd, "stat": stat}
+        exec(function.group(0), namespace)
+        admitted = namespace["runtime_home_admitted"]
+        admitted_home = namespace["admitted_runtime_home"]
+        account = types.SimpleNamespace(pw_uid=1001, pw_gid=1001)
+        home = types.SimpleNamespace(
+            st_mode=stat.S_IFDIR | 0o700, st_uid=1001, st_gid=1001
+        )
+        parent = types.SimpleNamespace(
+            st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0
+        )
+        self.assertTrue(
+            admitted(Path("/home/secpal-runtime"), account, home, parent)
+        )
+        self.assertFalse(
+            admitted(
+                Path("/home/secpal-runtime"),
+                account,
+                types.SimpleNamespace(
+                    st_mode=stat.S_IFDIR | 0o600, st_uid=1001, st_gid=1001
+                ),
+                parent,
+            )
+        )
+        fake_pwd.getpwnam.side_effect = KeyError("missing")
+        self.assertIsNone(admitted_home())
+        fake_pwd.getpwnam.side_effect = None
+        fake_pwd.getpwnam.return_value = types.SimpleNamespace(
+            pw_uid=1001,
+            pw_gid=1001,
+            pw_dir="/home/secpal-runtime",
+        )
+        with mock.patch.object(Path, "lstat", side_effect=OSError("missing")):
+            self.assertIsNone(admitted_home())
+        self.assertFalse(
+            admitted(
+                Path("/home/secpal-runtime"),
+                account,
+                home,
+                types.SimpleNamespace(
+                    st_mode=stat.S_IFDIR | 0o777, st_uid=0, st_gid=0
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            blocked = root / "blocked"
+            runtime_home = root / "runtime-home"
+            blocked.mkdir(mode=0o700)
+            runtime_home.mkdir(mode=0o700)
+            original = Path.cwd()
+            os.chdir(blocked)
+            blocked.chmod(0)
+            try:
+                inherited = subprocess.run(
+                    [sys.executable, "-c", "import os; os.chdir('.')"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                bounded = subprocess.run(
+                    [sys.executable, "-c", "import os; os.chdir('.')"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    cwd=runtime_home,
+                )
+            finally:
+                blocked.chmod(0o700)
+                os.chdir(original)
+            self.assertNotEqual(0, inherited.returncode)
+            self.assertEqual(0, bounded.returncode, bounded.stderr)
 
 
 if __name__ == "__main__":

@@ -12,29 +12,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - Treat sibling repositories as read-only references by default.
 - Preserve existing worktrees and changes; never overwrite work you do not own.
 - Never use destructive Git commands, force-push, or bypass hooks.
+- `SECPAL_SIGNING_FORMAT: SSH`.
+  Preserve existing SSH keys and signing configuration. GitHub-generated
+  signatures are provider evidence, not SecPal OpenPGP signing authority.
+  Every PR commit must have GitHub `verification.verified == true`.
 - Keep one coherent topic per branch and pull request.
 
-## Canonical work graph
+## Source delivery
 
-- Follow `SecPal/.github/docs/work-graph-contract.md` as the single authority
-  for work-graph, delivery, replanning, and evidence semantics. This repository
-  adds only deployment-specific implementation and security constraints.
-- Follow `SecPal/.github/docs/evidence-architecture-contract.md` as the
-  authoritative companion for evidence-pipeline and external-system
-  architecture. Do not create independent generic definitions of its
-  observation, normalization, admission, assembly, invariant-ownership,
-  diagnosability, or anti-loop rules here. Deployment-specific constraints in
-  this baseline may strengthen those rules at deployment trust boundaries but
-  do not replace their canonical definitions.
-- The native GitHub graph state is authoritative. Human-readable diagrams and
-  prose are explanatory only and must not duplicate native relationship or
-  progress state.
-- A leaf owns one reviewable contract and one primary delivery pull request,
-  linked with `Fixes #<leaf>`. A leaf inside an epic also carries
-  `Part of: #<parent>` as canonical delivery linkage, not graph authority.
-- Promote a leaf to a sub-epic when it needs multiple independently reviewable
-  contracts or delivery pull requests. Preserve parallelism: use dependencies
-  only for genuine prerequisites and native sibling order for preference.
+Use native GitHub issues, relationships, pull requests, reviews, and checks.
+Keep changes reviewable and follow the repository's existing validation.
+
+Follow `SecPal/.github/docs/evidence-architecture-contract.md` for
+external-system evidence. Deployment-specific security constraints below and
+executable repository validators own cloud, host, and conformance admission.
 
 ## Security boundaries
 
@@ -63,9 +54,9 @@ Never print secret values to logs.
 - Behavior-preserving refactors may rely on unchanged behavior tests,
   characterization, structural, source-shape, security, or pinned-equivalence
   evidence. Do not manufacture a failing-first test when behavior is preserved.
-- If a leaf promises a real-system or cloud outcome, repository-authored
+- If a task promises a real-system or cloud outcome, repository-authored
   fixtures cannot replace real-system evidence. Do not require a real-system
-  run when the leaf promises no real-system outcome.
+  run when the task promises no real-system outcome.
 - One scenario or evidence artifact may satisfy several acceptance criteria.
   Stop at the smallest non-redundant evidence set; do not create one test per
   finding or one evidence leaf per seam.
@@ -78,10 +69,11 @@ Never print secret values to logs.
 - Never evaluate untrusted input with `eval` or `source`.
 - Never expose secrets in logs.
 - Pin versions and image digests exactly in production deployment paths.
-- A non-production conformance workflow may resolve one closed official OS slug
-  and current Debian packages only when it is isolated from production, records
-  the resolved provider image ID and exact installed package versions in closed
-  schema-validated evidence, and re-admits their expected Debian provenance.
+- A non-production conformance workflow may resolve one closed official OS image
+  slug and current distribution packages only when isolated from production. It
+  records the resolved provider image ID and exact installed package versions in
+  closed schema-validated evidence, then re-admits the expected distribution
+  provenance.
 
 ## Validator and evidence design
 
@@ -128,16 +120,18 @@ Never print secret values to logs.
 ## Future deployment invariants
 
 - API and frontend remain separate images.
-- Product Dockerfiles are never duplicated here.
+- SecPal-owned product Containerfiles are never duplicated here.
 - `activity-hash-chain worker: exactly one`.
 - `scheduler: exactly one`.
 - Migrations are explicit and run exactly once, never from an entrypoint or
   health check.
-- The edge owns TLS and public routing; product containers do not expose public
-  TLS.
-- CrowdSec belongs at the public edge.
+- The selected Edge mode owns Viewer TLS and public routing; product containers
+  do not expose public TLS.
+- CrowdSec integration follows ADR-019's mode-specific boundaries and remains
+  outside product containers.
 - PostgreSQL and private file storage require explicit backup contracts.
-- Valkey never replaces PostgreSQL as the source of truth.
+- Valkey is absent from the current production baseline; PostgreSQL-backed state
+  remains authoritative unless a later evidence-backed decision changes it.
 
 ## Communication
 

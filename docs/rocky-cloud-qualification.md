@@ -14,10 +14,69 @@ inputs to Rocky admission.
 
 The workflow commit on `main` owns provider authentication, the closed profile,
 image discovery, OpenTofu, resource ownership and TTL, SSH rotation, host
-preparation, continuation admission, evidence admission, and cleanup. A target
-revision is accepted only as a full commit SHA. It is fetched by the guest only
-after every GCP service account has been detached and access to the metadata
-credential endpoint has been blocked.
+preparation, continuation admission, evidence admission, and cleanup. The
+current target is the GitHub-verified protected-main #274 merge
+`402c22b0a1d69a5a3dba74ffb68cf016caba606b`; its target-owned production
+harness has SHA-256
+`436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac`.
+The pair is independently enforced by the trusted workflow, target runner,
+diagnostic classifier, schema, and repository agreement checks. The target is
+fetched by the guest only after every GCP service account has been detached and
+access to the metadata credential endpoint has been blocked.
+
+The current harness digest is derived reproducibly from immutable Git bytes
+with `git show 402c22b0a1d69a5a3dba74ffb68cf016caba606b:scripts/qualify-production-host.sh | sha256sum`.
+The #273 diagnostic target
+`c76742c828fefd71dda2b2d73fda6a0c43969426` has the same harness digest but
+remains a distinct historical binding. Preparation `34898846204/1`, diagnostic
+`34899406415/1`, and AVC diagnostic digest
+`bbc8268c665eba8960a4c0b4689cddb4434db5fc0937beacacc16ffebab09f2f`
+remain immutable under their recorded target and trusted control. The
+pre-extension target
+`b76c24fe59fbe2406d8b84094fc9e6694c57f0c6` and its original harness digest
+`f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c`
+remains an exact historical binding, including the #233 failure from run
+`34876534431/1`. The earlier target
+`539d5faa6549be62060c8e20028caf200e5eca01` has that same historical harness
+digest but remains historical authority only. Sharing harness bytes does not
+allow either target identity or trusted-control identity to be mixed with a
+different binding.
+
+The trusted-control SHA for a new lifecycle is the protected-main workflow
+commit itself, derived from `GITHUB_SHA`; it is not a workflow input or an
+unmerged candidate constant. The canonical protected-main merge commit produced
+by this #275 delivery establishes the initial rebound authority triplet with the
+current target and harness. A later protected-main workflow commit derives its
+own trusted-control identity and can inherit that pair only while the repository
+agreement gates remain unchanged.
+Continuations bind the exact control SHA that created them. Every previously
+issued #233 or #234 execution authorization is stale after the #274 correction
+and #275 rebind. In particular, the unconsumed #234 authorization bound to
+control `a4a4ff415f01421af4f3ddfe0a3542815df42414`, the pre-extension target,
+and its historical harness cannot be consumed or revived by the current
+authority.
+
+The failed native #234 target/harness pair
+`b8f5a505d318d06a64a5975cfaba9f1e5ba0041f` /
+`918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa`
+remains authenticated historical diagnostic evidence and cannot select a new
+qualification.
+Preparation run `34716436412` passed, and the one authorized qualification run
+`34716784934` failed at `qualify-quadlet-authority / invariant-failed`. Its
+admitted failure artifact has SHA-256
+`d811a190ae6beb48f85562a1536e57910a5f3d2275095e36c76a2aaa178bb2a2`;
+the bound 162 diagnostic bytes have SHA-256
+`b41e05e0a6d722b4a824aa71e7c71b5da4dfd3143a4d26033cc59fc4b011bc59`.
+The matching cleanup completed with empty retained provider state. Repository
+fixtures reproduce the disagreement but do not replace that native evidence,
+and #254 performs no provider qualification.
+The earlier `293977ae93408a7bb812619de58649ab8a92d438` /
+`8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db`
+pair and older retained identities remain historical evidence bindings only;
+they cannot select current qualification. The earlier target SHA may select
+only `destroy` for its exact retained continuation and OpenTofu state. Trusted
+cleanup admits that continuation and its matching target before obtaining
+provider authority, and it never executes target-owned bytes.
 
 The qualification runner job has no environment, `id-token` permission, WIF
 action, provider token, or credential file. It generates an Ed25519 key locally
@@ -45,26 +104,33 @@ guest policy; this leaf does not create a time-service dependency.
 
 ## Closed provider-run selector and image handoff
 
-`gcp-rocky-10-2-arm64` is the only current Rocky provider-run selector. It fixes Google,
-`secpal-dev`, `europe-west3`, `europe-west3-a`, `c4a-standard-4`, one native
-ARM64 guest, and one 120 GiB `hyperdisk-balanced` disk. The official
-`rocky-linux-cloud/rocky-linux-10-arm64` family is a discovery input only.
+The closed selector contains exactly two reviewed Rocky profiles. Both fix
+Google, `secpal-dev`, `europe-west3`, `europe-west3-a`, one guest, and one
+120 GiB `hyperdisk-balanced` disk:
 
-The selector and machine type are bounded #118/#123 qualification inputs, not
-SecPal capacity profiles or universal ARM recommendations. Under the
-[provider-neutral capacity contract](architecture/capacity-capabilities.md),
-`c4a-standard-4` may appear only as current provider-product evidence. Existing
-Rocky evidence does not retroactively claim `M`; #123 must consume the new
-capability vocabulary and assemble its required workload, headroom, storage,
-freshness, and cleanup evidence when that leaf is implemented.
+- `gcp-rocky-10-2-arm64` binds `c4a-standard-4`, native `aarch64`, and the
+  official `rocky-linux-cloud/rocky-linux-10-arm64` discovery family.
+- `gcp-rocky-10-2-x86-64` binds `c3-standard-4`, native `x86_64`, the
+  `x86-64-v3` baseline, and the official
+  `rocky-linux-cloud/rocky-linux-10` discovery family.
+
+These provider-run selectors are not capacity profiles or universal hardware
+minimums. The [capacity contract](architecture/capacity-capabilities.md) keeps
+measured workload qualification separate from platform conformance; historical
+cloud evidence does not retroactively qualify its optional planning profile.
+
+Both families are discovery inputs only. Callers select a reviewed profile
+identity, never a profile path, image family, machine type, architecture, or
+fixture child.
 
 The discovery operation calls the exact family endpoint through WIF and emits
-the returned image name, immutable self-link, ARM64 architecture, creation
+the returned image name, immutable self-link, provider architecture, creation
 timestamp, family, profile, and trusted control SHA. OpenTofu has no image data
-source and accepts only an immutable self-link matching the official Rocky ARM64
-shape. Guest admission separately requires `ID=rocky`, `VERSION_ID=10.2`, and
-`uname -m=aarch64`; an official family that has moved to another minor therefore
-fails closed after provisioning rather than changing the qualification contract.
+source and accepts only an immutable self-link matching the selected profile.
+Guest admission separately requires `ID=rocky`, `VERSION_ID=10.2`, and the
+profile-bound `uname -m`. The exact target harness additionally admits
+`x86-64-v3` on `x86_64`; an official family or machine that cannot satisfy these
+facts fails closed rather than changing the qualification contract.
 
 ## Lifecycle and retention
 
@@ -75,8 +141,9 @@ The workflow exposes exactly four operations:
   and reboots the guest, admits preparation evidence, and retains the run for no
   more than three hours.
 - `qualify` accepts only the exact, unexpired continuation, rotates access, runs
-  the target-owned harness on the identity-free guest, admits its bounded
-  evidence, and then destroys the exact saved state.
+  the target harness only after its digest matches trusted control on the
+  identity-free guest, admits its bounded evidence, and then destroys the exact
+  saved state.
 - `destroy` accepts the exact continuation, including after expiry, solely to
   destroy its saved state.
 
@@ -95,7 +162,8 @@ Preparation evidence that linger and `runtime.systemd_user` were true on an
 earlier boot is not current-boot readiness. Before publication, trusted startup
 waits for three independent current-boot observations: active
 `user@<runtime-uid>.service`, a socket at `/run/user/<runtime-uid>/bus`, and a
-successful non-mutating `systemctl --machine=secpal-runtime@.host --user
+successful non-mutating direct runtime-user `runuser --user secpal-runtime --
+env -u CONTAINER_HOST -u CONTAINER_CONNECTION … systemctl --user
 show-environment` query. The guest wait is limited to 60 seconds, five-second
 cadence, and 13 probes; it never runs the target-owned `daemon-reload`.
 Exhaustion publishes no successful readiness: the existing marker carries a
@@ -103,47 +171,291 @@ bound negative state that the canonical waiter classifies as
 `runtime-user-manager`, `runtime-user-bus`, or `runtime-user-control` with
 `not-ready-timeout`.
 The uncredentialed target job uses that exact key in a bounded authenticated
-probe cadence. Target revision code executes exactly once only after the
-current-boot record and all three exact-true runtime-user facts are admitted;
-transport, authentication, missing/stale state, and binding failure remain
-separate closed outcomes.
+probe cadence. Trusted control admits the current-boot record and all three
+exact-true runtime-user facts, observes installed packages, and only then
+fetches the target revision. The fetched harness executes only when its digest
+matches the harness in trusted control. Transport, authentication, missing or
+stale state, target disagreement, and binding failure remain separate closed
+outcomes.
 
-The exact target harness remains the owner of workload qualification, while
-trusted control remains the sole authority for PASS. For the reviewed target
-commit, trusted control binds the fetched harness to its immutable SHA-256 and
-maps only its finite reviewed error messages and Bash failure call sites to a
+The exact target harness remains the reviewed workload definition, while
+trusted control owns invocation and remains the sole authority for PASS. The
+trusted workflow supplies its harness SHA-256 to the root-owned runner, which
+requires the fetched target harness to match before invocation. No second
+installed harness copy is needed. Trusted control maps only finite reviewed
+error messages and Bash failure call sites to a
 closed negative diagnostic. That diagnostic can only stop qualification; it
 cannot supply or replace success evidence. Unknown, ambiguous, or unbound
 failures remain `qualification-harness/unclassified-target-failure`. The
 transport retains only the operation, closed reason, exit status, run bindings,
 and bounded diagnostic-input hash and length—not target stdout or stderr.
 
-The trusted Bash trace uses `SECPAL_TARGET_ERR_V2`: one numeric exit status and
-at most eight numeric `BASH_LINENO` frames. The classifier ignores generic
-helper implementation frames and resolves only immutable reviewed outer call
-sites under the exact target and harness hashes. Repeated frames agreeing on one
-operation are one decision; zero mapped operations, conflicting operations, or
-conflict with an explicit reviewed message remain fail-closed. V1 single-frame
-traces are not a current emission or validation surface; historical artifacts
-retain only their already validated input digest and length.
+For the immutable line-638 Quadlet start, trusted control closes the formerly
+opaque `runuser -> env -> systemctl --user start` boundary without modifying
+the target harness. The trace redirects only that exact call through
+root-owned `/opt/secpal-control/libexec/rocky-start-runuser`; the runtime-user
+steps use root-owned absolute `/usr/bin/env` and `/usr/bin/systemctl` helpers.
+The trace matches the immutable argv directly and opens root-owned FD 6 only
+for the root helper from a fixed root-owned evidence path; no observation path
+is exported into the harness environment. The target harness and its earlier
+children never inherit the descriptor. The helper writes one at-most-2,048-byte
+closed JSON observation to its root-owned mode-0600 file and closes the
+descriptor before any fallback. Runtime-user
+Python starts in isolated mode, so user site packages and Python environment
+settings cannot become protocol writers. A helper precondition or pre-dispatch
+representation failure records only diagnostic unavailability and falls back
+to the original operation, so diagnostic code cannot replace the operation it
+observes. No exported marker or DEBUG-trap state authorizes helper dispatch, so
+a completed operation cannot redirect a later runtime-account call. A post-dispatch
+diagnostic failure retains the completed operation's original status without
+repeating it.
+
+The admitted start operations distinguish `runuser` exec and invocation,
+`env` exec and command exec, `systemctl` exec and user-manager request, and a
+service job failure. Facts are limited to the outer `runuser` status, the
+`systemctl` client status and, only after a nonzero client result and a
+successful bounded `systemctl show`, `Result`, `ExecMainCode`, and
+`ExecMainStatus`. A request failure is admitted only when that bounded property
+observation succeeds without a failed service result; an unavailable property
+observation creates no request/job precision. Service `ExecMainStatus` is never
+represented as an executable or client status. Missing, malformed, oversized,
+or contradictory observations retain the target status as
+`qualify-quadlet-start/diagnostic-unavailable`; no stdout, stderr, environment,
+or journal text enters evidence.
+
+The immutable line-639 active-state check has a separate, identically bounded
+observer. Only the exact `runuser -> env -> systemctl --user is-active --quiet`
+call is redirected through root-owned
+`/opt/secpal-control/libexec/rocky-active-runuser`; absolute, root-owned
+runtime-user helpers invoke the real `/usr/bin/env` and `/usr/bin/systemctl`
+with the original arguments and return the original status. Its fixed
+root-owned evidence path is not exported into the target. Root FD 7 exists
+only during that exact call, and its at-most-2,048-byte observation contains
+only the outer runuser and systemctl client statuses plus a closed process
+stage. Trusted admission distinguishes runuser exec/invocation, env
+exec/command-exec, and systemctl exec/request failures; missing, malformed,
+oversized, or contradictory observations remain
+`qualify-quadlet-active-state/diagnostic-unavailable`. The active-state
+observer does not change service state, retry the request, or weaken the
+target-owned active predicate.
+
+The primary workload call uses the same direct-argv model without an env or
+Podman shim layer. The root-only router admits the exact immutable `runuser`
+and Podman argv, starts `runuser` with only fixed `PATH` and `LC_ALL`, and calls
+the root-owned runtime helper by absolute path. The runtime helper admits the
+runtime UID/GID and exact Podman request, discards Podman stdout, preserves
+bounded stderr only as transient target output, and emits two closed protocol
+records. The outer router retains at most 512 protocol bytes and never replays
+the workload after dispatch. Its observation file is selected internally by
+one fixed absolute path rather than an inherited environment value. Failure
+evidence contains only closed runuser,
+environment-preparation, Podman, or OCI/runtime identities and numeric status.
+
+Target stdout and trace consumers retain one byte beyond their admitted limits
+while continuing to drain both streams to EOF. Overflow therefore fails
+representation admission without closing the producer pipe, imposing a file
+limit, or replacing the original target status. A target exit status of zero is
+representable only for the closed post-success rejection decisions that the
+trusted admission code can emit; schema and classifier reject every other
+zero-status identity. The runner's own negative exit remains a separate truth.
+
+Success admission invokes absolute `/usr/sbin/ausearch --input-logs ... -i`
+with a strictly parsed C-locale two-digit-year date and time in separate argv
+fields. Interpreted audit records must match that exact selected locale and
+mode rather than a raw or different-locale grammar. Its concurrent
+stdout and stderr drainers retain only 65,536 and 4,096 bytes. A bounded retry
+admits only the tool's exact normal no-match representation while auditd makes
+the just-completed event visible. A well-formed status-0 snapshot with no exact
+candidate also retries; malformed, overfull, ambiguous, warning-bearing, or
+other status-1 output fails closed. Only blank lines and the interpreted
+format's `----` separator may appear outside typed records. Admission accepts
+only the interpreted audit timestamp grammar, correlates by the full timestamp
+and serial, and requires one unique event containing exactly one matching AVC
+decision, one decoded PROCTITLE marker, and one SYSCALL. The AVC must carry the
+exact process-B source context, storage-A target context, `permissive=0`, and a
+valid PID. PROCTITLE must be exactly `cat /foreign/marker`; SYSCALL must have the
+same valid PID and `comm=cat` in that same event. Together with the admitted MCS
+relationship, those records bind the enforcing AVC to the deliberately tested
+cross-container access. AVC permission, target class, and target name remain
+bounded observational diagnostic facts, not admission authority, because the
+kernel may deny the same attempted access at a different object/path lookup
+layer. Duplicate, malformed, oversized, unavailable, or ambiguous audit
+observations fail closed without entering evidence.
+
+When that admission returns no candidate, the target can now emit one
+schema-version-2 AVC-correlation diagnostic projection before cleanup. The
+projection is produced by `selinux_isolation_contract`, the existing admission
+owner, and contains only closed comparison results, bounded record and candidate
+counts, admitted context and MCS values when needed, event identity, PIDs, and
+the observed byte count and digest. It distinguishes absent AVCs, each required
+causal AVC-field mismatch, invalid PID, absent/mismatched/duplicate PROCTITLE and
+SYSCALL records, event parse or separation failures, multiple candidates,
+malformed or oversized input, normal `ausearch` no-result status, and true
+capture execution error. It contains no audit record bytes, command output,
+journal, environment, provider response, SSH material, or exception string.
+`syscall-mismatch` is emitted only when the same-event same-PID `comm=cat`
+predicate itself fails; legacy permission/class/name observations cannot
+manufacture it.
+
+Trusted control accepts that projection only for
+`qualify-avc-correlation / command-failed / 3` and wraps it in failure schema
+version 4. Before writing an artifact, the classifier validates its closed
+shape and semantics with the owner contract. `rocky-control.py` then
+independently checks the target, control, run, and harness bindings; canonical
+projection length and SHA-256; component, event, context, MCS, and event-ID
+bounds; duplicate-key-free outer JSON; and recomputed rejection, candidate,
+and final-outcome consistency. The target publishes the projection and returns
+status 3 through the exact AVC trace stack, keeping the closed
+`qualify-avc-correlation / command-failed / 3` classification reachable. A
+caller-selected final reason or a diagnostic that identifies an admitted
+candidate cannot grant authority. The diagnostic family remains negative-only
+and cannot enter success admission.
+
+Successful qualification evidence schema version 4 records the AVC PID,
+source/target contexts and enforcing state, the exact PROCTITLE, and the
+same-PID SYSCALL command. It does not report `permission=read`,
+`target_class=file`, or `target_name=marker` as observed denial facts.
+
+Historical failure schema version 3 and AVC diagnostic schema version 1 retain
+their original semantics. In particular, the #273 projection digest
+`bbc8268c665eba8960a4c0b4689cddb4434db5fc0937beacacc16ffebab09f2f`
+continues to validate unchanged with its recorded `permission-mismatch`,
+`target-class-mismatch`, `target-name-mismatch`, and `syscall-mismatch` facts.
+The current reviewed semantics explain that those object-shape mismatches did
+not invalidate the causally bound enforcing cross-MCS denial; they do not
+rewrite or retroactively reclassify the historical bytes.
+
+The exact historical failure artifact from run `34876534431/1`, artifact digest
+`sha256:f461479cd43791aa8c1f31034e1af0ea68c8e7b9687ce6878af6be30ed5a2852`,
+contains schema-version-1 JSON with SHA-256
+`7e19cdf446ed44dde82a45cc6b73fe96e3717f84f7f027788f0d847c124af492`.
+It proves only the bound operation, reason, exit status, and its 85-byte
+diagnostic-input digest. It has no AVC-correlation projection, so the destroyed
+guest's rejecting predicate is unrecoverable. Historical validation preserves
+that artifact exactly; it does not infer or retrofit missing native audit
+bytes.
+
+Post-target cleanup uses only absolute commands with fixed environment,
+ten-second per-command timeouts, and 4,096-byte stdout/stderr drain bounds. The
+Podman observer runs from exactly `/home/secpal-runtime` after validating the
+runtime UID/GID, owner traversal, and the root-owned non-writable `/home`
+parent. Any timeout, overflow, exec failure, residue, or invalid working
+directory prevents PASS. Raw start, active, primary, and reload observations
+are removed on every runner exit after their bounded facts have been admitted.
+
+For a current `qualification-harness / representation-invalid` result, trusted
+control inventories the seven classifier components before that removal:
+stdout, trace, trusted marker, reload adjacency, start observation, active
+observation, and primary observation. The existing diagnostic hash remains the
+authority and continues to cover those components in that order with one NUL
+between each pair; its byte count remains the sum of component bytes without
+the separators. Schema-version-2 failure evidence carries exact original bytes
+only for components independently admitted under their finite producer grammar
+or closed observation schema and semantic state machine. Closed start, active,
+and primary observations may use any legal JSON whitespace, member order, or
+terminal-newline representation; formatting is not authority, and the retained
+digest always covers the original bytes rather than a canonical rewrite.
+Duplicate keys, extra properties, invalid or contradictory states, arbitrary
+payloads, and malformed or oversized inputs remain unavailable. The target
+trace admits only complete newline-terminated records from the bounded numeric
+producer grammar. Each producer record retains its own status; replay admission
+does not relax the classifier's separate aggregate-status coherence rule. If
+any component is unavailable, the witness records only its presence, length,
+digest, and unavailable state. It never exports that component or presents the
+partial inventory as replayable. The independent verifier
+decodes the retained bytes, recomputes every available component digest and
+length, reruns the grammar/schema and semantic admission, then closes the
+aggregate hash and classifier result. This negative-only witness cannot enter
+the success evidence path. Historical schema-version-1 failures and unavailable
+schema-version-2 witnesses under their exact earlier trusted-control identities
+remain immutable and cannot be mixed with the current family.
+
+The destroyed #118 guest retained only outer target status 126 at line 238.
+That proves neither a service `ExecMainStatus` nor which process produced 126.
+Later native ARM64 and GCP controls passed, and deterministic real-process
+probes cover each reachable producer without reproducing a current functional
+defect. Because the original guest retained none of the new adjacent facts,
+its machine-local cause is `HISTORICAL_INSTANCE_ROOT_CAUSE_UNRECOVERABLE`, not
+a presumed transient failure. A future occurrence identifies the remediable
+owner in one bounded failure artifact.
+
+The historical #118 `qualify-selinux-storage-fcontext-add` call site at line
+250 retains its exact Rocky 10.2 `semanage` diagnostic schema for immutable
+historical evidence. The active target uses private relabeling and has no
+reachable fcontext-add, restorecon, or matchpathcon source mapping. Presenting
+one of those stale mappings as current, mixing a historical target with the
+current harness, or supplying an unrecognized pair therefore fails closed.
+
+The trusted Bash trace uses `SECPAL_TARGET_ERR_V2`: each record carries one
+numeric inner-command status and at most eight numeric `BASH_LINENO` frames.
+The records must agree on that status. It may differ from the final target
+process status only for the reviewed AVC observation path that records an
+expected inner denial with status 1 before its bounded no-finding path returns 3. The classifier binds that transition to its exact immutable outer call
+frames; other status mismatches fail closed. It ignores generic helper
+implementation frames and resolves only immutable reviewed outer call sites
+under the exact target and harness hashes. Repeated frames agreeing on one
+operation are one decision; conflicting statuses, zero mapped operations,
+conflicting operations, or conflict with an explicit reviewed message remain
+fail-closed. V1 single-frame traces are not a current emission or validation
+surface; historical artifacts retain only their already validated input digest
+and length.
 
 The exact harness helper audit assigns `read_os_release_value` and unconditional
 uses of `run_as_service_account`, `rootless_podman`, and `user_systemctl` to
-their semantic callers through that stack. Negated/conditional helper uses and
-`matching_marker_avc` already emit finite target messages when they reject.
+their semantic callers through that stack. Negated/conditional helper uses
+already emit finite target messages when they reject, as does SELinux isolation
+admission.
 `cleanup` and cleanup-time helper calls are not primary target predicates;
 trusted post-harness admission owns cleanup completeness. A generic helper is
 never mapped directly because the same helper serves runtime, fixture,
 Quadlet, workload, SELinux, AVC, fallback, and cleanup boundaries.
 
-Normal and failure cleanup use `tofu destroy` against the saved state. The Rocky
-janitor independently revalidates the complete ownership description or label
-set immediately before each ordered deletion. A prefix is never ownership, and
-ambiguous or changed metadata results in no deletion.
+Normal and failure cleanup use the existing Rocky GCP janitor's exact-run mode
+before `tofu destroy` against saved state. Failed apply is conservatively treated
+as an ambiguous create result: accepted-main control reads the exact derived
+instance name and fails the attempt, even when the resource exists. Only the
+cleanup environment can remove it. No ambiguous instance resumes qualification.
+
+The exact-run authority binds the trusted workflow repository/ref/control SHA,
+original run/attempt, selected profile and target SHA to the retained trusted
+variables. Cross-run cleanup first admits the originating continuation and its
+creation/expiry timestamps. Every deletion requires the shared janitor ownership
+predicate plus exact provider self-link, kind, immutable resource ID and creation
+timestamp within the original three-hour interval. Instance labels and ownership
+description must both agree; the immutable ID is read again before deletion.
+The returned delete operation must independently agree on operation kind,
+operation type, exact target self-link and immutable target ID before terminal
+completion can be admitted. GCP's documented deletion is addressed by name and
+has no conditional-ID precondition. The existing workflow serializes trusted
+mutations by original run ID, and different run attempts use different names.
+A foreign replacement after the final ownership GET cannot be prevented
+atomically by this API; a mismatching operation fails closed after dispatch and
+cannot produce cleanup success. No atomic compare-and-delete claim is made.
+A prefix or name alone never authorizes deletion. Unknown, incompatible or
+changed ownership stops cleanup without broad inventory or deletion.
+
+After exact cleanup and OpenTofu destruction, a separate bounded exact GET for
+each instance, disk, network, subnet and three firewall names must independently
+verify absence. `OPEN_TOFU_STATE_EMPTY` alone cannot produce cleanup success;
+`PROVIDER_RUN_RESOURCE_SET_ABSENT` is also required. Only exact GET HTTP 404 is
+`ABSENT`. A transport timeout, forbidden read or malformed response is
+`UNKNOWN_PROVIDER_STATE`; a mismatching representation is
+`INCOMPATIBLE_OR_AMBIGUOUS_RESOURCE`. Exact present instances are
+`EXACT_RUN_OWNED_INSTANCE_PRESENT`. Each result is independently admitted by the
+closed `rocky-cloud-provider-result` schema, including the complete trusted run
+binding; arbitrary provider bodies, startup metadata and credentials are omitted.
+
+Provider observations establish absence at their bounded read-back boundary;
+they do not turn an ambiguous create into successful transport evidence or prove
+that a still-pending server request can never complete later. The existing hourly
+TTL janitor remains the recovery owner for expired resources outside local state.
+Its shared ownership predicates and ambiguous-group refusal remain in effect.
+Repository and local HTTP adapter evidence prove control behavior; accepted-main
+real transport and cleanup evidence for both architectures remains owned by #292.
 
 ## Rocky preparation and evidence
 
-Preparation admits only Rocky 10.2 with native `aarch64`, DNF4 releasever 10,
+Preparation admits only Rocky 10.2 with the selected native architecture, DNF4 releasever 10,
 exactly `baseos`, `appstream`, and `extras`, disabled automatic update and reboot
 timers, SELinux targeted and Enforcing, rootless Podman with crun, Netavark,
 cgroup v2, systemd-user, seccomp, and no Podman socket or API dependency.
@@ -156,17 +468,56 @@ subgid ranges. The account has `nologin`, no sudo grant, no supplementary
 privileged groups, linger enabled, and no write access to administrator Quadlet
 authority.
 
-The prior Alpine digest was the architecture-specific `amd64` child. The Rocky
-ARM input is the immutable Alpine 3.22.1 multi-platform index
+Administrator preparation binds the user manager's effective
+`QUADLET_UNIT_DIRS` to `/etc/containers/systemd/users/<runtime-uid>` through a
+root-owned system-service drop-in. Before the qualification harness reloads the user
+manager, it walks every component from `/` through that exact directory and the
+fixture definition without following symlinks, admits root ownership and the
+absence of group/other write permission, and independently proves that the
+runtime account cannot write any component. It applies the same check to the
+search-path drop-in and observes the effective manager environment, so default
+user-writable Quadlet locations cannot replace the admitted input. After reload
+and before activation, `quadlet_authority_contract.admit_quadlet_authority` owns
+normalization and admission of the effective service representation. The target
+observes exactly `FragmentPath`, `SourcePath`, `DropInPaths`, and `ExecStart`;
+the owner admits the UID-bound generator and administrator source paths, no
+drop-ins, and Rocky systemd 257's complete direct-Podman execution record,
+including its safe argv and inactive execution metadata. It emits bounded,
+canonical evidence through the closed qualification schema. Trusted control
+loads the same root-owned owner, revalidates that evidence independently, and
+requires byte-identical target and trusted normalization. A shadowing user unit,
+user-owned override, rootful or wrong-UID path, generated argv drift, unsafe
+network or privilege setting, or changed systemd execution metadata therefore
+fails closed.
+
+The account UID/GID must be nonzero before preparation changes it. Qualification
+then admits Podman's effective rootless report and binds both the invoking
+process and the active Quadlet unit's main process to that exact account. The
+running Quadlet container supplies `/proc/1/status`; one admission function
+requires effective UID/GID `65532:65532`, `NoNewPrivs: 1`, zero inherited,
+permitted, effective, bounding, and ambient capability masks, and `Seccomp: 2`.
+The Quadlet requests these values, but only the observed process state satisfies
+qualification.
+
+The fixture input is the immutable Alpine 3.22.1 multi-platform index
 `sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1`;
-preparation also records the resolved ARM64 child
-`sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192`.
+preparation records exactly the selected architecture child: ARM64
+`sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192`
+or amd64
+`sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f`.
 
 Discovery, preparation, continuation, and qualification use separate closed
 JSON schemas with `additionalProperties: false`. Preparation is not native
-qualification: SELinux process/storage contexts, MCS separation, negative
-cross-MCS access, AVC, seccomp workload behavior, and cleanup PASS are populated
-only by the exact target revision's harness.
+qualification: SELinux process/storage contexts, MCS separation, the unique
+enforcing cross-MCS AVC, seccomp workload behavior, and cleanup PASS are
+populated only by the trusted-control copy after byte agreement with the exact
+target revision's harness. `selinux_isolation_contract.admit_selinux_isolation`
+is the single normalization and admission owner consumed by the target harness,
+closed schema projection, and trusted validation; the target and controller
+bind the canonical normalized result by SHA-256. Before root execution, trusted
+control also requires the fetched target copy of that owner to be byte-identical
+to its root-owned installed copy. The outer harness deadline retains 180 seconds
+after signalling, exceeding the 150-second sum of all cleanup command bounds.
 
 ### Host-evidence responsibility and ownership map
 
@@ -177,18 +528,18 @@ closed evidence assembly. The latter imports no process, filesystem, network,
 environment, or clock capability. A single transported script would not permit
 these responsibilities to collapse.
 
-| Evidence concept                          | External representation / observation owner                                    | Normalization and authoritative admission owner                                | Assembly / schema / independent validation                                                                 | Diagnostic operation family                                                                   |
-| ----------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Immutable run, target, and image identity | workflow inputs and exact image self-link                                      | pure Rocky preparation contract                                                | pure assembly; preparation schema; `rocky-control.py`                                                      | `admit-immutable-shas`, `admit-provider-image`                                                |
-| Guest OS and architecture                 | `/etc/os-release`, `uname` through the collector observer                      | pure OS parser and `admit-guest-identity`                                      | pure assembly; preparation schema; trusted controller                                                      | `read-os-release`, `query-architecture`                                                       |
-| DNF and enabled repositories              | bounded `dnf4`/RPM observations                                                | pure repository parser and update/repository admission                         | pure assembly; preparation schema; trusted controller                                                      | `query-dnf-version`, `query-releasever`, `query-enabled-repositories`                         |
-| Installed package provenance              | bounded RPM/DNF/rpmkeys observations, one reviewed package subject at a time   | pure package normalization and repository/signature/payload admission          | pure assembly; preparation schema; trusted controller                                                      | closed `query-`, `resolve-`, `download-`, `inspect-`, and `verify-package-*` operations       |
-| SELinux and container labeling            | `getenforce`, `selinuxenabled`, `sestatus`, and bounded container config reads | pure SELinux and label-configuration admission                                 | pure assembly; preparation schema; trusted controller                                                      | `query-selinux-*`, `read-container-config`                                                    |
-| Service account and subordinate IDs       | passwd/group databases plus bounded subuid/subgid reads                        | pure account, range, cardinality, and overlap admission                        | pure assembly; preparation schema; trusted controller                                                      | `resolve-service-account`, `read-subuid`, `read-subgid`, identity operations                  |
-| Rootless Podman/runtime boundary          | bounded Podman JSON, systemd, cgroup, socket, and environment observations     | pure Podman normalization and runtime admission                                | pure assembly; preparation schema; trusted controller                                                      | `query-podman-*`, `query-systemd-user`, `query-cgroup-filesystem`                             |
-| Immutable ARM64 fixture identity          | Podman's complete bounded `.RepoDigests` representation                        | `rocky_preparation_contract.admit_fixture_identity` is the sole semantic owner | preparation delegates through the same contract CLI; pure assembly; preparation schema; trusted controller | `inspect-fixture-repo-digests`, `normalize-fixture-repo-digests`, `admit-fixture-arm64-child` |
-| Reboot and hardware persistence           | boot ID, CPU, memory, and root filesystem observations                         | pure representation normalization and persistence admission                    | pure assembly; preparation schema; trusted controller                                                      | `read-boot-id`, `query-cpu-count`, `read-memory-info`, `query-root-filesystem`                |
-| Cloud-identity absence                    | identity-transition marker and closed environment facts                        | pure cloud-boundary admission                                                  | pure assembly; preparation schema; trusted controller                                                      | `query-cloud-identity-marker`, `query-environment-authority`                                  |
+| Evidence concept                          | External representation / observation owner                                    | Normalization and authoritative admission owner                                                                            | Assembly / schema / independent validation                                                                 | Diagnostic operation family                                                                                                |
+| ----------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Immutable run, target, and image identity | workflow inputs and exact image self-link                                      | pure Rocky preparation contract                                                                                            | pure assembly; preparation schema; `rocky-control.py`                                                      | `admit-immutable-shas`, `admit-provider-image`                                                                             |
+| Guest OS and architecture                 | `/etc/os-release`, `uname` through the collector observer                      | pure OS parser and `admit-guest-identity`                                                                                  | pure assembly; preparation schema; trusted controller                                                      | `read-os-release`, `query-architecture`                                                                                    |
+| DNF and enabled repositories              | bounded `dnf4`/RPM observations                                                | pure repository parser and update/repository admission                                                                     | pure assembly; preparation schema; trusted controller                                                      | `query-dnf-version`, `query-releasever`, `query-enabled-repositories`                                                      |
+| Installed package provenance              | bounded RPMDB/DNF observations, one reviewed package key at a time             | pure exact NAME/EPOCH/VERSION/RELEASE/ARCH/NEVRA, repository, signature, payload, architecture, and Podman-range admission | pure assembly; preparation schema; trusted-controller agreement validator                                  | closed `query-`, `resolve-`, `inspect-`, `normalize-`, and `admit-package-*` operations                                    |
+| SELinux and container labeling            | `getenforce`, `selinuxenabled`, `sestatus`, and bounded container config reads | pure SELinux and label-configuration admission                                                                             | pure assembly; preparation schema; trusted controller                                                      | `query-selinux-*`, `read-container-config`                                                                                 |
+| Service account and subordinate IDs       | passwd/group databases plus bounded subuid/subgid reads                        | pure account, range, cardinality, and overlap admission                                                                    | pure assembly; preparation schema; trusted controller                                                      | `resolve-service-account`, `read-subuid`, `read-subgid`, identity operations                                               |
+| Rootless Podman/runtime boundary          | bounded Podman JSON, systemd, cgroup, socket, and environment observations     | pure Podman normalization and runtime admission                                                                            | pure assembly; preparation schema; trusted controller                                                      | `query-podman-*`, `query-systemd-user`, `query-cgroup-filesystem`                                                          |
+| Immutable architecture fixture identity   | Podman's complete bounded `.RepoDigests` representation                        | `rocky_preparation_contract.admit_fixture_identity` is the sole semantic owner                                             | preparation delegates through the same contract CLI; pure assembly; preparation schema; trusted controller | `inspect-fixture-repo-digests`, `normalize-fixture-repo-digests`, `admit-fixture-arm64-child`, `admit-fixture-amd64-child` |
+| Reboot and hardware persistence           | boot ID, CPU, memory, and root filesystem observations                         | pure representation normalization and persistence admission                                                                | pure assembly; preparation schema; trusted controller                                                      | `read-boot-id`, `query-cpu-count`, `read-memory-info`, `query-root-filesystem`                                             |
+| Cloud-identity absence                    | identity-transition marker and closed environment facts                        | pure cloud-boundary admission                                                                                              | pure assembly; preparation schema; trusted controller                                                      | `query-cloud-identity-marker`, `query-environment-authority`                                                               |
 
 Every fallible collector operation is selected from `ObservationOperation` and
 emits only a closed layer, operation, reason, and, where applicable, a reviewed
@@ -272,12 +623,40 @@ The admitted invariant is about the installed artifact, not current mirror
 payload availability. For every reviewed package, evidence proves:
 
 - its exact installed NEVRA;
+- its RPMDB-observed NAME, EPOCHNUM, VERSION, RELEASE, and ARCH fields, with a
+  canonical NEVRA reconstructed from those fields and bound to the requested
+  package key;
 - successful RPM verification of the preserved immutable installed header,
   including its RSA signature and SHA-256/SHA-1 header digests;
 - the SHA-256 payload digest and algorithm stored in that signed header;
 - the exact reviewed Rocky 10 signing-key packet and fingerprint; and
 - exact current NEVRA membership in one of `baseos`, `appstream`, or `extras`,
   using repository metadata without transferring the RPM payload.
+
+The admitted package architecture must equal the observed host architecture;
+an exact `noarch` package is also valid on either admitted host architecture.
+`x86_64` and `aarch64` are never interchangeable. Duplicate, missing,
+wrong-key, malformed, or contradictory package observations fail at the named
+normalization, admission, schema, or trusted-controller agreement boundary.
+
+Podman runtime version has one source of truth: the VERSION field of the exact
+admitted installed `podman` RPM. Native admission accepts `>= 5.8.2` and
+`< 6.0.0`; the separately bound RPM epoch remains part of the exact NEVRA. It
+rejects a malformed version, a lower version, or 6.0.0 and newer. `podman
+--version` text and fixture input are not admission authority.
+
+Immediately before target checkout or workload execution, the existing
+root-owned controller runner re-observes this package/RPMDB contract and binds
+it to the exact target SHA, trusted-control SHA, qualification run and attempt,
+Rocky 10.2 identity, and host architecture. Collection failures use the
+existing closed collection diagnostic contract. The controller then fetches
+the target and requires its harness digest to match the trusted workflow copy
+before execution. The harness reports only target-workload success. Only the
+controller combines that result with its retained observation and independently
+validates exact equality; candidate-authored evidence cannot match the
+authenticated binding. Generic schema validation confirms representation only and cannot
+promote a caller-authored document, `classification` label, or equivalent field
+into native evidence.
 
 RPM v4 immutable regions preserve the original signed header when
 installation-specific fields are added, specifically so installed metadata can
@@ -342,3 +721,122 @@ represented the reviewed empty bootstrap scope set as an omitted/null field,
 while the original Rocky validator required literal object equality. Exact-state
 cleanup destroyed all seven resources. That run produced neither preparation
 PASS nor native ARM qualification PASS.
+
+## Rocky bootstrap metadata transport
+
+`infra/ci-cloud/gcp-rocky/metadata.tf` owns the exact instance metadata map,
+startup rendering, UTF-8 byte sizes and admission predicates. The maintained
+workflow evaluates that same map with OpenTofu 1.12.5 before provisioning OIDC
+credentials. Both independent resource roots also depend on its blocking
+creation guard, so skipping the workflow admission cannot create partial cloud
+resources with an oversized payload. Destroy remains available for historical
+state and for an existing state whose creation admission now fails.
+
+The complete trusted source map uses one deterministic gzip/base64 encoding.
+This shares compression across related files and represents each source once,
+while retaining every original installation destination. Before any component
+is installed or executed, the guest requires exact decoded length and SHA-256,
+one complete gzip member with no trailing material, duplicate-free JSON and
+the exact fixed component inventory. Decompression stops at the expected
+length plus one and has an absolute 1 MiB decoded bound. A private temporary
+directory holds the admitted material and is removed on exit. The startup emits
+only `ROCKY_BOOTSTRAP_TRANSPORT_INTEGRITY_FAILED` for reconstruction rejection.
+No caller-selected metadata inventory, URL, remote script or new trust root is
+introduced. Candidate identity, accepted-control/probe binding, identity-free
+handoff, grader/PASS authority and cloud cleanup retain their existing owners.
+
+[Google's metadata contract](https://docs.cloud.google.com/compute/docs/metadata/setting-custom-metadata)
+limits keys to 128 bytes, values to 256 KiB (262,144 bytes), and aggregate key
+plus value material to 512 KiB (524,288 bytes). Admission counts the actual
+encoded startup and all fixed metadata values, including template overhead.
+The safe maxima are 237,568 bytes per value and 499,712 aggregate bytes. Both
+reserve 24 KiB: the existing 16 KiB maximum candidate-sized growth allowance
+requires less than 24 KiB after worst-case gzip/base64 expansion, rounded up to
+the next 8 KiB. This reserve also exceeds the bounded metadata added by the
+identity/access transition. It is a minimum provider safety reserve, separate
+from the maximum candidate input already exercised by transport validation.
+The candidate ceiling counts UTF-8 bytes rather than characters. OpenTofu
+suppresses candidate/source bodies; only numeric sizes are declassified for
+bounded key/actual/safe/provider-limit diagnostics. The admission helper never
+relays OpenTofu stderr.
+
+The regression uses the provider's pinned renderer with the canonical locals,
+without a Google provider or credentials. Historical non-secret candidate
+artifacts from runs `37112453593` and `37112463800` retain exact representation,
+HEAD `c3283ae9e750ab532ba14bae8e6ddced7f98f517`, tree
+`48969c2e4bd1c6f82afd1de7c91fe395f97eb86b`, and accepted control
+`4571a9b2653cb73c743a7812f0c4bfcad599d45d`. The retained pre-#289 template and
+complete source closure reproduce 265,188/265,184-byte rejected startup values.
+The corrected historical candidates render to 221,122 bytes on both profiles.
+Conservative high-entropy 16,384-byte envelopes render to 236,730/236,726 bytes,
+leaving 25,414/25,418 bytes below the absolute provider value limit. These
+measurements characterize that accepted closure; admission always evaluates
+the current complete representation instead of trusting those historical sizes.
+
+Run `python3 tests/ci-cloud-rocky-metadata.py` for the exact rendering, limits,
+maximum-input, reconstruction, byte-integrity and negative boundary evidence.
+The older conformance bootstrap keeps its existing independent transport.
+Repository fixtures do not establish GCP acceptance. A real promised transport
+result requires both maintained accepted-main preparation profiles, exact
+run/control/candidate identities, mandatory cleanup and authoritative empty
+state. The accepted-main-only workflow cannot use feature-branch control to
+supply that evidence.
+
+## Product backend policy proof
+
+The closed `product-backend-policy` selector proves the host policy owned by
+[#101](https://github.com/SecPal/deployment/issues/101). Its implementation and
+trust boundary are documented in [Product backends](product-backends.md).
+The real privileged execution, both reviewed architecture profiles, mandatory
+cleanup and authoritative empty-state evidence belong to evidence-only
+[#294](https://github.com/SecPal/deployment/issues/294), after accepted-main source
+delivery. It uses the same Rocky control plane and frozen host qualification pair;
+no candidate PR can supply privileged commands or executable paths.
+
+## Ambiguous instance insertion diagnosis
+
+At accepted control `af171bd301dbc6e7efe470087d5bf6d50b59158a`, runs
+`37120628494/1`, `37121117238/1` and `37121646748/1` passed metadata admission
+and created six supporting resources. Their retained states contain no instance.
+The instance-create intervals were 330.044, 330.049 and 330.049 seconds, each
+ending in `Client.Timeout exceeded while awaiting headers`. The sanitized
+retained-state fixture records the exact source identities and supporting
+provider IDs; it contains no startup payload or candidate body.
+
+Those historical runs used Google provider `7.40.0` and OpenTofu `1.12.5`.
+The current provider pin is `8.6.0`; OpenTofu remains `1.12.5`. The following
+analysis describes the historical provider, not a new cloud qualification.
+The root sets no `request_timeout`. The historical provider's
+[synchronous HTTP client](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/transport/config.go)
+therefore uses 120 seconds. Its
+[request layer](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/transport/transport.go)
+has a separate five-minute retry budget;
+[transport retries](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/transport/retry_transport.go)
+use bounded context and Fibonacci backoff starting at 500 milliseconds.
+Timeout errors are retryable in the pinned provider. The
+[instance create path](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/services/compute/resource_compute_instance.go)
+stores its ID only after the synchronous insertion returns. Its separate
+20-minute resource create timeout applies to subsequent operation waiting and
+cannot explain an insert failing before that ID is stored.
+
+The common elapsed boundary is consistent with bounded provider client/retry
+handling, but retained non-debug logs establish neither the exact request count
+nor why headers did not arrive. Changing `request_timeout` would change the
+synchronous HTTP bound and could delay failure; no deterministic evidence proves
+that configuration is the earliest defect or would produce a successful insert.
+Request timeout is unchanged. No GCP outage, machine capacity, PostgreSQL or
+metadata cause is inferred, and no new retry policy is introduced.
+
+Exact provider actions share a 600-second monotonic request budget, including
+all inventory reads, deletion dispatches and operation polls. A deletion's
+120-second budget begins before dispatch and clips each request to the remaining
+action/operation time; deadline exhaustion is unknown, never absence. An already
+completed admitted deletion needs no extra operation poll. Cleanup assembles its
+final diagnostics from one complete absence snapshot; the separate post-OpenTofu
+verification observes a fresh snapshot. The cleanup token lasts 1,800 seconds,
+covering the existing 25-minute job limit. This bounds the existing cleanup owner
+and avoids credential expiry within that job; it adds no retry or provider role
+and leaves the Google provider's `request_timeout` unchanged.
+
+Transport diagnostics for instance insertion are described in
+[the transport evidence contract](instance-insert-transport.md).

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -25,9 +26,9 @@ from integration_runtime_contract import (
     API_DIGEST,
     API_IMAGE,
     FRONTEND_DIGEST,
-    POSTGRES_IMAGE,
-    VALKEY_IMAGE,
+    POSTGRES_FIXTURE,
     podman_version_supported as quadlet_generator_version_supported,
+    podman_versions_compatible as quadlet_generator_versions_compatible,
 )
 
 
@@ -55,7 +56,6 @@ EXPECTED_FILES = {
     f"secpal-int-{INSTANCE}-secrets.volume",
     f"secpal-int-{INSTANCE}-worker-general.container",
     f"secpal-int-{INSTANCE}-worker-hash-chain.container",
-    f"secpal-int-{INSTANCE}-valkey.container",
     f"secpal-int-{INSTANCE}.target",
 }
 
@@ -124,6 +124,113 @@ class QuadletContract(unittest.TestCase):
             capture_output=True,
         )
 
+    def require_supported_native_quadlet_generator(
+        self, generator: Path, description: str
+    ) -> None:
+        if not generator.is_file():
+            self.skipTest(f"{description} is not installed")
+        podman = shutil.which("podman")
+        if podman is None:
+            self.skipTest("Podman client is not installed")
+
+        def require_version(command: list[str], capability: str) -> str:
+            result = subprocess.run(
+                command,
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                diagnostic = re.sub(r"\s+", " ", result.stderr).strip()[:160]
+                suffix = f": {diagnostic}" if diagnostic else ""
+                self.skipTest(
+                    f"{capability} version query failed (rc={result.returncode}){suffix}"
+                )
+            version = result.stdout.strip()
+            if not version:
+                self.skipTest(f"{capability} version query returned no version")
+            return version
+
+        podman_version = require_version(
+            [podman, "version", "--format", "{{.Client.Version}}"],
+            "Podman client",
+        )
+        if not quadlet_generator_version_supported(podman_version):
+            self.skipTest(f"installed Podman {podman_version} is unsupported")
+        generator_version = require_version(
+            [os.fspath(generator), "--version"], "native Quadlet generator"
+        )
+        if not quadlet_generator_versions_compatible(
+            generator_version, podman_version
+        ):
+            self.skipTest(
+                "native Quadlet generator does not match installed Podman "
+                f"{podman_version}"
+            )
+
+    def write_fake_version_executable(
+        self, name: str, version: str, returncode: int = 0, stderr: str = ""
+    ) -> Path:
+        executable = self.root / name
+        executable.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' {shlex.quote(stderr)} >&2\n"
+            f"printf '%s\\n' {shlex.quote(version)}\n"
+            f"exit {returncode}\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o700)
+        return executable
+
+    def test_native_generator_admission_correlates_versions_and_diagnostics(self) -> None:
+        cases = (
+            ("5.4.2", "5.4.2", 0, 0, None),
+            ("5.4.2", "5.7.0", 0, 0, "does not match installed Podman"),
+            ("4.9.3", "4.9.3", 0, 0, "installed Podman 4.9.3 is unsupported"),
+            (
+                "5.4.2",
+                "5.4.2",
+                0,
+                23,
+                "native Quadlet generator version query failed (rc=23)",
+            ),
+            (
+                "5.4.2",
+                "",
+                17,
+                0,
+                "Podman client version query failed (rc=17)",
+            ),
+        )
+        for generator_version, podman_version, podman_returncode, generator_returncode, expected in cases:
+            with self.subTest(
+                generator_version=generator_version,
+                podman_version=podman_version,
+                podman_returncode=podman_returncode,
+                generator_returncode=generator_returncode,
+            ):
+                generator = self.write_fake_version_executable(
+                    "quadlet", generator_version, generator_returncode, "generator failed"
+                )
+                self.write_fake_version_executable(
+                    "podman", podman_version, podman_returncode, "client failed"
+                )
+                with mock.patch.dict(
+                    os.environ,
+                    {"PATH": f"{self.root}{os.pathsep}{os.environ['PATH']}"},
+                ):
+                    if expected is None:
+                        self.require_supported_native_quadlet_generator(
+                            generator, "fake Quadlet generator"
+                        )
+                    else:
+                        with self.assertRaisesRegex(
+                            unittest.SkipTest, re.escape(expected)
+                        ):
+                            self.require_supported_native_quadlet_generator(
+                                generator, "fake Quadlet generator"
+                            )
+
     def render_cloud(self) -> dict[str, str]:
         result = self.run_renderer(
             "--cloud-gateway-digest", GATEWAY_DIGEST, check=True
@@ -191,8 +298,7 @@ class QuadletContract(unittest.TestCase):
         units = self.render_cloud()
         api_reference = f"localhost/secpal-ci-api@{API_DIGEST}"
         frontend_reference = f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}"
-        postgres_digest = POSTGRES_IMAGE.rsplit("@", 1)[1]
-        valkey_digest = VALKEY_IMAGE.rsplit("@", 1)[1]
+        postgres_digest = POSTGRES_FIXTURE.image.rsplit("@", 1)[1]
         expected = {
             "api": api_reference,
             "migrate": api_reference,
@@ -202,7 +308,6 @@ class QuadletContract(unittest.TestCase):
             "scheduler": api_reference,
             "frontend": frontend_reference,
             "postgres": f"localhost/secpal-ci-postgres@{postgres_digest}",
-            "valkey": f"localhost/secpal-ci-valkey@{valkey_digest}",
             "gateway": (
                 f"localhost/secpal-ci-gateway-{INSTANCE}@{GATEWAY_DIGEST}"
             ),
@@ -379,7 +484,6 @@ class QuadletContract(unittest.TestCase):
             "postgres": "999",
             "scheduler": "10001",
             "secrets-init": "0",
-            "valkey": "10002",
             "worker-general": "10001",
             "worker-hash-chain": "10001",
         }
@@ -427,14 +531,14 @@ class QuadletContract(unittest.TestCase):
             observed.append(output)
         self.assertNotEqual(*observed)
 
-        historical_environment = dict(os.environ)
-        historical_environment.update(
+        incomplete_environment = dict(os.environ)
+        incomplete_environment.update(
             {
                 "APP_ORIGIN": "https://app.secpal.example.invalid:18443",
                 "API_ORIGIN": "https://api.secpal.example.invalid:18443",
             }
         )
-        historical_environment.pop("SECPAL_INTEGRATION_INSTANCE", None)
+        incomplete_environment.pop("SECPAL_INTEGRATION_INSTANCE", None)
         result = subprocess.run(
             [
                 "node",
@@ -443,15 +547,12 @@ class QuadletContract(unittest.TestCase):
                 "process.stdout.write(JSON.stringify(config.outputDir));",
             ],
             cwd=ROOT,
-            env=historical_environment,
+            env=incomplete_environment,
             text=True,
             capture_output=True,
-            check=True,
+            check=False,
         )
-        self.assertEqual(
-            Path(json.loads(result.stdout)),
-            ROOT / "test-results" / "secpal-int-phasebcompose",
-        )
+        self.assertNotEqual(result.returncode, 0)
 
     def test_roles_networks_dependencies_and_singletons_are_exact(self) -> None:
         units = self.render()
@@ -462,7 +563,7 @@ class QuadletContract(unittest.TestCase):
         for network in (application, edge):
             self.assertIn("Internal=true", units[network])
 
-        for role in ("postgres", "valkey", "migrate", "worker-general", "worker-hash-chain", "scheduler"):
+        for role in ("postgres", "migrate", "worker-general", "worker-hash-chain", "scheduler"):
             self.assertIn(f"Network={application}", units[f"secpal-int-{INSTANCE}-{role}.container"])
             self.assertNotIn(f"Network={edge}", units[f"secpal-int-{INSTANCE}-{role}.container"])
         self.assertIn(f"Network={application}", units[f"secpal-int-{INSTANCE}-api.container"])
@@ -506,11 +607,6 @@ class QuadletContract(unittest.TestCase):
             "destination=/var/run/postgresql,",
             units[f"secpal-int-{INSTANCE}-postgres.container"],
         )
-        self.assertIn("Notify=healthy", units[f"secpal-int-{INSTANCE}-valkey.container"])
-        self.assertIn(
-            "HealthCmd=VALKEYCLI_AUTH=$(cat /run/secpal-secrets/valkey-password) valkey-cli ping | grep -qx PONG",
-            units[f"secpal-int-{INSTANCE}-valkey.container"],
-        )
         self.assertIn(
             "HealthCmd=curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/health/live",
             units[f"secpal-int-{INSTANCE}-frontend.container"],
@@ -527,7 +623,7 @@ class QuadletContract(unittest.TestCase):
         for line in combined.splitlines():
             if line.startswith("Mount=type=tmpfs"):
                 self.assertIn("U=true", line)
-        for role in ("postgres", "valkey", "api", "frontend", "gateway"):
+        for role in ("postgres", "api", "frontend", "gateway"):
             text = units[f"secpal-int-{INSTANCE}-{role}.container"]
             self.assertIn(
                 "HealthOnFailure=kill",
@@ -546,7 +642,7 @@ class QuadletContract(unittest.TestCase):
             migrate,
         )
         self.assertIn(
-            f"Requires=secpal-int-{INSTANCE}-postgres.service secpal-int-{INSTANCE}-valkey.service",
+            f"Requires=secpal-int-{INSTANCE}-postgres.service",
             migrate,
         )
         for role in ("api", "worker-general", "worker-hash-chain", "scheduler"):
@@ -745,26 +841,7 @@ class QuadletContract(unittest.TestCase):
 
     def test_installed_quadlet_generator_translates_every_native_resource(self) -> None:
         generator = Path("/usr/libexec/podman/quadlet")
-        if not generator.is_file():
-            self.skipTest("Podman Quadlet generator is not installed")
-        podman = shutil.which("podman")
-        if podman is None:
-            self.skipTest("Podman client is not installed")
-        version_result = subprocess.run(
-            [podman, "version", "--format", "{{.Client.Version}}"],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-        )
-        version = version_result.stdout.strip()
-        if (
-            version_result.returncode != 0
-            or not quadlet_generator_version_supported(version)
-        ):
-            observed = version or "unknown"
-            self.skipTest(
-                f"installed Quadlet generator belongs to unsupported Podman {observed}"
-            )
+        self.require_supported_native_quadlet_generator(generator, "Podman Quadlet generator")
         units = self.render()
         environment = dict(os.environ)
         environment["QUADLET_UNIT_DIRS"] = os.fspath(self.output)
@@ -786,7 +863,7 @@ class QuadletContract(unittest.TestCase):
             elif name.endswith(".volume"):
                 service += "-volume"
             self.assertIn(f"---{service}.service---", generated, name)
-        for role in ("postgres", "valkey", "api", "frontend", "gateway"):
+        for role in ("postgres", "api", "frontend", "gateway"):
             marker = f"---secpal-int-{INSTANCE}-{role}.service---"
             translated_service = generated.split(marker, 1)[1].split("\n---", 1)[0]
             with self.subTest(health_service=role):
@@ -802,7 +879,7 @@ class QuadletContract(unittest.TestCase):
             for line in generated.splitlines()
             if line.startswith("ExecStart=/usr/bin/podman run ")
         ]
-        self.assertEqual(len(container_starts), 10)
+        self.assertEqual(len(container_starts), 9)
         for argument in (
             "--http-proxy=false",
             "--pid=private",
@@ -880,8 +957,9 @@ class QuadletContract(unittest.TestCase):
         generator = Path(
             "/usr/lib/systemd/user-generators/podman-user-generator"
         )
-        if not generator.is_file():
-            self.skipTest("native Podman user generator is not installed")
+        self.require_supported_native_quadlet_generator(
+            generator, "native Podman user generator"
+        )
         self.render_cloud()
         environment = dict(os.environ)
         environment["QUADLET_UNIT_DIRS"] = os.fspath(self.output)
@@ -945,6 +1023,7 @@ class QuadletContract(unittest.TestCase):
         self.assertTrue(quadlet_generator_version_supported("5.4.2"))
         self.assertTrue(quadlet_generator_version_supported("5.4.2+ds1-1+b1"))
         self.assertTrue(quadlet_generator_version_supported("5.7.0"))
+        self.assertTrue(quadlet_generator_version_supported("5.8.2"))
         self.assertFalse(quadlet_generator_version_supported("6.0.0"))
         self.assertFalse(quadlet_generator_version_supported("not-a-version"))
 

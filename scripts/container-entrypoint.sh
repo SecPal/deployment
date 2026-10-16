@@ -45,12 +45,10 @@ read_text_secret() {
 
 app_key="$(read_text_secret "$SECRET_DIR/app-key")"
 database_password="$(read_text_secret "$SECRET_DIR/postgres-password")"
-valkey_password="$(read_text_secret "$SECRET_DIR/valkey-password")"
 require_secret_file "$SECRET_DIR/tenant-kek"
 
 if ! [[ "$app_key" =~ ^base64:[A-Za-z0-9+/]{43}=$ ]] ||
   ! [[ "$database_password" =~ ^[a-f0-9]{64}$ ]] ||
-  ! [[ "$valkey_password" =~ ^[a-f0-9]{64}$ ]] ||
   [ "$(stat -c '%s' "$SECRET_DIR/tenant-kek")" -ne 32 ]; then
   fail
 fi
@@ -58,9 +56,8 @@ fi
 export APP_KEY="$app_key"
 export DB_PASSWORD="$database_password"
 export KEK_PATH="$SECRET_DIR/tenant-kek"
-export REDIS_PASSWORD="$valkey_password"
 
-unset app_key database_password valkey_password
+unset app_key database_password
 
 if [ "$#" -eq 0 ]; then
   printf 'ERROR: no container role command was provided.\n' >&2

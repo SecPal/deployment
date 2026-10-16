@@ -1,0 +1,3516 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0; historical target/payload expectations independently authenticated from signed PR source 5022cf00e7d71ea406b41b93166149ffcb3115fc, without a runtime historical-object dependency",
+  "$defs": {
+    "object_1": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "class": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "decided": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "flags": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requested": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "result": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "allowed",
+        "class",
+        "decided",
+        "flags",
+        "requested",
+        "result"
+      ],
+      "type": "object"
+    },
+    "object_10": {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/object_3"
+        },
+        "frontend": {
+          "$ref": "#/$defs/object_3"
+        }
+      },
+      "required": ["api", "frontend"],
+      "type": "object"
+    },
+    "object_11": {
+      "additionalProperties": false,
+      "properties": {
+        "haproxy": {
+          "$ref": "#/$defs/object_10"
+        },
+        "secpal-admin": {
+          "$ref": "#/$defs/object_10"
+        },
+        "secpal-runtime": {
+          "$ref": "#/$defs/object_10"
+        }
+      },
+      "required": ["haproxy", "secpal-admin", "secpal-runtime"],
+      "type": "object"
+    },
+    "object_12": {
+      "additionalProperties": false,
+      "properties": {
+        "previous_generation": {
+          "$ref": "#/$defs/object_6"
+        },
+        "rejection": {
+          "$ref": "#/$defs/object_3"
+        },
+        "unchanged_generation": {
+          "$ref": "#/$defs/object_6"
+        }
+      },
+      "required": ["previous_generation", "rejection", "unchanged_generation"],
+      "type": "object"
+    },
+    "object_13": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_seconds": {
+          "type": "number"
+        },
+        "status_line": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": ["duration_seconds", "status_line"],
+      "type": "object"
+    },
+    "object_14": {
+      "additionalProperties": false,
+      "properties": {
+        "TRACE": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "UNSUPPORTED": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "api.secpal.example.invalid:1234": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "app.secpal.example.invalid.evil": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "frontend_does_not_return_api_readiness": {
+          "$ref": "#/$defs/object_7"
+        },
+        "header_timeout": {
+          "$ref": "#/$defs/object_13"
+        },
+        "malformed_and_header_bounds": {
+          "items": {
+            "maxLength": 32768,
+            "type": "string"
+          },
+          "maxItems": 7,
+          "minItems": 7,
+          "type": "array"
+        },
+        "target_bound": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown.example.invalid": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "TRACE",
+        "UNSUPPORTED",
+        "api.secpal.example.invalid:1234",
+        "app.secpal.example.invalid.evil",
+        "frontend_does_not_return_api_readiness",
+        "header_timeout",
+        "malformed_and_header_bounds",
+        "target_bound",
+        "unknown.example.invalid"
+      ],
+      "type": "object"
+    },
+    "object_15": {
+      "additionalProperties": false,
+      "properties": {
+        "HostIp": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "HostPort": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": ["HostIp", "HostPort"],
+      "type": "object"
+    },
+    "object_16": {
+      "additionalProperties": false,
+      "properties": {
+        "8080/tcp": {
+          "items": {
+            "$ref": "#/$defs/object_15"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": ["8080/tcp"],
+      "type": "object"
+    },
+    "object_17": {
+      "additionalProperties": false,
+      "properties": {
+        "excluded": {
+          "$ref": "#/$defs/object_7"
+        },
+        "new_container_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "old_container_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "ports": {
+          "$ref": "#/$defs/object_16"
+        },
+        "recovered": {
+          "$ref": "#/$defs/object_7"
+        }
+      },
+      "required": [
+        "excluded",
+        "new_container_id",
+        "old_container_id",
+        "ports",
+        "recovered"
+      ],
+      "type": "object"
+    },
+    "object_18": {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/object_17"
+        },
+        "frontend": {
+          "$ref": "#/$defs/object_17"
+        }
+      },
+      "required": ["api", "frontend"],
+      "type": "object"
+    },
+    "object_19": {
+      "additionalProperties": false,
+      "properties": {
+        "all_frontend_samples_200": {
+          "const": true
+        },
+        "failed_reload": {
+          "$ref": "#/$defs/object_3"
+        },
+        "restored_generation": {
+          "$ref": "#/$defs/object_6"
+        },
+        "serving_samples": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "all_frontend_samples_200",
+        "failed_reload",
+        "restored_generation",
+        "serving_samples"
+      ],
+      "type": "object"
+    },
+    "object_2": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/object_1"
+        },
+        "permission": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "target": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": ["decision", "permission", "source", "target"],
+      "type": "object"
+    },
+    "object_20": {
+      "additionalProperties": false,
+      "properties": {
+        "explicit_valid_restoration": {
+          "$ref": "#/$defs/object_6"
+        },
+        "genuine_application_readiness": {
+          "$ref": "#/$defs/object_8"
+        },
+        "graceful_reload_new_generation_and_inflight": {
+          "$ref": "#/$defs/object_9"
+        },
+        "intended_and_unrelated_uid_authority": {
+          "$ref": "#/$defs/object_11"
+        },
+        "invalid_candidate_keeps_serving": {
+          "$ref": "#/$defs/object_12"
+        },
+        "native_syntax_rejection": {
+          "$ref": "#/$defs/object_3"
+        },
+        "origins_methods_malformed_bounds_timeout": {
+          "$ref": "#/$defs/object_14"
+        },
+        "real_rootless_recreation": {
+          "$ref": "#/$defs/object_18"
+        },
+        "uncertain_reload_rejected_last_known_good": {
+          "$ref": "#/$defs/object_19"
+        }
+      },
+      "required": [
+        "explicit_valid_restoration",
+        "genuine_application_readiness",
+        "graceful_reload_new_generation_and_inflight",
+        "intended_and_unrelated_uid_authority",
+        "invalid_candidate_keeps_serving",
+        "native_syntax_rejection",
+        "origins_methods_malformed_bounds_timeout",
+        "real_rootless_recreation",
+        "uncertain_reload_rejected_last_known_good"
+      ],
+      "type": "object"
+    },
+    "object_21": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "const": "x86_64"
+        },
+        "epoch": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "nevra": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "payload_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "release": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "resolved_repository": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "signature_verified": {
+          "const": true
+        },
+        "signer_fingerprint": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "architecture",
+        "epoch",
+        "name",
+        "nevra",
+        "payload_digest",
+        "release",
+        "resolved_repository",
+        "signature_verified",
+        "signer_fingerprint",
+        "version"
+      ],
+      "type": "object"
+    },
+    "object_22": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "const": "noarch"
+        },
+        "epoch": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "nevra": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "payload_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "release": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "resolved_repository": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "signature_verified": {
+          "const": true
+        },
+        "signer_fingerprint": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "architecture",
+        "epoch",
+        "name",
+        "nevra",
+        "payload_digest",
+        "release",
+        "resolved_repository",
+        "signature_verified",
+        "signer_fingerprint",
+        "version"
+      ],
+      "type": "object"
+    },
+    "object_23": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "exit_status": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": ["diagnostics", "exit_status", "observation_sha256"],
+      "type": "object"
+    },
+    "object_24": {
+      "additionalProperties": false,
+      "properties": {
+        "api_restored": {
+          "$ref": "#/$defs/object_7"
+        },
+        "api_stop_result": {
+          "$ref": "#/$defs/object_3"
+        },
+        "api_stopped": {
+          "$ref": "#/$defs/object_3"
+        },
+        "fixed_backend_listeners_absent": {
+          "$ref": "#/$defs/object_3"
+        },
+        "frontend_restored": {
+          "$ref": "#/$defs/object_7"
+        },
+        "frontend_stop_result": {
+          "$ref": "#/$defs/object_3"
+        },
+        "frontend_stopped": {
+          "$ref": "#/$defs/object_3"
+        },
+        "haproxy_stopped": {
+          "$ref": "#/$defs/object_3"
+        },
+        "public_barrier_absent": {
+          "$ref": "#/$defs/object_3"
+        },
+        "reestablish_exact_backend_policy": {
+          "$ref": "#/$defs/object_3"
+        },
+        "restart_exact_products": {
+          "$ref": "#/$defs/object_3"
+        },
+        "restart_shared_haproxy": {
+          "$ref": "#/$defs/object_3"
+        },
+        "runtime_barrier_readable": {
+          "$ref": "#/$defs/object_3"
+        },
+        "secpal-product-backend-policy_stopped": {
+          "$ref": "#/$defs/object_3"
+        },
+        "start_denied_without_barrier": {
+          "$ref": "#/$defs/object_3"
+        },
+        "withdraw_exact_backend_policy": {
+          "$ref": "#/$defs/object_3"
+        }
+      },
+      "required": [
+        "api_restored",
+        "api_stop_result",
+        "api_stopped",
+        "fixed_backend_listeners_absent",
+        "frontend_restored",
+        "frontend_stop_result",
+        "frontend_stopped",
+        "haproxy_stopped",
+        "public_barrier_absent",
+        "reestablish_exact_backend_policy",
+        "restart_exact_products",
+        "restart_shared_haproxy",
+        "runtime_barrier_readable",
+        "secpal-product-backend-policy_stopped",
+        "start_denied_without_barrier",
+        "withdraw_exact_backend_policy"
+      ],
+      "type": "object"
+    },
+    "object_25": {
+      "additionalProperties": false,
+      "properties": {
+        "bounded_access_fields_present": {
+          "const": true
+        },
+        "journal": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "sensitive_synthetic_markers_excluded": {
+          "const": true
+        }
+      },
+      "required": [
+        "bounded_access_fields_present",
+        "journal",
+        "sensitive_synthetic_markers_excluded"
+      ],
+      "type": "object"
+    },
+    "object_26": {
+      "additionalProperties": false,
+      "properties": {
+        "ipv6_loopback_denied": {
+          "$ref": "#/$defs/object_3"
+        },
+        "non_loopback_ingress_denied": {
+          "$ref": "#/$defs/object_3"
+        },
+        "private_interface_positive": {
+          "$ref": "#/$defs/object_3"
+        }
+      },
+      "required": [
+        "ipv6_loopback_denied",
+        "non_loopback_ingress_denied",
+        "private_interface_positive"
+      ],
+      "type": "object"
+    },
+    "object_27": {
+      "additionalProperties": false,
+      "properties": {
+        "18080": {
+          "$ref": "#/$defs/object_26"
+        },
+        "18081": {
+          "$ref": "#/$defs/object_26"
+        }
+      },
+      "required": ["18080", "18081"],
+      "type": "object"
+    },
+    "object_28": {
+      "additionalProperties": false,
+      "properties": {
+        "owned_probe_processes_stopped": {
+          "const": true
+        },
+        "temporary_interface_absent": {
+          "const": true
+        },
+        "temporary_namespace_absent": {
+          "const": true
+        }
+      },
+      "required": [
+        "owned_probe_processes_stopped",
+        "temporary_interface_absent",
+        "temporary_namespace_absent"
+      ],
+      "type": "object"
+    },
+    "object_29": {
+      "additionalProperties": false,
+      "properties": {
+        "bounded_journal": {
+          "$ref": "#/$defs/object_25"
+        },
+        "forwarding_removed": {
+          "const": true
+        },
+        "ingress": {
+          "$ref": "#/$defs/object_27"
+        },
+        "probe_cleanup": {
+          "$ref": "#/$defs/object_28"
+        },
+        "synthetic_capture_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bounded_journal",
+        "forwarding_removed",
+        "ingress",
+        "probe_cleanup",
+        "synthetic_capture_sha256"
+      ],
+      "type": "object"
+    },
+    "object_3": {
+      "additionalProperties": false,
+      "properties": {
+        "exit_status": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stderr": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "stdout": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": ["exit_status", "stderr", "stdout"],
+      "type": "object"
+    },
+    "object_30": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "items": {
+            "maxLength": 32768,
+            "type": "string"
+          },
+          "maxItems": 21,
+          "minItems": 21,
+          "type": "array"
+        },
+        "code": {
+          "type": "null"
+        },
+        "executable": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "ignore_errors": {
+          "const": false
+        },
+        "pid": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_time": {
+          "type": "null"
+        },
+        "status": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "stop_time": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "argv",
+        "code",
+        "executable",
+        "ignore_errors",
+        "pid",
+        "start_time",
+        "status",
+        "stop_time"
+      ],
+      "type": "object"
+    },
+    "object_31": {
+      "additionalProperties": false,
+      "properties": {
+        "drop_in_paths": {
+          "items": false,
+          "maxItems": 0,
+          "minItems": 0,
+          "type": "array"
+        },
+        "exec_start": {
+          "$ref": "#/$defs/object_30"
+        },
+        "fragment_path": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "invariant_owner": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "runtime_uid": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema_version": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_path": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "unit_name": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "drop_in_paths",
+        "exec_start",
+        "fragment_path",
+        "invariant_owner",
+        "runtime_uid",
+        "schema_version",
+        "source_path",
+        "unit_name"
+      ],
+      "type": "object"
+    },
+    "object_32": {
+      "additionalProperties": false,
+      "properties": {
+        "cx23-canonical-runtime-label-and-startup-result.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx23-effective-backend-policy-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx23-host-key-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx23-installed-behavior-qualification-observations.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx23-native-host-subsystem-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx23-package-supply-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx23-policy-startup-barrier-observations-2.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx23-privacy-ingress-qualification-observations-2.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx23-provider-actions-observation.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx23-reboot-observation.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cx23-canonical-runtime-label-and-startup-result.json",
+        "cx23-effective-backend-policy-admission.json",
+        "cx23-host-key-admission.json",
+        "cx23-installed-behavior-qualification-observations.json",
+        "cx23-native-host-subsystem-admission.json",
+        "cx23-package-supply-admission.json",
+        "cx23-policy-startup-barrier-observations-2.json",
+        "cx23-privacy-ingress-qualification-observations-2.json",
+        "cx23-provider-actions-observation.json",
+        "cx23-reboot-observation.json"
+      ],
+      "type": "object"
+    },
+    "object_33": {
+      "additionalProperties": false,
+      "properties": {
+        "new_boot_id": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "observations": {
+          "items": false,
+          "maxItems": 0,
+          "minItems": 0,
+          "type": "array"
+        },
+        "post_reboot_exit_status": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "post_reboot_observations": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "previous_boot_id": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "reboot_command_exit_status": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reboot_requested_at": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "server_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "new_boot_id",
+        "observations",
+        "post_reboot_exit_status",
+        "post_reboot_observations",
+        "previous_boot_id",
+        "reboot_command_exit_status",
+        "reboot_requested_at",
+        "server_id",
+        "status"
+      ],
+      "type": "object"
+    },
+    "object_34": {
+      "additionalProperties": false,
+      "properties": {
+        "haproxy_supply_contract.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "secpal_haproxy_runtime.cil": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy_base_contract.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "product_backend_contract.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy-config": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy_config_lifecycle.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "haproxy-config",
+        "haproxy_base_contract.py",
+        "haproxy_config_lifecycle.py",
+        "haproxy_supply_contract.py",
+        "product_backend_contract.py",
+        "secpal_haproxy_runtime.cil"
+      ],
+      "type": "object"
+    },
+    "object_35": {
+      "additionalProperties": false,
+      "properties": {
+        "event_time": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "permissive": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pid": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "proctitle": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "serial": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "source_context": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "syscall_command": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "syscall_pid": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "target_context": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_time",
+        "permissive",
+        "pid",
+        "proctitle",
+        "serial",
+        "source_context",
+        "syscall_command",
+        "syscall_pid",
+        "target_context"
+      ],
+      "type": "object"
+    },
+    "object_36": {
+      "additionalProperties": false,
+      "properties": {
+        "mcs_categories": {
+          "items": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "raw": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "selinux_type": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": ["mcs_categories", "raw", "selinux_type"],
+      "type": "object"
+    },
+    "object_37": {
+      "additionalProperties": false,
+      "properties": {
+        "denial": {
+          "$ref": "#/$defs/object_35"
+        },
+        "invariant_owner": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "process_contexts": {
+          "items": {
+            "$ref": "#/$defs/object_36"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "storage_context": {
+          "$ref": "#/$defs/object_36"
+        }
+      },
+      "required": [
+        "denial",
+        "invariant_owner",
+        "process_contexts",
+        "storage_context"
+      ],
+      "type": "object"
+    },
+    "object_38": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "const": "x86_64"
+        },
+        "backend_nftables_owner_agreement": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "classification": {
+          "const": "REAL_REFERENCE_HOST_QUALIFIED"
+        },
+        "effective_backend_authority": {
+          "items": {
+            "$ref": "#/$defs/object_2"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "evidence_index_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "final_boot_id": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "final_configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "final_labels": {
+          "$ref": "#/$defs/object_3"
+        },
+        "final_processes": {
+          "$ref": "#/$defs/object_5"
+        },
+        "fresh_ssh_host_identity": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "guest_authority_admission_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "installed_behavior_cases": {
+          "$ref": "#/$defs/object_20"
+        },
+        "installed_haproxy_binary_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "installed_package_provenance": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/object_21"
+              },
+              {
+                "$ref": "#/$defs/object_22"
+              }
+            ]
+          },
+          "maxItems": 24,
+          "minItems": 24,
+          "type": "array"
+        },
+        "installed_systemd_verification": {
+          "$ref": "#/$defs/object_23"
+        },
+        "location": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "os_release": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "policy_withdrawal_and_recovery": {
+          "$ref": "#/$defs/object_24"
+        },
+        "privacy": {
+          "$ref": "#/$defs/object_29"
+        },
+        "provider_image_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "provider_rebuild_action_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "quadlet_authority": {
+          "$ref": "#/$defs/object_31"
+        },
+        "raw_evidence_sha256": {
+          "$ref": "#/$defs/object_32"
+        },
+        "reboot_persistence_observation": {
+          "$ref": "#/$defs/object_33"
+        },
+        "required_features": {
+          "items": {
+            "maxLength": 32768,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "runtime_source_sha256": {
+          "$ref": "#/$defs/historical_runtime_source"
+        },
+        "selinux_isolation": {
+          "$ref": "#/$defs/object_37"
+        },
+        "server_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "server_name": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "server_type": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "architecture",
+        "backend_nftables_owner_agreement",
+        "classification",
+        "effective_backend_authority",
+        "evidence_index_sha256",
+        "final_boot_id",
+        "final_configuration_sha256",
+        "final_labels",
+        "final_processes",
+        "fresh_ssh_host_identity",
+        "guest_authority_admission_sha256",
+        "installed_behavior_cases",
+        "installed_haproxy_binary_sha256",
+        "installed_package_provenance",
+        "installed_systemd_verification",
+        "location",
+        "os_release",
+        "policy_withdrawal_and_recovery",
+        "privacy",
+        "provider_image_id",
+        "provider_rebuild_action_id",
+        "quadlet_authority",
+        "raw_evidence_sha256",
+        "reboot_persistence_observation",
+        "required_features",
+        "runtime_source_sha256",
+        "selinux_isolation",
+        "server_id",
+        "server_name",
+        "server_type"
+      ],
+      "type": "object"
+    },
+    "object_39": {
+      "additionalProperties": false,
+      "properties": {
+        "8568": {
+          "$ref": "#/$defs/object_4"
+        },
+        "8572": {
+          "$ref": "#/$defs/object_4"
+        }
+      },
+      "required": ["8568", "8572"],
+      "type": "object"
+    },
+    "object_4": {
+      "additionalProperties": false,
+      "properties": {
+        "cgroup": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "exe": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "selinux_domain": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "uid_fields": {
+          "items": {
+            "maxLength": 32768,
+            "type": "string"
+          },
+          "maxItems": 5,
+          "minItems": 5,
+          "type": "array"
+        }
+      },
+      "required": ["cgroup", "exe", "selinux_domain", "uid_fields"],
+      "type": "object"
+    },
+    "object_40": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "const": "aarch64"
+        },
+        "epoch": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "nevra": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "payload_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "release": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "resolved_repository": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "signature_verified": {
+          "const": true
+        },
+        "signer_fingerprint": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "architecture",
+        "epoch",
+        "name",
+        "nevra",
+        "payload_digest",
+        "release",
+        "resolved_repository",
+        "signature_verified",
+        "signer_fingerprint",
+        "version"
+      ],
+      "type": "object"
+    },
+    "object_41": {
+      "additionalProperties": false,
+      "properties": {
+        "cax21-confined-startup-observations.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cax21-effective-backend-policy-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cax21-host-key-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cax21-installed-behavior-qualification-observations.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cax21-native-host-subsystem-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cax21-package-supply-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cax21-policy-startup-barrier-observations.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cax21-privacy-ingress-qualification-observations.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cax21-provider-actions-current.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cax21-qualified-runtime-final-observations.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cax21-reboot-observation.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cax21-confined-startup-observations.json",
+        "cax21-effective-backend-policy-admission.json",
+        "cax21-host-key-admission.json",
+        "cax21-installed-behavior-qualification-observations.json",
+        "cax21-native-host-subsystem-admission.json",
+        "cax21-package-supply-admission.json",
+        "cax21-policy-startup-barrier-observations.json",
+        "cax21-privacy-ingress-qualification-observations.json",
+        "cax21-provider-actions-current.json",
+        "cax21-qualified-runtime-final-observations.json",
+        "cax21-reboot-observation.json"
+      ],
+      "type": "object"
+    },
+    "object_42": {
+      "additionalProperties": false,
+      "properties": {
+        "new_boot_id": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "observed_at": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "old_boot_id": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "post_reboot_observation": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "same_authenticated_host_key": {
+          "const": true
+        },
+        "started_at": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "target": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "new_boot_id",
+        "observed_at",
+        "old_boot_id",
+        "post_reboot_observation",
+        "same_authenticated_host_key",
+        "started_at",
+        "target"
+      ],
+      "type": "object"
+    },
+    "object_43": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "const": "aarch64"
+        },
+        "backend_nftables_owner_agreement": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "classification": {
+          "const": "REAL_REFERENCE_HOST_QUALIFIED"
+        },
+        "effective_backend_authority": {
+          "items": {
+            "$ref": "#/$defs/object_2"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "evidence_index_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "final_boot_id": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "final_configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "final_labels": {
+          "$ref": "#/$defs/object_3"
+        },
+        "final_processes": {
+          "$ref": "#/$defs/object_39"
+        },
+        "fresh_ssh_host_identity": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "guest_authority_admission_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "installed_behavior_cases": {
+          "$ref": "#/$defs/object_20"
+        },
+        "installed_haproxy_binary_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "installed_package_provenance": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/object_40"
+              },
+              {
+                "$ref": "#/$defs/object_22"
+              }
+            ]
+          },
+          "maxItems": 24,
+          "minItems": 24,
+          "type": "array"
+        },
+        "installed_systemd_verification": {
+          "$ref": "#/$defs/object_23"
+        },
+        "location": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "os_release": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "policy_withdrawal_and_recovery": {
+          "$ref": "#/$defs/object_24"
+        },
+        "privacy": {
+          "$ref": "#/$defs/object_29"
+        },
+        "provider_image_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "provider_rebuild_action_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "quadlet_authority": {
+          "$ref": "#/$defs/object_31"
+        },
+        "raw_evidence_sha256": {
+          "$ref": "#/$defs/object_41"
+        },
+        "reboot_persistence_observation": {
+          "$ref": "#/$defs/object_42"
+        },
+        "required_features": {
+          "items": {
+            "maxLength": 32768,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "runtime_source_sha256": {
+          "$ref": "#/$defs/historical_runtime_source"
+        },
+        "selinux_isolation": {
+          "$ref": "#/$defs/object_37"
+        },
+        "server_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "server_name": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "server_type": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "architecture",
+        "backend_nftables_owner_agreement",
+        "classification",
+        "effective_backend_authority",
+        "evidence_index_sha256",
+        "final_boot_id",
+        "final_configuration_sha256",
+        "final_labels",
+        "final_processes",
+        "fresh_ssh_host_identity",
+        "guest_authority_admission_sha256",
+        "installed_behavior_cases",
+        "installed_haproxy_binary_sha256",
+        "installed_package_provenance",
+        "installed_systemd_verification",
+        "location",
+        "os_release",
+        "policy_withdrawal_and_recovery",
+        "privacy",
+        "provider_image_id",
+        "provider_rebuild_action_id",
+        "quadlet_authority",
+        "raw_evidence_sha256",
+        "reboot_persistence_observation",
+        "required_features",
+        "runtime_source_sha256",
+        "selinux_isolation",
+        "server_id",
+        "server_name",
+        "server_type"
+      ],
+      "type": "object"
+    },
+    "object_44": {
+      "additionalProperties": false,
+      "properties": {
+        "7947": {
+          "$ref": "#/$defs/object_4"
+        },
+        "7950": {
+          "$ref": "#/$defs/object_4"
+        }
+      },
+      "required": ["7947", "7950"],
+      "type": "object"
+    },
+    "object_45": {
+      "additionalProperties": false,
+      "properties": {
+        "cx33-confined-startup-observations.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx33-effective-backend-policy-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx33-host-key-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx33-installed-behavior-qualification-observations.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx33-native-host-subsystem-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx33-package-supply-admission.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx33-policy-startup-barrier-observations.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx33-privacy-ingress-qualification-observations.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx33-provider-actions-current.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx33-qualified-runtime-final-observations.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "cx33-reboot-observation.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cx33-confined-startup-observations.json",
+        "cx33-effective-backend-policy-admission.json",
+        "cx33-host-key-admission.json",
+        "cx33-installed-behavior-qualification-observations.json",
+        "cx33-native-host-subsystem-admission.json",
+        "cx33-package-supply-admission.json",
+        "cx33-policy-startup-barrier-observations.json",
+        "cx33-privacy-ingress-qualification-observations.json",
+        "cx33-provider-actions-current.json",
+        "cx33-qualified-runtime-final-observations.json",
+        "cx33-reboot-observation.json"
+      ],
+      "type": "object"
+    },
+    "object_46": {
+      "additionalProperties": false,
+      "properties": {
+        "nftables.service": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "secpal-product-backend-policy.service": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "user@993.service": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "nftables.service",
+        "secpal-product-backend-policy.service",
+        "user@993.service"
+      ],
+      "type": "object"
+    },
+    "object_47": {
+      "additionalProperties": false,
+      "properties": {
+        "booleans": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "boot_id": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "enforcing": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "services": {
+          "$ref": "#/$defs/object_46"
+        }
+      },
+      "required": ["booleans", "boot_id", "enforcing", "services"],
+      "type": "object"
+    },
+    "object_48": {
+      "additionalProperties": false,
+      "properties": {
+        "observed_at": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "old_boot_id": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "post_reboot_observation": {
+          "$ref": "#/$defs/object_47"
+        },
+        "same_authenticated_host_key": {
+          "const": true
+        },
+        "started_at": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "target": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "observed_at",
+        "old_boot_id",
+        "post_reboot_observation",
+        "same_authenticated_host_key",
+        "started_at",
+        "target"
+      ],
+      "type": "object"
+    },
+    "object_49": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "const": "x86_64"
+        },
+        "backend_nftables_owner_agreement": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "classification": {
+          "const": "REAL_REFERENCE_HOST_QUALIFIED"
+        },
+        "effective_backend_authority": {
+          "items": {
+            "$ref": "#/$defs/object_2"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "evidence_index_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "final_boot_id": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "final_configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "final_labels": {
+          "$ref": "#/$defs/object_3"
+        },
+        "final_processes": {
+          "$ref": "#/$defs/object_44"
+        },
+        "fresh_ssh_host_identity": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "guest_authority_admission_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "installed_behavior_cases": {
+          "$ref": "#/$defs/object_20"
+        },
+        "installed_haproxy_binary_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "installed_package_provenance": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/object_21"
+              },
+              {
+                "$ref": "#/$defs/object_22"
+              }
+            ]
+          },
+          "maxItems": 24,
+          "minItems": 24,
+          "type": "array"
+        },
+        "installed_systemd_verification": {
+          "$ref": "#/$defs/object_23"
+        },
+        "location": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "os_release": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "policy_withdrawal_and_recovery": {
+          "$ref": "#/$defs/object_24"
+        },
+        "privacy": {
+          "$ref": "#/$defs/object_29"
+        },
+        "provider_image_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "provider_rebuild_action_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "quadlet_authority": {
+          "$ref": "#/$defs/object_31"
+        },
+        "raw_evidence_sha256": {
+          "$ref": "#/$defs/object_45"
+        },
+        "reboot_persistence_observation": {
+          "$ref": "#/$defs/object_48"
+        },
+        "required_features": {
+          "items": {
+            "maxLength": 32768,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "runtime_source_sha256": {
+          "$ref": "#/$defs/historical_runtime_source"
+        },
+        "selinux_isolation": {
+          "$ref": "#/$defs/object_37"
+        },
+        "server_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "server_name": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "server_type": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "architecture",
+        "backend_nftables_owner_agreement",
+        "classification",
+        "effective_backend_authority",
+        "evidence_index_sha256",
+        "final_boot_id",
+        "final_configuration_sha256",
+        "final_labels",
+        "final_processes",
+        "fresh_ssh_host_identity",
+        "guest_authority_admission_sha256",
+        "installed_behavior_cases",
+        "installed_haproxy_binary_sha256",
+        "installed_package_provenance",
+        "installed_systemd_verification",
+        "location",
+        "os_release",
+        "policy_withdrawal_and_recovery",
+        "privacy",
+        "provider_image_id",
+        "provider_rebuild_action_id",
+        "quadlet_authority",
+        "raw_evidence_sha256",
+        "reboot_persistence_observation",
+        "required_features",
+        "runtime_source_sha256",
+        "selinux_isolation",
+        "server_id",
+        "server_name",
+        "server_type"
+      ],
+      "type": "object"
+    },
+    "object_5": {
+      "additionalProperties": false,
+      "properties": {
+        "14810": {
+          "$ref": "#/$defs/object_4"
+        },
+        "14813": {
+          "$ref": "#/$defs/object_4"
+        }
+      },
+      "required": ["14810", "14813"],
+      "type": "object"
+    },
+    "object_50": {
+      "additionalProperties": false,
+      "properties": {
+        "aarch64_platform_bootstrap": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "portable-reviewed-host-source-inputs.json": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "x86_64_platform_bootstrap": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "aarch64_platform_bootstrap",
+        "portable-reviewed-host-source-inputs.json",
+        "x86_64_platform_bootstrap"
+      ],
+      "type": "object"
+    },
+    "object_51": {
+      "additionalProperties": false,
+      "properties": {
+        "CapEff": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "NoNewPrivs": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "Seccomp": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "domain": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "exe": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "pid": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uid": {
+          "items": {
+            "maxLength": 32768,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        }
+      },
+      "required": [
+        "CapEff",
+        "NoNewPrivs",
+        "Seccomp",
+        "domain",
+        "exe",
+        "pid",
+        "uid"
+      ],
+      "type": "object"
+    },
+    "object_52": {
+      "additionalProperties": false,
+      "properties": {
+        "/etc/systemd/system/haproxy.service.d/secpal.conf": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "/usr/local/libexec/secpal/haproxy-config": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "/usr/local/libexec/secpal/haproxy-reviewed.rpm": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "/usr/local/libexec/secpal/haproxy_config_lifecycle.py": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "/usr/local/libexec/secpal/haproxy_supply_contract.py": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "/usr/local/libexec/secpal/product-backend-policy": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "/etc/systemd/system/haproxy.service.d/secpal.conf",
+        "/usr/local/libexec/secpal/haproxy-config",
+        "/usr/local/libexec/secpal/haproxy-reviewed.rpm",
+        "/usr/local/libexec/secpal/haproxy_config_lifecycle.py",
+        "/usr/local/libexec/secpal/haproxy_supply_contract.py",
+        "/usr/local/libexec/secpal/product-backend-policy"
+      ],
+      "type": "object"
+    },
+    "object_53": {
+      "additionalProperties": false,
+      "properties": {
+        "worker_pids": {
+          "items": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": ["worker_pids"],
+      "type": "object"
+    },
+    "object_54": {
+      "additionalProperties": false,
+      "properties": {
+        "bounded_recovery_worker_pid": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fault": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "serving_generation_verified": {
+          "const": true
+        },
+        "serving_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "sync_calls": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bounded_recovery_worker_pid",
+        "fault",
+        "serving_generation_verified",
+        "serving_sha256",
+        "sync_calls"
+      ],
+      "type": "object"
+    },
+    "object_55": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostic": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": ["diagnostic"],
+      "type": "object"
+    },
+    "object_56": {
+      "additionalProperties": false,
+      "properties": {
+        "actual_worker_executable_verified": {
+          "$ref": "#/$defs/object_53"
+        },
+        "current_product_uid_alias_rejected": {
+          "$ref": "#/$defs/object_3"
+        },
+        "directory_sync_failure": {
+          "$ref": "#/$defs/object_54"
+        },
+        "substituted_reviewed_rpm_rejected": {
+          "$ref": "#/$defs/object_3"
+        },
+        "unrelated_pid_rejected_before_inspection": {
+          "$ref": "#/$defs/object_3"
+        },
+        "wrong_executable_rejected": {
+          "$ref": "#/$defs/object_55"
+        }
+      },
+      "required": [
+        "actual_worker_executable_verified",
+        "current_product_uid_alias_rejected",
+        "directory_sync_failure",
+        "substituted_reviewed_rpm_rejected",
+        "unrelated_pid_rejected_before_inspection",
+        "wrong_executable_rejected"
+      ],
+      "type": "object"
+    },
+    "object_57": {
+      "additionalProperties": false,
+      "properties": {
+        "/etc/systemd/system/haproxy.service.d/secpal.conf": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "/usr/local/libexec/secpal/haproxy-config": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "/usr/local/libexec/secpal/haproxy_config_lifecycle.py": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "/usr/local/libexec/secpal/haproxy_supply_contract.py": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "/usr/local/libexec/secpal/product-backend-policy": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "/etc/systemd/system/haproxy.service.d/secpal.conf",
+        "/usr/local/libexec/secpal/haproxy-config",
+        "/usr/local/libexec/secpal/haproxy_config_lifecycle.py",
+        "/usr/local/libexec/secpal/haproxy_supply_contract.py",
+        "/usr/local/libexec/secpal/product-backend-policy"
+      ],
+      "type": "object"
+    },
+    "object_58": {
+      "additionalProperties": false,
+      "properties": {
+        "cases": {
+          "$ref": "#/$defs/object_56"
+        },
+        "server_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/object_57"
+        }
+      },
+      "required": ["cases", "server_id", "source_sha256"],
+      "type": "object"
+    },
+    "object_59": {
+      "additionalProperties": false,
+      "properties": {
+        "corrected-full-runtime-observation": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "remediation-boundary-observation": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "remediation-install-observation": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "corrected-full-runtime-observation",
+        "remediation-boundary-observation",
+        "remediation-install-observation"
+      ],
+      "type": "object"
+    },
+    "object_6": {
+      "additionalProperties": false,
+      "properties": {
+        "config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "master_pid": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "worker_pid": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": ["config_sha256", "fingerprint", "master_pid", "worker_pid"],
+      "type": "object"
+    },
+    "object_60": {
+      "additionalProperties": false,
+      "properties": {
+        "cache-control": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "content-length": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "content-security-policy": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "content-type": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "cross-origin-embedder-policy": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "cross-origin-opener-policy": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "cross-origin-resource-policy": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "date": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "origin-agent-cluster": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "permissions-policy": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "pragma": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "referrer-policy": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "server": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "vary": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-content-type-options": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-frame-options": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-permitted-cross-domain-policies": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-ratelimit-limit": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-ratelimit-remaining": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-xss-protection": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "cache-control",
+        "content-length",
+        "content-security-policy",
+        "content-type",
+        "cross-origin-embedder-policy",
+        "cross-origin-opener-policy",
+        "cross-origin-resource-policy",
+        "date",
+        "origin-agent-cluster",
+        "permissions-policy",
+        "pragma",
+        "referrer-policy",
+        "server",
+        "vary",
+        "x-content-type-options",
+        "x-frame-options",
+        "x-permitted-cross-domain-policies",
+        "x-ratelimit-limit",
+        "x-ratelimit-remaining",
+        "x-xss-protection"
+      ],
+      "type": "object"
+    },
+    "object_61": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "headers": {
+          "$ref": "#/$defs/object_60"
+        },
+        "status": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": ["body", "headers", "status"],
+      "type": "object"
+    },
+    "object_62": {
+      "additionalProperties": false,
+      "properties": {
+        "cache-control": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "content-length": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "content-type": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "date": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "permissions-policy": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "referrer-policy": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "server": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-content-type-options": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-frame-options": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-permitted-cross-domain-policies": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-xss-protection": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "cache-control",
+        "content-length",
+        "content-type",
+        "date",
+        "permissions-policy",
+        "referrer-policy",
+        "server",
+        "x-content-type-options",
+        "x-frame-options",
+        "x-permitted-cross-domain-policies",
+        "x-xss-protection"
+      ],
+      "type": "object"
+    },
+    "object_63": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "headers": {
+          "$ref": "#/$defs/object_62"
+        },
+        "status": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": ["body", "headers", "status"],
+      "type": "object"
+    },
+    "object_64": {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/object_61"
+        },
+        "frontend": {
+          "$ref": "#/$defs/object_63"
+        },
+        "generation": {
+          "$ref": "#/$defs/object_6"
+        }
+      },
+      "required": ["api", "frontend", "generation"],
+      "type": "object"
+    },
+    "object_65": {
+      "additionalProperties": false,
+      "properties": {
+        "content-length": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "content-type": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "date": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "permissions-policy": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "referrer-policy": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "server": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-content-type-options": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-frame-options": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-permitted-cross-domain-policies": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "x-xss-protection": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": [
+        "content-length",
+        "content-type",
+        "date",
+        "permissions-policy",
+        "referrer-policy",
+        "server",
+        "x-content-type-options",
+        "x-frame-options",
+        "x-permitted-cross-domain-policies",
+        "x-xss-protection"
+      ],
+      "type": "object"
+    },
+    "object_66": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "headers": {
+          "$ref": "#/$defs/object_65"
+        },
+        "status": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": ["body", "headers", "status"],
+      "type": "object"
+    },
+    "object_67": {
+      "additionalProperties": false,
+      "properties": {
+        "TRACE": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "UNSUPPORTED": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "api.secpal.example.invalid:1234": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "app.secpal.example.invalid.evil": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "frontend_does_not_return_api_readiness": {
+          "$ref": "#/$defs/object_66"
+        },
+        "header_timeout": {
+          "$ref": "#/$defs/object_13"
+        },
+        "malformed_and_header_bounds": {
+          "items": {
+            "maxLength": 32768,
+            "type": "string"
+          },
+          "maxItems": 7,
+          "minItems": 7,
+          "type": "array"
+        },
+        "target_bound": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown.example.invalid": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "TRACE",
+        "UNSUPPORTED",
+        "api.secpal.example.invalid:1234",
+        "app.secpal.example.invalid.evil",
+        "frontend_does_not_return_api_readiness",
+        "header_timeout",
+        "malformed_and_header_bounds",
+        "target_bound",
+        "unknown.example.invalid"
+      ],
+      "type": "object"
+    },
+    "object_68": {
+      "additionalProperties": false,
+      "properties": {
+        "cache-control": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "content-length": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "content-type": {
+          "maxLength": 32768,
+          "type": "string"
+        }
+      },
+      "required": ["cache-control", "content-length", "content-type"],
+      "type": "object"
+    },
+    "object_69": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "headers": {
+          "$ref": "#/$defs/object_68"
+        },
+        "status": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": ["body", "headers", "status"],
+      "type": "object"
+    },
+    "object_7": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": ["status"],
+      "type": "object"
+    },
+    "object_70": {
+      "additionalProperties": false,
+      "properties": {
+        "excluded": {
+          "$ref": "#/$defs/object_69"
+        },
+        "new_container_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "old_container_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "ports": {
+          "$ref": "#/$defs/object_16"
+        },
+        "recovered": {
+          "$ref": "#/$defs/object_61"
+        }
+      },
+      "required": [
+        "excluded",
+        "new_container_id",
+        "old_container_id",
+        "ports",
+        "recovered"
+      ],
+      "type": "object"
+    },
+    "object_71": {
+      "additionalProperties": false,
+      "properties": {
+        "excluded": {
+          "$ref": "#/$defs/object_69"
+        },
+        "new_container_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "old_container_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "ports": {
+          "$ref": "#/$defs/object_16"
+        },
+        "recovered": {
+          "$ref": "#/$defs/object_63"
+        }
+      },
+      "required": [
+        "excluded",
+        "new_container_id",
+        "old_container_id",
+        "ports",
+        "recovered"
+      ],
+      "type": "object"
+    },
+    "object_72": {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/object_70"
+        },
+        "frontend": {
+          "$ref": "#/$defs/object_71"
+        }
+      },
+      "required": ["api", "frontend"],
+      "type": "object"
+    },
+    "object_73": {
+      "additionalProperties": false,
+      "properties": {
+        "explicit_valid_restoration": {
+          "$ref": "#/$defs/object_6"
+        },
+        "genuine_application_readiness": {
+          "$ref": "#/$defs/object_64"
+        },
+        "graceful_reload_new_generation_and_inflight": {
+          "$ref": "#/$defs/object_9"
+        },
+        "intended_and_unrelated_uid_authority": {
+          "$ref": "#/$defs/object_11"
+        },
+        "invalid_candidate_keeps_serving": {
+          "$ref": "#/$defs/object_12"
+        },
+        "native_syntax_rejection": {
+          "$ref": "#/$defs/object_3"
+        },
+        "origins_methods_malformed_bounds_timeout": {
+          "$ref": "#/$defs/object_67"
+        },
+        "real_rootless_recreation": {
+          "$ref": "#/$defs/object_72"
+        },
+        "uncertain_reload_rejected_last_known_good": {
+          "$ref": "#/$defs/object_19"
+        }
+      },
+      "required": [
+        "explicit_valid_restoration",
+        "genuine_application_readiness",
+        "graceful_reload_new_generation_and_inflight",
+        "intended_and_unrelated_uid_authority",
+        "invalid_candidate_keeps_serving",
+        "native_syntax_rejection",
+        "origins_methods_malformed_bounds_timeout",
+        "real_rootless_recreation",
+        "uncertain_reload_rejected_last_known_good"
+      ],
+      "type": "object"
+    },
+    "object_74": {
+      "additionalProperties": false,
+      "properties": {
+        "cases": {
+          "$ref": "#/$defs/object_73"
+        },
+        "final_config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "installed_source_sha256": {
+          "$ref": "#/$defs/object_34"
+        },
+        "observed_at": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "result": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "server_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cases",
+        "final_config_sha256",
+        "installed_source_sha256",
+        "observed_at",
+        "result",
+        "server_id"
+      ],
+      "type": "object"
+    },
+    "object_75": {
+      "additionalProperties": false,
+      "properties": {
+        "actual_processes": {
+          "items": {
+            "$ref": "#/$defs/object_51"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "installed_source_sha256": {
+          "$ref": "#/$defs/object_52"
+        },
+        "native_service_unit": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "negative_admission_and_fault_injection": {
+          "$ref": "#/$defs/object_58"
+        },
+        "package_files_check": {
+          "$ref": "#/$defs/object_3"
+        },
+        "package_signature_check": {
+          "$ref": "#/$defs/object_3"
+        },
+        "raw_controller_observations_sha256": {
+          "$ref": "#/$defs/object_59"
+        },
+        "repeated_installed_runtime": {
+          "$ref": "#/$defs/object_74"
+        },
+        "reviewed_source_parent": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "server_id": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stale_manager_rejection": {
+          "$ref": "#/$defs/object_3"
+        }
+      },
+      "required": [
+        "actual_processes",
+        "installed_source_sha256",
+        "native_service_unit",
+        "negative_admission_and_fault_injection",
+        "package_files_check",
+        "package_signature_check",
+        "raw_controller_observations_sha256",
+        "repeated_installed_runtime",
+        "reviewed_source_parent",
+        "server_id",
+        "stale_manager_rejection"
+      ],
+      "type": "object"
+    },
+    "object_76": {
+      "additionalProperties": false,
+      "properties": {
+        "$comment": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "accepted_host_owner_source": {
+          "const": "178fd9d46224afaa9349d3954b14d07ce2f81c6a"
+        },
+        "delivery_issue": {
+          "const": 219
+        },
+        "evidence_kind": {
+          "const": "BOUNDED_HAPROXY_REFERENCE_HOST_OBSERVATIONS"
+        },
+        "fixture": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "hosts": {
+          "items": false,
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "architecture": {
+                  "const": "x86_64"
+                },
+                "backend_nftables_owner_agreement": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "classification": {
+                  "const": "REAL_REFERENCE_HOST_QUALIFIED"
+                },
+                "effective_backend_authority": {
+                  "items": {
+                    "$ref": "#/$defs/object_2"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "evidence_index_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "final_boot_id": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "final_configuration_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "final_labels": {
+                  "$ref": "#/$defs/object_3"
+                },
+                "final_processes": {
+                  "$ref": "#/$defs/object_5"
+                },
+                "fresh_ssh_host_identity": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "guest_authority_admission_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "installed_behavior_cases": {
+                  "$ref": "#/$defs/object_20"
+                },
+                "installed_haproxy_binary_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "installed_package_provenance": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/object_21"
+                      },
+                      {
+                        "$ref": "#/$defs/object_22"
+                      }
+                    ]
+                  },
+                  "maxItems": 24,
+                  "minItems": 24,
+                  "type": "array"
+                },
+                "installed_systemd_verification": {
+                  "$ref": "#/$defs/object_23"
+                },
+                "location": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "os_release": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "policy_withdrawal_and_recovery": {
+                  "$ref": "#/$defs/object_24"
+                },
+                "privacy": {
+                  "$ref": "#/$defs/object_29"
+                },
+                "provider_image_id": {
+                  "const": 245249370
+                },
+                "provider_rebuild_action_id": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "quadlet_authority": {
+                  "$ref": "#/$defs/object_31"
+                },
+                "raw_evidence_sha256": {
+                  "$ref": "#/$defs/object_32"
+                },
+                "reboot_persistence_observation": {
+                  "$ref": "#/$defs/object_33"
+                },
+                "required_features": {
+                  "items": {
+                    "maxLength": 32768,
+                    "type": "string"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "type": "array"
+                },
+                "runtime_source_sha256": {
+                  "$ref": "#/$defs/object_34"
+                },
+                "selinux_isolation": {
+                  "$ref": "#/$defs/object_37"
+                },
+                "server_id": {
+                  "const": 163965414
+                },
+                "server_name": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "server_type": {
+                  "maxLength": 32768,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "architecture",
+                "backend_nftables_owner_agreement",
+                "classification",
+                "effective_backend_authority",
+                "evidence_index_sha256",
+                "final_boot_id",
+                "final_configuration_sha256",
+                "final_labels",
+                "final_processes",
+                "fresh_ssh_host_identity",
+                "guest_authority_admission_sha256",
+                "installed_behavior_cases",
+                "installed_haproxy_binary_sha256",
+                "installed_package_provenance",
+                "installed_systemd_verification",
+                "location",
+                "os_release",
+                "policy_withdrawal_and_recovery",
+                "privacy",
+                "provider_image_id",
+                "provider_rebuild_action_id",
+                "quadlet_authority",
+                "raw_evidence_sha256",
+                "reboot_persistence_observation",
+                "required_features",
+                "runtime_source_sha256",
+                "selinux_isolation",
+                "server_id",
+                "server_name",
+                "server_type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "architecture": {
+                  "const": "aarch64"
+                },
+                "backend_nftables_owner_agreement": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "classification": {
+                  "const": "REAL_REFERENCE_HOST_QUALIFIED"
+                },
+                "effective_backend_authority": {
+                  "items": {
+                    "$ref": "#/$defs/object_2"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "evidence_index_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "final_boot_id": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "final_configuration_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "final_labels": {
+                  "$ref": "#/$defs/object_3"
+                },
+                "final_processes": {
+                  "$ref": "#/$defs/object_39"
+                },
+                "fresh_ssh_host_identity": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "guest_authority_admission_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "installed_behavior_cases": {
+                  "$ref": "#/$defs/object_20"
+                },
+                "installed_haproxy_binary_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "installed_package_provenance": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/object_40"
+                      },
+                      {
+                        "$ref": "#/$defs/object_22"
+                      }
+                    ]
+                  },
+                  "maxItems": 24,
+                  "minItems": 24,
+                  "type": "array"
+                },
+                "installed_systemd_verification": {
+                  "$ref": "#/$defs/object_23"
+                },
+                "location": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "os_release": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "policy_withdrawal_and_recovery": {
+                  "$ref": "#/$defs/object_24"
+                },
+                "privacy": {
+                  "$ref": "#/$defs/object_29"
+                },
+                "provider_image_id": {
+                  "const": 245249744
+                },
+                "provider_rebuild_action_id": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "quadlet_authority": {
+                  "$ref": "#/$defs/object_31"
+                },
+                "raw_evidence_sha256": {
+                  "$ref": "#/$defs/object_41"
+                },
+                "reboot_persistence_observation": {
+                  "$ref": "#/$defs/object_42"
+                },
+                "required_features": {
+                  "items": {
+                    "maxLength": 32768,
+                    "type": "string"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "type": "array"
+                },
+                "runtime_source_sha256": {
+                  "$ref": "#/$defs/object_34"
+                },
+                "selinux_isolation": {
+                  "$ref": "#/$defs/object_37"
+                },
+                "server_id": {
+                  "const": 169716995
+                },
+                "server_name": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "server_type": {
+                  "maxLength": 32768,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "architecture",
+                "backend_nftables_owner_agreement",
+                "classification",
+                "effective_backend_authority",
+                "evidence_index_sha256",
+                "final_boot_id",
+                "final_configuration_sha256",
+                "final_labels",
+                "final_processes",
+                "fresh_ssh_host_identity",
+                "guest_authority_admission_sha256",
+                "installed_behavior_cases",
+                "installed_haproxy_binary_sha256",
+                "installed_package_provenance",
+                "installed_systemd_verification",
+                "location",
+                "os_release",
+                "policy_withdrawal_and_recovery",
+                "privacy",
+                "provider_image_id",
+                "provider_rebuild_action_id",
+                "quadlet_authority",
+                "raw_evidence_sha256",
+                "reboot_persistence_observation",
+                "required_features",
+                "runtime_source_sha256",
+                "selinux_isolation",
+                "server_id",
+                "server_name",
+                "server_type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "architecture": {
+                  "const": "x86_64"
+                },
+                "backend_nftables_owner_agreement": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "classification": {
+                  "const": "REAL_REFERENCE_HOST_QUALIFIED"
+                },
+                "effective_backend_authority": {
+                  "items": {
+                    "$ref": "#/$defs/object_2"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "evidence_index_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "final_boot_id": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "final_configuration_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "final_labels": {
+                  "$ref": "#/$defs/object_3"
+                },
+                "final_processes": {
+                  "$ref": "#/$defs/object_44"
+                },
+                "fresh_ssh_host_identity": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "guest_authority_admission_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "installed_behavior_cases": {
+                  "$ref": "#/$defs/object_20"
+                },
+                "installed_haproxy_binary_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "installed_package_provenance": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/object_21"
+                      },
+                      {
+                        "$ref": "#/$defs/object_22"
+                      }
+                    ]
+                  },
+                  "maxItems": 24,
+                  "minItems": 24,
+                  "type": "array"
+                },
+                "installed_systemd_verification": {
+                  "$ref": "#/$defs/object_23"
+                },
+                "location": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "os_release": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "policy_withdrawal_and_recovery": {
+                  "$ref": "#/$defs/object_24"
+                },
+                "privacy": {
+                  "$ref": "#/$defs/object_29"
+                },
+                "provider_image_id": {
+                  "const": 245249370
+                },
+                "provider_rebuild_action_id": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "quadlet_authority": {
+                  "$ref": "#/$defs/object_31"
+                },
+                "raw_evidence_sha256": {
+                  "$ref": "#/$defs/object_45"
+                },
+                "reboot_persistence_observation": {
+                  "$ref": "#/$defs/object_48"
+                },
+                "required_features": {
+                  "items": {
+                    "maxLength": 32768,
+                    "type": "string"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "type": "array"
+                },
+                "runtime_source_sha256": {
+                  "$ref": "#/$defs/object_34"
+                },
+                "selinux_isolation": {
+                  "$ref": "#/$defs/object_37"
+                },
+                "server_id": {
+                  "const": 163717938
+                },
+                "server_name": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "server_type": {
+                  "maxLength": 32768,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "architecture",
+                "backend_nftables_owner_agreement",
+                "classification",
+                "effective_backend_authority",
+                "evidence_index_sha256",
+                "final_boot_id",
+                "final_configuration_sha256",
+                "final_labels",
+                "final_processes",
+                "fresh_ssh_host_identity",
+                "guest_authority_admission_sha256",
+                "installed_behavior_cases",
+                "installed_haproxy_binary_sha256",
+                "installed_package_provenance",
+                "installed_systemd_verification",
+                "location",
+                "os_release",
+                "policy_withdrawal_and_recovery",
+                "privacy",
+                "provider_image_id",
+                "provider_rebuild_action_id",
+                "quadlet_authority",
+                "raw_evidence_sha256",
+                "reboot_persistence_observation",
+                "required_features",
+                "runtime_source_sha256",
+                "selinux_isolation",
+                "server_id",
+                "server_name",
+                "server_type"
+              ],
+              "type": "object"
+            }
+          ],
+          "type": "array"
+        },
+        "observed_date": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "original_signed_source_head": {
+          "const": "52c6cdc1a1844901bbf5db6d2ac1d816ee745b35"
+        },
+        "provider_control": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "provider_create_verified": {
+          "const": false
+        },
+        "provider_project_display_identity": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "provider_rebuild_verified": {
+          "const": true
+        },
+        "public_controller_inputs_sha256": {
+          "$ref": "#/$defs/object_50"
+        },
+        "pull_request": {
+          "const": 304
+        },
+        "remediation_qualification": {
+          "items": {
+            "$ref": "#/$defs/object_75"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "repository": {
+          "const": "SecPal/deployment"
+        },
+        "retention": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0"
+        },
+        "scope": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "target_sha": {
+          "const": "5022cf00e7d71ea406b41b93166149ffcb3115fc"
+        }
+      },
+      "required": [
+        "$comment",
+        "accepted_host_owner_source",
+        "delivery_issue",
+        "evidence_kind",
+        "fixture",
+        "hosts",
+        "observed_date",
+        "original_signed_source_head",
+        "provider_control",
+        "provider_create_verified",
+        "provider_project_display_identity",
+        "provider_rebuild_verified",
+        "public_controller_inputs_sha256",
+        "pull_request",
+        "remediation_qualification",
+        "repository",
+        "retention",
+        "schema_version",
+        "scope",
+        "target_sha"
+      ],
+      "type": "object"
+    },
+    "object_8": {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/object_7"
+        },
+        "frontend": {
+          "$ref": "#/$defs/object_7"
+        },
+        "generation": {
+          "$ref": "#/$defs/object_6"
+        }
+      },
+      "required": ["api", "frontend", "generation"],
+      "type": "object"
+    },
+    "object_9": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/object_6"
+        },
+        "before": {
+          "$ref": "#/$defs/object_6"
+        },
+        "inflight_body": {
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "inflight_status": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reload": {
+          "$ref": "#/$defs/object_3"
+        }
+      },
+      "required": [
+        "after",
+        "before",
+        "inflight_body",
+        "inflight_status",
+        "reload"
+      ],
+      "type": "object"
+    },
+    "historical_runtime_source": {
+      "additionalProperties": false,
+      "properties": {
+        "haproxy-config": {
+          "const": "e1e478b27b6c0090a6b8fcbe210f32dd1ed5ec3822f3a334067cc744c4f4119e"
+        },
+        "haproxy_base_contract.py": {
+          "const": "0e411903c7a92abcb67d6ea13bf6038b391065abef30fd2ea5da9d1af94ae533"
+        },
+        "haproxy_config_lifecycle.py": {
+          "const": "b28209aa8499c3ec272e3177c2b651ad1364c065cef21360c3c4b6d99689224c"
+        },
+        "haproxy_supply_contract.py": {
+          "const": "423b1a9a50b520deee9dcc982a67ee5086b613ff02ab1690016068a6cedfdc63"
+        },
+        "product_backend_contract.py": {
+          "const": "585459cf79cd950e4a47ed8ffbb0094a5d54664dd66fd6f5b6291236557fd56e"
+        },
+        "secpal_haproxy_runtime.cil": {
+          "const": "1a35f1eec1766881b5c1c9d987770ae8d627c0f74d5fdf56b8d0121e1d0f2b82"
+        }
+      },
+      "required": [
+        "haproxy-config",
+        "haproxy_base_contract.py",
+        "haproxy_config_lifecycle.py",
+        "haproxy_supply_contract.py",
+        "product_backend_contract.py",
+        "secpal_haproxy_runtime.cil"
+      ],
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/object_76",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

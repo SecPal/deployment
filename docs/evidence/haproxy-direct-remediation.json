@@ -1,0 +1,46 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "schema_version": "1.0",
+  "evidence_kind": "BOUNDED_DIRECT_REMEDIATION_OBSERVATIONS",
+  "repository": "SecPal/deployment",
+  "delivery_issue": 220,
+  "primary_pr": 307,
+  "reviewed_head": "39af5e36af7f6c7794814aa01d18cb63342c2a94",
+  "installed_source_sha256": {
+    "/usr/local/libexec/secpal/haproxy-direct-policy": "435a8071c4d196af0ad710384627effdb058cd552a0aff87d1c811429468d2af",
+    "/usr/local/libexec/secpal/haproxy_direct_contract.py": "57d79a90a4b7351e343dff1ada07b7943a03a1c13f515cfd6b89555743351cdb",
+    "/etc/systemd/system/secpal-direct-policy.service": "1e5dbc11215cdc059f6f8431fb0c74877c3edbb5f2c7d58327b24630985fea00"
+  },
+  "server_id": 163965414,
+  "haproxy_package": "haproxy|0|3.0.5|6.el10_2.2|x86_64",
+  "haproxy_binary_sha256": "61b90cd8d83713880c11ee82c9e3d9ae73662ebdef1244695f63338df7dc05ed",
+  "results": {
+    "fresh-original-SELinux-and-backend-baseline": "PASS",
+    "old-startup-actual-two-family-generation": "PASS",
+    "fail-first-reviewed-policy-stop-leaves-owned-state": "PASS",
+    "new-startup-actual-two-family-generation": "PASS",
+    "active-withdrawal-cannot-remove-isolation": "PASS",
+    "corrected-graceful-reload-actual-two-family-generation": "PASS",
+    "managed-nftables-restart-recreates-policy-before-listener-resume": "PASS",
+    "corrected-post-firewall-restart-actual-two-family-generation": "PASS",
+    "corrected-stop-quiesces-listeners-and-removes-only-owned-state": "PASS",
+    "failed-start-with-invalid-serving-input-withdraws-without-input-authority": "PASS",
+    "corrected-start-after-empty-state-actual-two-family-generation": "PASS",
+    "installed-new-source-identity": "PASS",
+    "restored-baseline-actual-two-family-generation": "PASS",
+    "restored-original-files-policy-listeners-and-SELinux": "PASS",
+    "temporary-private-guest-administration-revoked": "PASS"
+  },
+  "real_runtime_tests": 28,
+  "pinned_framework_tests": 4,
+  "public_render_generation_unit_unchanged": true,
+  "new_public_activation": false,
+  "temporary_admin_revoked": true,
+  "external_public_ports_closed": true,
+  "artifact_sha256": {
+    "private_qualification_log": "46b8b807ac5c59ec69978a49d29c6edc307462eddb7c6c2c41dee6926f693163",
+    "private_outcome": "4ba8a070ad016ca7c3129b8e4ba852b3ecf3a5176d0724a0d3ac46f553c69842",
+    "render_equivalence": "101dc9b295767d98d180e36e594cbbd113e5d557b3d7bbe14e8d8dd9fa5c1c4f"
+  },
+  "scope": "Fresh private CX23 regression/correction and effective managed service lifecycle. Earlier public and ARM64 observations retain their original d48 source binding. Runtime rendering is byte-identical on qualified valid HTTP/TLS IPv4/IPv6 single/HA inputs; current admission is narrower. No new public authorization or activation, HA fleet or certificate lifecycle claim."
+}

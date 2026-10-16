@@ -7,9 +7,9 @@
     "test:integration:browser": "playwright test --config playwright.integration.config.js"
   },
   "devDependencies": {
-    "@playwright/test": "1.62.0"
+    "@playwright/test": "1.64.0"
   },
   "engines": {
-    "node": "22.22.2"
+    "node": "26.11.1"
   }
 }

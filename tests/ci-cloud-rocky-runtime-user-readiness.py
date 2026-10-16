@@ -133,11 +133,13 @@ class RockyRuntimeUserReadinessTests(unittest.TestCase):
         self.assertEqual("33189464175", document["access_run_id"])
         self.assertEqual("22222222-2222-4222-8222-222222222222", document["boot_id"])
 
-    def test_observer_uses_exact_non_mutating_cross_user_control_seam(self) -> None:
+    def test_observer_uses_exact_non_mutating_direct_runtime_user_control_seam(self) -> None:
         completed = subprocess.CompletedProcess([], 0)
         socket_metadata = mock.Mock(st_mode=stat.S_IFSOCK | 0o600)
         with mock.patch.object(
-            self.module.pwd, "getpwnam", return_value=mock.Mock(pw_uid=994)
+            self.module.pwd,
+            "getpwnam",
+            return_value=mock.Mock(pw_uid=994, pw_dir="/home/secpal-runtime"),
         ), mock.patch.object(
             self.module.os, "stat", return_value=socket_metadata
         ), mock.patch.object(
@@ -151,8 +153,19 @@ class RockyRuntimeUserReadinessTests(unittest.TestCase):
         )
         self.assertEqual(
             [
+                "runuser",
+                "--user",
+                "secpal-runtime",
+                "--",
+                "env",
+                "-u",
+                "CONTAINER_HOST",
+                "-u",
+                "CONTAINER_CONNECTION",
+                "HOME=/home/secpal-runtime",
+                "XDG_RUNTIME_DIR=/run/user/994",
+                "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/994/bus",
                 "systemctl",
-                "--machine=secpal-runtime@.host",
                 "--user",
                 "show-environment",
             ],
@@ -166,7 +179,9 @@ class RockyRuntimeUserReadinessTests(unittest.TestCase):
         completed = subprocess.CompletedProcess([], 0)
         regular_metadata = mock.Mock(st_mode=stat.S_IFREG | 0o600)
         with mock.patch.object(
-            self.module.pwd, "getpwnam", return_value=mock.Mock(pw_uid=994)
+            self.module.pwd,
+            "getpwnam",
+            return_value=mock.Mock(pw_uid=994, pw_dir="/home/secpal-runtime"),
         ), mock.patch.object(
             self.module.os, "stat", return_value=regular_metadata
         ), mock.patch.object(
@@ -193,7 +208,9 @@ class RockyRuntimeUserReadinessTests(unittest.TestCase):
         completed = subprocess.CompletedProcess([], 0)
         socket_metadata = mock.Mock(st_mode=stat.S_IFSOCK | 0o600)
         with mock.patch.object(
-            self.module.pwd, "getpwnam", return_value=mock.Mock(pw_uid=994)
+            self.module.pwd,
+            "getpwnam",
+            return_value=mock.Mock(pw_uid=994, pw_dir="/home/secpal-runtime"),
         ), mock.patch.object(
             self.module.os, "stat", return_value=socket_metadata
         ), mock.patch.object(

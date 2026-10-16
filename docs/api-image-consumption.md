@@ -10,14 +10,15 @@ by canonical OCI index digest. It is a test-only, loopback-only, disposable
 integration contract, not a production deployment.
 
 The Docker/Compose language below records the completed Phase C evidence. The
-active D.1a runner preserves the same OCI and attestation verifier, uses a new
+active disposable runner preserves the same OCI and attestation verifier, uses a new
 mode-`0700` empty Podman authentication file for each pull, stages the exact
 digest in rootless local storage, and starts only native Quadlet units with
 `Pull=never`. The historical evidence is not rewritten as Podman evidence.
 
 ## Canonical identity
 
-The only approved API image reference is:
+The approved API image reference for the existing application integration
+fixture is:
 
 ```text
 ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e
@@ -42,6 +43,33 @@ The deployment integration runner repeats the anonymous digest pull and
 requires the fixed-identity attestation verification before it permits any
 API-based role to execute.
 
+The separate native PostgreSQL qualifier and its #81 consumer use the scoped
+runtime identity below. Existing integration fixture consumers retain their
+approved digest and evidence contract.
+
+## Native PostgreSQL application identity
+
+The trusted native PostgreSQL qualification contract consumes an existing
+accepted API runtime that supplies verified PHP/PDO transport and separate
+application readiness/liveness. It fixes
+`ghcr.io/secpal/api@sha256:ac97416f3feac5c57204421059105389c9add2cfbcda1b063eadf4c6ad7647ab`
+from accepted API source `7da77556e7a4896940b6c50ccf6ba2c3fb9a8653`, publisher
+run `36992636604`, attempt `1`, workflow `publish-container.yml`, on protected
+`main`. Its architecture identities are:
+
+- `linux/amd64`: `sha256:8d0d960306c6989be55a9c7bc41937699e55dbdbc6193bff870f38a1b19605a3`
+- `linux/arm64`: `sha256:ed91caa822e189187d57e0ff322c54e3b9837aa679cc087015933dcda9a3be7e`
+
+The trusted controller owns this identity; #81 cannot select another runtime.
+The declaration binds it for the #81 consumer. The qualifier verifies its OCI
+index and GitHub artifact attestation before a rootless application executes,
+using the same anonymous bundle retrieval and fixed GitHub CLI authority as
+the integration fixture. See
+[native PostgreSQL qualification](postgresql-qualification.md) for application
+observations, evidence admission and cleanup.
+
+## Existing fixture verification
+
 The image pull uses a new mode-`0700`, empty `DOCKER_CONFIG` directory and
 removes inherited `DOCKER_AUTH_CONFIG` only from the exact `docker pull`
 process. The runner therefore cannot reuse either file-backed or environment-
@@ -52,7 +80,7 @@ Linux AMD64 release archive and verified its published SHA-256 checksum
 `a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112`
 before use. The integration runner requires that exact version, checks for
 `gh attestation verify`, and fails closed before the API pull if either contract
-does not match. The active D.1a hosted matrix also verifies the official ARM64
+does not match. The active hosted matrix also verifies the official ARM64
 archive checksum
 `73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5`.
 Neither path introduces a GitHub token.
@@ -116,7 +144,7 @@ python3 scripts/quadlet-integration.py
 
 Review and merge remain required. There is no automatic move to a newest image.
 
-Every digest update requires a new reviewed deployment pull request.
+Every integration fixture digest update requires a new reviewed deployment pull request.
 
 Rollback also requires a new reviewed pull request. It sets the API reference
 to a previously recorded and freshly reverified digest and reruns the same
@@ -132,7 +160,7 @@ Integration run `31264562902`; the final dual-image evidence is recorded in
 [`frontend-image-consumption.md`](frontend-image-consumption.md).
 
 At Phase C completion, Phase D had not started. D.1 now defines the production
-host contract and D.1a provides only disposable Podman/Quadlet integration
-parity. No production orchestration, cloud resource, DNS, TLS, production
+host contract and the active runner provides only disposable Podman/Quadlet
+integration parity. No production orchestration, cloud resource, DNS, TLS, production
 secret, persistent production data, backup, restore, or managed-hosting
 automation is implemented here.

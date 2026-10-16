@@ -8,7 +8,7 @@ SPDX-License-Identifier: CC0-1.0
 ## Purpose and ownership
 
 This document defines the public provider-neutral capability vocabulary used
-to admit self-hosted hardware and to qualify current provider products. The
+to qualify a declared workload envelope on self-hosted hardware or current provider products. The
 canonical machine-readable contract is
 [`schemas/capacity-qualification.schema.json`](../../schemas/capacity-qualification.schema.json).
 The capacity qualification contract consists of that versioned schema, the
@@ -20,7 +20,7 @@ invariants. The probe manifest owns the exercised workload and storage demand.
 Schema validation alone never establishes PASS. This document explains those
 semantics without creating a second definition.
 
-The model keeps five infrastructure truths independent:
+The model keeps five infrastructure dimensions independent:
 
 ```text
 capacity_profile + compute_isolation + cpu_architecture
@@ -36,12 +36,16 @@ owned by ADR-022.
 
 ## Initial capacity profile
 
-Schema version 1 defines only `M`. The identifier was selected from the small
-ordered `S`/`M`/`L`/`XL` vocabulary because the repository has a defensible
-first production planning envelope but does not yet have evidence for a lower
-or larger envelope. `S`, `L`, and `XL` are not accepted placeholders. Adding
-one requires measured workload evidence and a reviewed schema revision; a
-provider product cannot introduce one implicitly.
+Schema version 1 defines only the optional planning profile `M`. Its resource
+figures are conservative preliminary estimates, not measured universal
+minimums. It is a configurable operating-envelope choice through the existing
+inventory, separate from functional Host Conformance and Enrollment. No host
+must qualify `M` merely to prove the cryptographic enrollment protocol.
+
+`S`, `L` and `XL` remain undefined. Adding a production workload claim requires
+measured workload evidence and review, not substitution of smaller arbitrary
+numbers. The validator admits only the bounded reviewed probe evidence described
+below; it does not assert customer capacity, an SLA or production acceptance.
 
 For PASS, `M` requires the contract-owned floors below:
 
@@ -65,6 +69,23 @@ field. These are conservative admission floors derived from the current
 four-CPU, 8-GiB, 100-GiB, and one-million-inode planning envelope. They are not
 empirically proven universal workload minima, customer sizing, or an assertion
 that every workload fits `M`.
+
+## Accepted observations and their limits
+
+The completed [#248 test matrix](https://github.com/SecPal/deployment/issues/248#issuecomment-6214869840)
+demonstrates bounded non-production application operation on the three existing
+Hetzner hosts. CX23 ran the five roles on two logical CPUs, with at least
+2,270 MiB available RAM during browser acceptance, about 35.5 GB free disk at
+final read-back, zero product-runtime OOM events and 20/20 browser checks.
+A 20-request, four-concurrent readiness probe passed 20/20 with p95 237 ms.
+An earlier 80-request burst had 21 non-200 responses whose individual original
+codes were not retained; a follow-up observed the existing 60/minute limiter.
+Kernel memory PSI was unavailable.
+
+These observations do not run this contract's 600-second reserved-headroom
+probe, establish customer capacity, qualify `M`, prove HA/recovery or authorize
+removal of storage reserves. They do disprove treating the larger preliminary
+planning figures as prerequisites for all functional test operation.
 
 ## Reviewed workload and storage probes
 

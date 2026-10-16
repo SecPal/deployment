@@ -9,11 +9,12 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
-- A provider-neutral `M` capacity envelope with independent compute-isolation,
-  CPU-architecture, persistent-storage, and ADR-022 topology dimensions, plus
-  strict trusted-source admission and independently revisioned workload/storage
-  probes for provider products and self-hosted hardware without provider
-  selection or managed placement policy.
+- Provider-neutral capacity qualification, separated from functional host
+  conformance and inventory-selected operating reserves.
+
+- A bounded, negative-only AVC-correlation diagnostic projection that preserves
+  closed rejection facts for independent post-cleanup verification without
+  retaining audit records, command output, journals, or host state.
 - The authoritative production persistence matrix, deterministic rootless host
   ownership mapping, fail-closed state/secret preparation, and checked native
   Quadlet bind declarations for PostgreSQL, application storage, and Valkey.
@@ -107,6 +108,9 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Corrected isolated DIRECT Viewer TLS dependency admission: DNF/RPM bindings
+  load from verified ordinary Rocky packages before the complete Certbot gate,
+  retaining `python3 -I -S`, exact supply identities and fail-closed isolation.
 - Installed and admitted the required `catatonit` package in disposable Debian
   cloud hosts so D.1a runtime admission no longer fails before image staging
   because the required init binary is missing. The local integration runtime

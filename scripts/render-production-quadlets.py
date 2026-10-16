@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Render the production rootless-Podman Quadlet declarations from D.2."""
+"""Render the retained production rootless-Podman product-role Quadlets."""
 
 from __future__ import annotations
 
@@ -19,14 +19,17 @@ if os.fspath(SCRIPT_DIRECTORY) not in sys.path:
     sys.path.insert(0, os.fspath(SCRIPT_DIRECTORY))
 
 from integration_runtime_contract import (  # noqa: E402
-    API_IMAGE,
     FRONTEND_IMAGE,
-    POSTGRES_IMAGE,
-    VALKEY_IMAGE,
     role_execution_spec,
     role_spec,
     tmpfs_mounts,
 )
+
+sys.path.insert(0, str(SCRIPT_DIRECTORY / 'ci-cloud'))
+from postgresql_qualification_contract import APPLICATION_RUNTIME  # noqa: E402
+from product_backend_contract import POLICY_CHECK_COMMAND, publish_lines  # noqa: E402
+
+API_IMAGE = APPLICATION_RUNTIME["image"]
 
 
 def _load_state_module():
@@ -50,22 +53,16 @@ APPLICATION_ENVIRONMENT = (
     "Environment=APP_DEBUG=false",
     "Environment=APP_ENV=production",
     "Environment=APP_NAME=SecPal",
-    "Environment=CACHE_STORE=redis",
+    "Environment=CACHE_STORE=database",
     "Environment=DB_CONNECTION=pgsql",
     "Environment=DB_DATABASE=secpal",
-    "Environment=DB_HOST=postgres",
+    "Environment=DB_HOST=db.secpal.internal",
     "Environment=DB_PORT=5432",
-    "Environment=DB_USERNAME=secpal",
+    "Environment=DB_SSLMODE=verify-full",
+    "Environment=DB_SSLROOTCERT=/run/secpal/secrets/database/postgres-ca.crt",
     "Environment=FILESYSTEM_DISK=local",
     "Environment=LOG_CHANNEL=stderr",
-    "Environment=QUEUE_CONNECTION=redis",
-    "Environment=REDIS_CLIENT=phpredis",
-    "Environment=REDIS_CACHE_DB=1",
-    "Environment=REDIS_DB=0",
-    "Environment=REDIS_HOST=valkey",
-    "Environment=REDIS_PORT=6379",
-    "Environment=REDIS_QUEUE=default",
-    "Environment=REDIS_QUEUE_CONNECTION=default",
+    "Environment=QUEUE_CONNECTION=database",
     "Environment=SESSION_DRIVER=database",
 )
 COMMON_PODMAN_ARGS = (
@@ -104,6 +101,8 @@ def common_container(
     contract: dict, role: str, image: str, *, instance: str | None = None
 ) -> list[str]:
     identity = role_spec(role)
+    uid = identity.uid
+    gid = identity.gid
     logs = contract["log_policy"]
     effective_role = instance or role
     container_name = f"secpal-{effective_role}"
@@ -112,8 +111,8 @@ def common_container(
         f"ContainerName={container_name}",
         f"Image={image}",
         "Pull=never",
-        f"User={identity.uid}",
-        f"Group={identity.gid}",
+        f"User={uid}",
+        f"Group={gid}",
         "ReadOnly=true",
         "ReadOnlyTmpfs=false",
         "DropCapability=all",
@@ -130,7 +129,7 @@ def common_container(
     ]
 
 
-def service(*, oneshot: bool = False) -> str:
+def service(*, oneshot: bool = False, backend: bool = False) -> str:
     validation = f"ExecStartPre={STATE_READY_COMMAND}"
     if oneshot:
         return section(
@@ -145,33 +144,40 @@ def service(*, oneshot: bool = False) -> str:
         )
     return section(
         "Service",
-        [validation, "Restart=on-failure", "RestartSec=2", "TimeoutStartSec=180"],
+        [*((f"ExecStartPre={POLICY_CHECK_COMMAND}",) if backend else ()),
+         validation, "Restart=on-failure", "RestartSec=2", "TimeoutStartSec=180"],
     )
 
 
 def build_native_lifecycle_fixture_unit(
     contract: dict, fixture_root: Path, instance: str
 ) -> str:
-    """Render a fixture-only probe from the production private-storage seam."""
-    private = contract["objects"]["private_application_storage"]
+    """Render disposable runtime evidence, independent of #99 Object Storage."""
     identity = role_spec("api")
-    source = fixture_root / private["location"].lstrip("/")
+    source = fixture_root / "state"
     lines = common_container(contract, "api", FRONTEND_IMAGE, instance=instance)
-    lines = [line for line in lines if not line.startswith(("LogDriver=", "LogOpt="))]
+    lines = [
+        line for line in lines
+        if not line.startswith(("LogDriver=", "LogOpt="))
+        and line != "Label=org.secpal.production=true"
+    ]
     lines.append("LogDriver=journald")
     lines.extend(
         (
             "Network=none",
-            f"Mount=type=bind,source={source},target=/app/storage/app/private,rw=true",
+            # One fixture container owns this disposable source; private MCS
+            # relabeling is appropriate. Production paths never use this probe.
+            f"Mount=type=bind,source={source},target=/fixture-state,rw=true,relabel=private",
             'Entrypoint=["/bin/sh"]',
-            'Exec=-c "if [ ! -f /app/storage/app/private/proof ]; then '
-            "printf persistence > /app/storage/app/private/proof; fi; exec sleep 300\"",
+            'Exec=-c "set -eu; if [ ! -f /fixture-state/proof ]; then '
+            "printf persistence > /fixture-state/proof; fi; exec sleep 300\"",
         )
     )
-    # This fixture deliberately omits state-ready: host-side fixture admission is
-    # separate, while the mounted path, target and API identity come from the
-    # production contract and role registry.
-    content = unit("SecPal D.2 native private-storage persistence proof")
+    # Only the reviewed non-root identity comes from the role registry. This
+    # POSIX bind lifecycle does not qualify a Self-Hosted Object Storage adapter.
+    content = unit("SecPal native rootless runtime lifecycle proof").replace(
+        "PartOf=secpal.target\n", ""
+    )
     content += section("Container", lines)
     content += section("Service", ["Restart=no", "TimeoutStartSec=60"])
     if f"User={identity.uid}" not in content or f"Group={identity.gid}" not in content:
@@ -179,13 +185,20 @@ def build_native_lifecycle_fixture_unit(
     return SPDX_HEADER + content
 
 
-def api_secret_mounts(contract: dict) -> list[str]:
+def api_secret_mounts(contract: dict, role: str) -> list[str]:
     delivery = contract["secret_delivery"]["api"]
-    return [
+    mounts = [
         "Mount=type=bind,source="
         f"{delivery['directory']}/{name},target=/run/secpal/secrets/api/{name},ro=true"
         for name in delivery["files"]
     ]
+    database = contract['secret_delivery']['migration' if role == 'migrate' else 'runtime']
+    mounts.extend(
+        f"Mount=type=bind,source={database['directory']}/{name},"
+        f"target=/run/secpal/secrets/database/{name},ro=true"
+        for name in database['files']
+    )
+    return mounts
 
 
 def api_container(contract: dict, role: str) -> str:
@@ -194,14 +207,15 @@ def api_container(contract: dict, role: str) -> str:
     execution = role_execution_spec(role)
     if execution is None or execution.command is None:
         raise ValueError(f"production role {role} has no reviewed execution contract")
-    dependencies = ("secpal-migrate.service",) if role != "migrate" else (
-        "secpal-postgres.service",
-        "secpal-valkey.service",
+    dependencies = (
+        ("secpal-migrate.service",)
+        if role != "migrate"
+        else ("secpal-state-ready.service",)
     )
     lines = common_container(contract, role, API_IMAGE)
     lines.extend(APPLICATION_ENVIRONMENT)
     execution_command = (
-        ("php", "artisan", "migrate", "--force")
+        ("php", "/run/secpal/bootstrap/production-migrate.php")
         if role == "migrate"
         else execution.command
     )
@@ -217,42 +231,31 @@ def api_container(contract: dict, role: str) -> str:
             "target=/usr/local/etc/php/conf.d/99-secpal-secrets.ini,ro=true",
             "Mount=type=bind,source=/srv/secpal/config/runtime/production-secret-bootstrap.php,"
             "target=/run/secpal/bootstrap/production-secret-bootstrap.php,ro=true",
-            *api_secret_mounts(contract),
+            *api_secret_mounts(contract, role),
+            *(("Mount=type=bind,source=/srv/secpal/config/runtime/production-migrate.php,"
+               "target=/run/secpal/bootstrap/production-migrate.php,ro=true",)
+              if role == "migrate" else ()),
             f"Mount=type=bind,source={private},target=/app/storage/app/private,rw=true",
             f"Mount=type=bind,source={public},target=/app/storage/app/public,rw=true",
             *role_tmpfs,
-            "Network=secpal-application.network",
-            *(("Network=secpal-edge.network",) if role == "api" else ()),
-            f"NetworkAlias={role}",
+            "Network=pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1",
+            "AddHost=db.secpal.internal:169.254.81.1",
         )
     )
     if role == "api":
+        lines.extend(publish_lines(role))
         health = role_spec(role).health
         if health is None:
             raise ValueError("API health contract is missing")
         lines.extend(health.quadlet_lines())
     return unit(
         f"SecPal production {role}", dependencies, oneshot=role == "migrate"
-    ) + section("Container", lines) + service(oneshot=role == "migrate")
+    ) + section("Container", lines) + service(oneshot=role == "migrate", backend=role == "api")
 
 
 def build_units(contract: dict) -> dict[str, str]:
-    postgres_path = contract["objects"]["postgresql_data"]["location"]
-    valkey_path = contract["objects"]["valkey_state"]["location"]
-    postgres_secret = contract["secret_delivery"]["postgres"]["directory"]
-    valkey_secret = contract["secret_delivery"]["valkey"]["directory"]
     units: dict[str, str] = {}
 
-    units["secpal-application.network"] = unit(
-        "SecPal private production application network"
-    ) + section(
-        "Network",
-        [
-            "NetworkName=secpal-application",
-            "Internal=true",
-            "Label=org.secpal.production=true",
-        ],
-    )
     units["secpal-edge.network"] = unit(
         "SecPal private production edge network"
     ) + section(
@@ -264,75 +267,6 @@ def build_units(contract: dict) -> dict[str, str]:
         ],
     )
 
-    postgres_init = common_container(
-        contract, "postgres", POSTGRES_IMAGE, instance="postgres-init"
-    )
-    postgres_init.extend(
-        (
-            'Entrypoint=["/bin/sh","/run/secpal/bootstrap/production-postgres-entrypoint.sh"]',
-            "Exec=initialize",
-            "Mount=type=bind,source=/srv/secpal/config/runtime/production-postgres-entrypoint.sh,"
-            "target=/run/secpal/bootstrap/production-postgres-entrypoint.sh,ro=true",
-            f"Mount=type=bind,source={postgres_secret}/password,"
-            "target=/run/secpal-secret/password,ro=true",
-            f"Mount=type=bind,source={postgres_path},target=/var/lib/postgresql/data,rw=true",
-            *tmpfs_mounts("postgres"),
-            "Network=none",
-        )
-    )
-    units["secpal-postgres-init.container"] = unit(
-        "Initialize SecPal production PostgreSQL", ("secpal-state-ready.service",), oneshot=True
-    ) + section("Container", postgres_init) + service(oneshot=True)
-
-    postgres = common_container(contract, "postgres", POSTGRES_IMAGE)
-    postgres.extend(
-        (
-            'Entrypoint=["/bin/sh","/run/secpal/bootstrap/production-postgres-entrypoint.sh"]',
-            "Exec=run",
-            "Mount=type=bind,source=/srv/secpal/config/runtime/production-postgres-entrypoint.sh,"
-            "target=/run/secpal/bootstrap/production-postgres-entrypoint.sh,ro=true",
-            f"Mount=type=bind,source={postgres_path},target=/var/lib/postgresql/data,rw=true",
-            *tmpfs_mounts("postgres"),
-            "Network=secpal-application.network",
-            "NetworkAlias=postgres",
-            "HealthCmd=pg_isready -U secpal -d secpal",
-            "HealthInterval=5s",
-            "HealthTimeout=3s",
-            "HealthRetries=20",
-            "HealthStartPeriod=10s",
-            "HealthOnFailure=kill",
-            "Notify=healthy",
-        )
-    )
-    units["secpal-postgres.container"] = unit(
-        "SecPal production PostgreSQL", ("secpal-postgres-init.service",)
-    ) + section("Container", postgres) + service()
-
-    valkey = common_container(contract, "valkey", VALKEY_IMAGE)
-    valkey.extend(
-        (
-            'Entrypoint=["/bin/sh","/run/secpal/bootstrap/production-valkey-entrypoint.sh"]',
-            "Mount=type=bind,source=/srv/secpal/config/runtime/production-valkey-entrypoint.sh,"
-            "target=/run/secpal/bootstrap/production-valkey-entrypoint.sh,ro=true",
-            f"Mount=type=bind,source={valkey_secret}/password,"
-            "target=/run/secpal-secret/password,ro=true",
-            f"Mount=type=bind,source={valkey_path},target=/data,rw=true",
-            *(mount for mount in tmpfs_mounts("valkey") if "destination=/data," not in mount),
-            "Network=secpal-application.network",
-            "NetworkAlias=valkey",
-            "HealthCmd=valkey-cli ping 2>&1 | grep -q 'NOAUTH Authentication required.'",
-            "HealthInterval=5s",
-            "HealthTimeout=3s",
-            "HealthRetries=20",
-            "HealthStartPeriod=5s",
-            "HealthOnFailure=kill",
-            "Notify=healthy",
-        )
-    )
-    units["secpal-valkey.container"] = unit(
-        "SecPal production Valkey", ("secpal-state-ready.service",)
-    ) + section("Container", valkey) + service()
-
     for role in API_ROLES:
         units[f"secpal-{role}.container"] = api_container(contract, role)
 
@@ -341,19 +275,19 @@ def build_units(contract: dict) -> dict[str, str]:
         (
             *tmpfs_mounts("frontend"),
             "Network=secpal-edge.network",
+            *publish_lines("frontend"),
             *role_spec("frontend").health.quadlet_lines(),
         )
     )
     units["secpal-frontend.container"] = unit(
         "SecPal production frontend", ("secpal-state-ready.service",)
-    ) + section("Container", frontend) + service()
+    ) + section("Container", frontend) + service(backend=True)
 
     units["secpal-state-ready.service"] = section(
         "Unit",
         [
             "Description=Validate SecPal production state before product startup",
-            "Before=secpal-postgres-init.service secpal-postgres.service "
-            "secpal-valkey.service secpal-migrate.service",
+            "Before=secpal-migrate.service",
             "PartOf=secpal.target",
         ],
     ) + section(
@@ -378,21 +312,78 @@ def build_units(contract: dict) -> dict[str, str]:
     return dict(sorted((name, SPDX_HEADER + content) for name, content in units.items()))
 
 
+def build_host_units(contract: dict) -> dict[str, str]:
+    """Native firewall ownership; DB loss must not stop the user manager."""
+    uid = contract['rootless_mapping']['service_uid']
+    service = section('Unit', [
+        'Description=SecPal rootless PostgreSQL loopback boundary',
+        'Requires=nftables.service', 'After=nftables.service', 'PartOf=nftables.service',
+        f'Before=user@{uid}.service',
+    ]) + section('Service', [
+        'Type=oneshot', 'RemainAfterExit=yes',
+        'ExecStartPre=/usr/sbin/nft --check create table inet secpal_postgresql',
+        'ExecStartPre=/usr/sbin/nft --check -f /etc/nftables/secpal-postgresql.nft',
+        'ExecStart=/usr/sbin/nft -f /etc/nftables/secpal-postgresql.nft',
+        'ExecStop=/usr/sbin/nft delete table inet secpal_postgresql',
+        'TimeoutStartSec=30', 'TimeoutStopSec=30', 'UMask=0077',
+    ]) + section('Install', ['WantedBy=multi-user.target'])
+    manager = section('Unit', [
+        'Requires=secpal-postgresql-loopback.service',
+        'BindsTo=secpal-postgresql-loopback.service',
+        'PartOf=secpal-postgresql-loopback.service',
+        'After=secpal-postgresql-loopback.service postgresql.service',
+        'Wants=postgresql.service',
+    ])
+    return {
+        'secpal-postgresql-loopback.service': SPDX_HEADER + service,
+        # The distribution reload flushes all tables without restarting dependents.
+        # Reject reload; native stop/start ordering enforces the tested boundary.
+        'nftables.service.d/secpal-postgresql.conf': SPDX_HEADER + section('Service', ['ExecReload=']),
+        f'user@{uid}.service.d/secpal-postgresql.conf': SPDX_HEADER + manager,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument("--quadlet-output", type=Path, required=True)
     parser.add_argument("--systemd-output", type=Path, required=True)
+    parser.add_argument("--host-systemd-output", type=Path)
     args = parser.parse_args()
     contract = load_contract(args.contract)
+    # Admit caller-supplied roots and ancestry before resolve() erases links.
+    for supplied in (args.quadlet_output, args.systemd_output, args.host_systemd_output):
+        if supplied is not None and any(path.is_symlink() for path in (supplied, *supplied.parents)):
+            parser.error("unexpected production output; output roots and ancestors must not be symlinks")
     quadlet_output = args.quadlet_output.resolve()
     systemd_output = args.systemd_output.resolve()
-    quadlet_output.mkdir(parents=True, exist_ok=True)
-    systemd_output.mkdir(parents=True, exist_ok=True)
+    outputs: dict[Path, dict[str, str]] = {}
     for name, content in build_units(contract).items():
         output = systemd_output if name.endswith((".service", ".target")) else quadlet_output
-        destination = output / name
-        destination.write_text(content, encoding="utf-8")
+        outputs.setdefault(output, {})[name] = content
+    if args.host_systemd_output is not None:
+        outputs.setdefault(args.host_systemd_output.resolve(), {}).update(build_host_units(contract))
+    # Admit every complete staging inventory before the first mutation. The
+    # host inventory has one declared drop-in directory; no other override or
+    # retired service is allowed. Preserve unexpected entries, never prune.
+    for output, declarations in outputs.items():
+        files = {Path(name) for name in declarations}
+        directories = {parent for name in files for parent in name.parents if parent != Path(".")}
+        if (output.exists() and not output.is_dir()) or any(
+            entry.is_symlink()
+            or (entry.relative_to(output) not in directories if entry.is_dir()
+                else entry.relative_to(output) not in files or not entry.is_file())
+            for entry in output.rglob("*")
+        ):
+            parser.error(
+                "unexpected production output; use a clean dedicated output "
+                "directory or explicitly disposition existing entries"
+            )
+    for output, declarations in outputs.items():
+        for name, content in declarations.items():
+            destination = output / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(content, encoding="utf-8")
     return 0
 
 

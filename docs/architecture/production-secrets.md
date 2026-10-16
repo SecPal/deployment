@@ -31,42 +31,35 @@ service account, mode `0710`, and have no named or default ACL. Files are
 read-only bind mounts with one link and no symlink. Each consumer gets individual
 files, not the host secret root:
 
-| Delivery                                    | Host file owner and mode | Consumers                             |
-| ------------------------------------------- | ------------------------ | ------------------------------------- |
-| `/run/secpal/secrets/api/app-key`           | `110000:210000`, `0400`  | Migrate, API, both workers, scheduler |
-| `/run/secpal/secrets/api/app-previous-keys` | `110000:210000`, `0400`  | Same API roles                        |
-| `/run/secpal/secrets/api/tenant-kek`        | `110000:210000`, `0600`  | Same API roles                        |
-| `/run/secpal/secrets/api/postgres-password` | `110000:210000`, `0400`  | Same API roles                        |
-| `/run/secpal/secrets/postgres/password`     | `100998:200998`, `0400`  | PostgreSQL only                       |
-| `/run/secpal/secrets/api/valkey-password`   | `110000:210000`, `0400`  | API roles only                        |
-| `/run/secpal/secrets/valkey/password`       | `110001:210001`, `0400`  | Valkey only                           |
+| Delivery                                                                                  | Host file owner and mode | Consumers                             |
+| ----------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------- |
+| `/run/secpal/secrets/api/app-key`                                                         | `110000:210000`, `0400`  | Migrate, API, both workers, scheduler |
+| `/run/secpal/secrets/api/app-previous-keys`                                               | `110000:210000`, `0400`  | Same API roles                        |
+| `/run/secpal/secrets/api/tenant-kek`                                                      | `110000:210000`, `0600`  | Same API roles                        |
+| `/run/secpal/secrets/runtime/postgres-username`, `postgres-password`, `postgres-ca.crt`   | `110000:210000`, `0400`  | API, both workers, scheduler          |
+| `/run/secpal/secrets/migration/postgres-username`, `postgres-password`, `postgres-ca.crt` | `110000:210000`, `0400`  | Explicit migration only               |
 
-The PostgreSQL copies must be byte-identical; the Valkey copies must be
-byte-identical. Copies exist solely to avoid a shared group or broad secret
-directory. Frontend and unrelated data/product roles receive no secret mount.
+Database files are mounted individually at `/run/secpal/secrets/database` in
+each consumer. Runtime never mounts migration credentials. Issued usernames
+must be distinct and cannot name postgres or a stable privilege group.
+Frontend receives no application or database material. Server TLS files are
+separate native infrastructure delivery, as defined in [the PostgreSQL contract](native-postgresql.md).
 Feature-gated external credentials have no delivery or consumer while their
 inventory gates remain disabled.
 
 ## Application delivery without OS-environment secrets
 
-PostgreSQL's explicit one-shot initializer is the only PostgreSQL container that
-receives its credential file. It passes that file path to the pinned image's
-`initdb --pwfile` seam, creates the `secpal` database over a private Unix socket,
-then proves the credential through TCP SCRAM before it admits a new, existing,
-or recovered cluster, and stops. The steady-state PostgreSQL container mounts no credential and execs
-`postgres` only after `pg_controldata` validates the existing version-16 cluster,
-so the official image entrypoint cannot convert the file into an exported
-`POSTGRES_PASSWORD` process environment value. Valkey's fixed launcher validates
-the raw file's length and LF count before command substitution, reads only its
-individual file, and writes a mode-`0600` configuration in container
-tmpfs before exec. Its health probe tests the expected unauthenticated `NOAUTH`
-response and never reads the password.
+PostgreSQL server material and client identities are issued, rotated and
+recovered only by #100. This leaf consumes complete issued files and defines
+configuration and role membership; it generates no production secret or CA.
+Valkey has no production launcher or secret delivery.
 
 The API image currently names application settings through Laravel's PHP
 configuration interface. Production mounts a root-owned `auto_prepend_file`
 bootstrap. That bootstrap validates files, loads values only into PHP's
-in-process `$_ENV`/`$_SERVER` configuration, and never changes the OS process
-environment. Its production root is fixed at `/run/secpal/secrets/api`;
+in-process `$_ENV`/`$_SERVER` configuration, and never publishes values through the OS process
+environment. Its production roots are fixed at `/run/secpal/secrets/api` and
+`/run/secpal/secrets/database`;
 ordinary runtime environment cannot redirect it. Repository tests use an
 explicit PHP constant that is not production configuration. Consequently
 Quadlet source, generated systemd properties, Podman
@@ -76,7 +69,7 @@ with no path content or value on failure.
 
 Generic environment dumps remain prohibited. Diagnostic commands must use an
 allowlist of non-secret names and must never print PHP superglobals, mounted
-secret files, the transient Valkey configuration, or application configuration
+secret files, or application configuration
 objects that contain resolved values.
 
 ## APP_KEY lifecycle
@@ -130,21 +123,17 @@ all API roles, and destroy the former key only after the rollback window closes.
 
 ## Database credential lifecycle
 
-PostgreSQL and Valkey passwords are externally generated 24–128-character
-values from the closed file grammar. They never appear in a URL, command line,
-unit text, image, Git object, log, snapshot, or issue evidence.
+PostgreSQL passwords are issued 24–128-character values from the closed file
+grammar. They never appear in a URL, command line, unit, image, Git object, log
+or evidence. Usernames and CA files accompany separate runtime and migration
+credentials. Client trust files contain only public CA certificates, never a
+server or signing key. Client certificate parsing and server identity are
+proven by the actual application connection, not by the delivery grammar.
 
-PostgreSQL rotation updates the server credential through a reviewed local
-database administration operation, stages matching API and PostgreSQL delivery
-copies, stops dependent API roles, exchanges and validates the full tree, then
-restarts PostgreSQL and the dependent roles in order. Rollback retains the old
-credential only for the bounded cutover window.
-
-Valkey rotation stages matching API and Valkey copies, stops queue producers and
-workers, performs the reviewed Valkey credential change, exchanges the complete
-tree, and restarts Valkey before API roles. Queue/AOF recovery is verified before
-the old credential is destroyed. Neither path changes the credential merely
-because a container was recreated.
+Issue #100 owns generation, delivery, rotation, escrow/recovery and rollback. The
+native infrastructure consumes its server material generation and distinct
+SCRAM LOGIN memberships. Recreating a container does not change an identity or
+credential. No #100 implementation is introduced by this contract.
 
 ## Infrastructure and operator secrets
 
@@ -169,7 +158,7 @@ or value. A signal or failed staging operation cleans only its uniquely named
 sibling staging directory and cannot touch the active tree.
 
 Recovery re-delivers the externally retained stable versions, validates both
-consumer-copy equality and application/data compatibility, and restarts exact
+runtime/migration identity separation and application/data compatibility, and restarts exact
 consumers. Destruction is explicit, attributable, and deferred until rollback
 and retention requirements are satisfied. Deleting a container, rolling back a
 Quadlet, or rebooting the host is never secret destruction authority.

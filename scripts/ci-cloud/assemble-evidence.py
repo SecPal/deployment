@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Assemble independently collected D.1 and D.1a evidence."""
+"""Assemble independently collected host and application-workload evidence."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from pathlib import Path
 
 MAX_INPUT_BYTES = 256 * 1024
 WORKLOAD_COLLECTOR = Path(__file__).with_name("collect-workload-evidence.py")
+WORKLOAD_ADMISSION = Path(__file__).with_name("workload-admission.py")
 
 
 class DuplicateKey(ValueError):
@@ -42,17 +43,17 @@ def read_document(path: Path) -> object:
 
 
 def read_observation(
-    path: Path, phase: str, collection_status: int
+    path: Path, phase: str, collection_status: int, target_sha: str
 ) -> dict[str, object]:
     module = load_workload_collector()
     if collection_status != 0:
-        return module.incomplete_observation(phase)
+        return module.incomplete_observation(phase, target_sha)
     try:
         document = read_document(path)
     except (OSError, ValueError):
-        return module.incomplete_observation(phase)
+        return module.incomplete_observation(phase, target_sha)
     if not isinstance(document, dict) or document.get("phase") != phase:
-        return module.incomplete_observation(phase)
+        return module.incomplete_observation(phase, target_sha)
     return document
 
 
@@ -114,7 +115,7 @@ def read_normalization_diagnostic(
             raise ValueError("successful normalization diagnostic is inconsistent")
     elif (
         phase_status == 0
-        or stage not in module.NORMALIZATION_EVIDENCE_STAGES
+        or stage not in module.NORMALIZATION_STAGES
         or failure_reason not in module.NORMALIZATION_FAILURE_REASONS
         or (failure_reason == "command-exit") != (command_status is not None)
     ):
@@ -127,6 +128,17 @@ def load_workload_collector():
         "trusted_workload_collector", WORKLOAD_COLLECTOR
     )
     if spec is None or spec.loader is None:
+        raise ValueError("trusted workload collection contract is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_workload_admission():
+    spec = importlib.util.spec_from_file_location(
+        "trusted_workload_admission", WORKLOAD_ADMISSION
+    )
+    if spec is None or spec.loader is None:
         raise ValueError("trusted workload admission implementation is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -134,7 +146,7 @@ def load_workload_collector():
 
 
 def assemble(
-    host_document: object,
+    workflow: object,
     baseline: object,
     live: object,
     post_cleanup: object,
@@ -142,28 +154,18 @@ def assemble(
     phase_statuses: dict[str, int],
     collection_statuses: dict[str, int],
 ) -> dict[str, object]:
-    if not isinstance(host_document, dict) or set(host_document) != {
-        "schema_version", "workflow", "test", "platform", "apt", "host", "runtime"
-    } or host_document.get("schema_version") != 1:
-        raise ValueError("host evidence is outside the trusted D.1 contract")
-    test = host_document.get("test")
-    workflow = host_document.get("workflow")
-    if not isinstance(test, dict) or not isinstance(workflow, dict):
-        raise ValueError("host evidence identity is malformed")
+    if not isinstance(workflow, dict) or set(workflow) != {
+        "repository", "run_id", "run_attempt", "target_sha"
+    } or workflow.get("repository") != "SecPal/deployment":
+        raise ValueError("workflow identity is malformed")
     target_sha = workflow.get("target_sha")
     if not isinstance(target_sha, str) or re.fullmatch(r"[0-9a-f]{40}", target_sha) is None:
-        raise ValueError("host evidence target SHA is malformed")
-
-    host_failures = [
-        str(value)
-        for value in test.get("failed_admission_invariants", [])
-        if value != "TARGET_CONFORMANCE_ENTRYPOINT"
-    ]
-    if phase_statuses["host"] != 0:
-        host_failures.append("TARGET_HOST_CONTRACT")
-    host_failures = list(dict.fromkeys(host_failures))
+        raise ValueError("workflow target SHA is malformed")
     workload = {
         "protocol_version": 1,
+        "claim_scope": "disposable-rootless-application-integration",
+        "database_scope": "disposable-postgresql-18-fixture",
+        "target_sha": target_sha,
         "instance": target_sha[:12],
         "result": "failed",
         "failed_admission_invariants": [],
@@ -171,7 +173,7 @@ def assemble(
         "live": live,
         "post_cleanup": post_cleanup,
     }
-    module = load_workload_collector()
+    module = load_workload_admission()
     workload_failures = module.workload_admission_failures(workload)
     status_invariants = {
         ("phase", "workload_prepare_start"): "TARGET_WORKLOAD_PREPARE_START",
@@ -192,31 +194,24 @@ def assemble(
     workload["failed_admission_invariants"] = workload_failures
     workload["result"] = "passed" if not workload_failures else "failed"
 
-    overall_failures = list(dict.fromkeys([*host_failures, *workload_failures]))
-    test.pop("target_exit_status", None)
-    test["normalization_diagnostics"] = normalization_diagnostics
-    test["phase_exit_statuses"] = phase_statuses
-    test["collection_exit_statuses"] = collection_statuses
-    test["failed_admission_invariants"] = overall_failures
-    test["result"] = "passed" if not overall_failures else "failed"
-    host_document["schema_version"] = 3
-    host_document["host_admission"] = {
-        "result": "passed" if not host_failures else "failed",
-        "failed_admission_invariants": host_failures,
+    test = {
+        "normalization_diagnostics": normalization_diagnostics,
+        "phase_exit_statuses": phase_statuses,
+        "collection_exit_statuses": collection_statuses,
+        "failed_admission_invariants": workload_failures,
+        "result": workload["result"],
     }
-    host_document["workload"] = workload
-    return host_document
+    return {"schema_version": 5, "workflow": workflow, "test": test, "workload": workload}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("host", type=Path)
+    parser.add_argument("workflow", type=Path)
     parser.add_argument("baseline", type=Path)
     parser.add_argument("live", type=Path)
     parser.add_argument("post_cleanup", type=Path)
     parser.add_argument("live_normalization", type=Path)
     parser.add_argument("cleanup_normalization", type=Path)
-    parser.add_argument("host_status")
     parser.add_argument("prepare_start_status")
     parser.add_argument("cleanup_status")
     parser.add_argument("live_normalization_status")
@@ -227,7 +222,6 @@ def main() -> int:
     arguments = parser.parse_args()
     try:
         phase_statuses = {
-            "host": status(arguments.host_status),
             "workload_prepare_start": status(arguments.prepare_start_status),
             "workload_cleanup": status(arguments.cleanup_status),
             "trusted_quadlet_normalize_live": status(
@@ -254,16 +248,25 @@ def main() -> int:
                 phase_statuses["trusted_quadlet_normalize_cleanup"],
             ),
         }
+        workflow = read_document(arguments.workflow)
+        document_target_sha = workflow.get("target_sha") if isinstance(workflow, dict) else None
+        if not isinstance(document_target_sha, str) or re.fullmatch(r"[0-9a-f]{40}", document_target_sha) is None:
+            raise ValueError("workflow target SHA is malformed")
         document = assemble(
-            read_document(arguments.host),
+            workflow,
             read_observation(
-                arguments.baseline, "baseline", collection_statuses["baseline"]
+                arguments.baseline, "baseline", collection_statuses["baseline"],
+                str(document_target_sha),
             ),
-            read_observation(arguments.live, "live", collection_statuses["live"]),
+            read_observation(
+                arguments.live, "live", collection_statuses["live"],
+                document_target_sha,
+            ),
             read_observation(
                 arguments.post_cleanup,
                 "post-cleanup",
                 collection_statuses["post_cleanup"],
+                document_target_sha,
             ),
             normalization_diagnostics,
             phase_statuses,

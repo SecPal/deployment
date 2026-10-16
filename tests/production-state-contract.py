@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import base64
 import unittest
 from unittest import mock
 
@@ -28,12 +29,8 @@ INVENTORY_PATH = ROOT / "config" / "production" / "inventory.example.yaml"
 RENDERER_PATH = ROOT / "scripts" / "render-production-quadlets.py"
 STATE_TOOL_PATH = ROOT / "scripts" / "production-state.py"
 BOOTSTRAP_PATH = ROOT / "scripts" / "production-secret-bootstrap.php"
-POSTGRES_LAUNCHER_PATH = ROOT / "scripts" / "production-postgres-entrypoint.sh"
-VALKEY_LAUNCHER_PATH = ROOT / "scripts" / "production-valkey-entrypoint.sh"
 CHECKED_QUADLETS = ROOT / "config" / "production" / "quadlet"
 CHECKED_SYSTEMD = ROOT / "config" / "production" / "systemd"
-POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
-VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
 
 EXPECTED_OBJECTS = {
     "postgresql_data",
@@ -43,9 +40,8 @@ EXPECTED_OBJECTS = {
     "app_previous_keys",
     "tenant_kek",
     "postgresql_credentials",
-    "valkey_credentials",
+    "postgresql_transport_material",
     "external_service_credentials",
-    "valkey_state",
     "acme_state",
     "crowdsec_state",
     "logs",
@@ -57,12 +53,12 @@ EXPECTED_OBJECTS = {
     "github_credentials",
     "registry_credentials",
 }
+FAKE_CA = b"-----BEGIN CERTIFICATE-----\n" + base64.b64encode(b"bounded test-only certificate bytes") + b"\n-----END CERTIFICATE-----\n"
 API_ROLES = {"api", "migrate", "scheduler", "worker-general", "worker-hash-chain"}
 SECRET_SENTINELS = {
     "app-key": "base64:U0VDUEFMX0ZBS0VfQVBQX0tFWV8wMDAwMDAwMDA=",
     "app-previous-keys": "base64:U0VDUEFMX0ZBS0VfT0xEX0tFWV8wMDAwMDAwMDA=",
     "postgres-password": "SECPAL_FAKE_POSTGRES_PASSWORD_4ec96de8",
-    "valkey-password": "SECPAL_FAKE_VALKEY_PASSWORD_f7967389",
 }
 
 
@@ -174,10 +170,8 @@ class ProductionStateContractTest(unittest.TestCase):
         self.assertEqual(mapping["count"], account["subordinate_ids"]["uid"]["count"])
         self.assertEqual(mapping["count"], account["subordinate_ids"]["gid"]["count"])
         rows = {
-            "postgresql_data": "postgresql_data",
             "private_application_storage": "private_application_storage",
             "public_application_storage": "public_application_storage",
-            "valkey_state": "valkey_data",
             "logs": "logs",
             "configuration": "configuration",
             "deployment_state": "deployment_state",
@@ -189,10 +183,8 @@ class ProductionStateContractTest(unittest.TestCase):
                 self.assertEqual(path["path"], row["location"])
                 self.assertEqual(path["mode"], row["mode"])
         for inventory_name, container_id in {
-            "postgresql_data": 999,
             "private_application_storage": 10001,
             "public_application_storage": 10001,
-            "valkey_data": 10002,
         }.items():
             with self.subTest(inventory_name=inventory_name):
                 path = inventory["paths"][inventory_name]
@@ -212,8 +204,7 @@ class ProductionStateContractTest(unittest.TestCase):
         self.assertEqual(set(objects["tenant_kek"]["consumers"]), API_ROLES)
         self.assertEqual(objects["app_previous_keys"]["type"], "bounded-key-list-file")
         self.assertEqual(self.contract["secret_policy"]["max_previous_keys"], 3)
-        self.assertEqual(objects["postgresql_credentials"]["consumers"], ["api-roles", "postgres"])
-        self.assertEqual(objects["valkey_credentials"]["consumers"], ["api-roles", "valkey"])
+        self.assertEqual(objects["postgresql_credentials"]["consumers"], ["runtime-api-roles", "migration-only"])
         for name in (
             "backup_encryption_credentials",
             "tls_private_keys",
@@ -247,8 +238,7 @@ class ProductionStateContractTest(unittest.TestCase):
         self.assertNotIn("latest", combined)
         self.assertNotIn("EnvironmentFile=", combined)
         self.assertIn("Pull=never", combined)
-        self.assertIn("source=/srv/secpal/postgresql,target=/var/lib/postgresql/data,rw=true", combined)
-        self.assertIn("source=/srv/secpal/valkey,target=/data,rw=true", combined)
+        self.assertNotIn("valkey", combined)
         for role in API_ROLES:
             unit = rendered[f"secpal-{role}.container"]
             self.assertIn("source=/srv/secpal/private-storage,target=/app/storage/app/private,rw=true", unit)
@@ -256,9 +246,8 @@ class ProductionStateContractTest(unittest.TestCase):
             self.assertIn("/run/secpal/secrets/api/app-key", unit)
             self.assertIn("/run/secpal/secrets/api/tenant-kek", unit)
             edge_memberships = unit.count("Network=secpal-edge.network")
-            self.assertEqual(edge_memberships, 1 if role == "api" else 0)
-        self.assertNotIn("/run/secpal/secrets/postgres/", rendered["secpal-valkey.container"])
-        self.assertNotIn("/run/secpal/secrets/valkey/", rendered["secpal-postgres.container"])
+            self.assertEqual(edge_memberships, 0)
+        self.assertNotIn("/run/secpal/secrets/postgres/", combined)
         self.assertNotIn("/run/secpal/secrets", rendered["secpal-frontend.container"])
         self.assertIn("Network=secpal-edge.network", rendered["secpal-frontend.container"])
         logs = self.contract["log_policy"]
@@ -281,19 +270,64 @@ class ProductionStateContractTest(unittest.TestCase):
                     text,
                 )
 
-    def test_native_lifecycle_fixture_uses_canonical_private_storage_seam(self) -> None:
-        fixture = Path("/tmp/secpal-d2-native.example")
+    def test_fixed_product_backend_publication(self) -> None:
+        units = self.renderer.build_units(self.contract)
+        expected = {
+            "secpal-frontend.container": ["PublishPort=127.0.0.1:18080:8080/tcp"],
+            "secpal-api.container": ["PublishPort=127.0.0.1:18081:8080/tcp"],
+        }
+        for name, content in units.items():
+            if name.endswith(".container"):
+                with self.subTest(unit=name):
+                    self.assertEqual(
+                        [line for line in content.splitlines() if line.startswith("PublishPort=")],
+                        expected.get(name, []),
+                    )
+        frontend = units["secpal-frontend.container"]
+        self.assertNotIn("secpal-application.network", frontend)
+        container = frontend.split("[Container]\n", 1)[1].split("[Service]\n", 1)[0]
+        self.assertNotRegex(container, r"(?i)DB_|REDIS_|secret|private-storage")
+        for name in expected:
+            self.assertIn(
+                "ExecStartPre=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check",
+                units[name],
+            )
+
+    def test_native_lifecycle_fixture_has_no_production_storage_authority(self) -> None:
+        fixture = Path("/tmp/secpal-native.example")
         rendered = self.renderer.build_native_lifecycle_fixture_unit(
-            self.contract, fixture, "d2-native-example"
+            self.contract, fixture, "native-example"
         )
+        self.assertNotIn("D.2", rendered)
+        self.assertNotIn("private-storage", rendered)
+        self.assertNotIn("/app/storage/app/private", rendered)
+        self.assertNotIn("Label=org.secpal.production=true", rendered)
+        self.assertNotIn("PartOf=secpal.target", rendered)
         self.assertIn("User=10001", rendered)
         self.assertIn("Group=10001", rendered)
-        self.assertIn(
-            "source=/tmp/secpal-d2-native.example/srv/secpal/private-storage,"
-            "target=/app/storage/app/private,rw=true",
-            rendered,
+        self.assertEqual(
+            [line for line in rendered.splitlines() if line.startswith("Mount=")],
+            ["Mount=type=bind,source=/tmp/secpal-native.example/state,"
+             "target=/fixture-state,rw=true,relabel=private"],
         )
-        self.assertNotIn("target=/state", rendered)
+        # Runtime evidence must not depend on the superseded local-authoritative
+        # production storage row. #99 owns the replacement Object Storage contract.
+        from copy import deepcopy
+
+        without_storage = deepcopy(self.contract)
+        del without_storage["objects"]["private_application_storage"]
+        self.assertEqual(
+            rendered,
+            self.renderer.build_native_lifecycle_fixture_unit(
+                without_storage, fixture, "native-example"
+            ),
+        )
+        lifecycle = (ROOT / "tests/production-state-native-lifecycle.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("d2-native", lifecycle)
+        self.assertNotIn("private-storage", lifecycle)
+        self.assertIn('STATE_PATH="$FIXTURE_ROOT/state"', lifecycle)
 
     def test_secret_values_never_enter_rendered_or_runtime_metadata(self) -> None:
         rendered = "\n".join(self.renderer.build_units(self.contract).values())
@@ -301,7 +335,7 @@ class ProductionStateContractTest(unittest.TestCase):
             (
                 rendered,
                 "ExecStart=/usr/bin/podman run --name secpal-api --pull=never",
-                "Environment=APP_ENV=production DB_HOST=postgres REDIS_HOST=valkey",
+                "Environment=APP_ENV=production DB_HOST=db.secpal.internal CACHE_STORE=database",
                 "secpal state contract validated\nsecpal-api started",
             )
         )
@@ -309,374 +343,8 @@ class ProductionStateContractTest(unittest.TestCase):
             with self.subTest(name=name, digest=hashlib.sha256(sentinel.encode()).hexdigest()[:12]):
                 self.assertNotIn(sentinel, simulated_surfaces)
         bootstrap = BOOTSTRAP_PATH.read_text(encoding="utf-8")
-        self.assertNotIn("putenv", bootstrap)
-        self.assertNotIn("getenv", bootstrap)
-
-    def test_postgres_secret_is_confined_to_the_explicit_initializer(self) -> None:
-        rendered = self.renderer.build_units(self.contract)
-        initializer = rendered["secpal-postgres-init.container"]
-        server = rendered["secpal-postgres.container"]
-        self.assertIn("Exec=initialize", initializer)
-        self.assertIn("/run/secpal/secrets/postgres/password", initializer)
-        self.assertIn("production-postgres-entrypoint.sh", initializer)
-        self.assertIn("Exec=run", server)
-        self.assertIn("production-postgres-entrypoint.sh", server)
-        self.assertNotIn("POSTGRES_PASSWORD", server)
-        self.assertNotIn("/run/secpal/secrets/postgres", server)
-        launcher = POSTGRES_LAUNCHER_PATH.read_text(encoding="utf-8")
-        self.assertIn("PGPASSFILE", launcher)
-        self.assertIn("newline_count=", launcher)
-        self.assertIn("--host=127.0.0.1", launcher)
-        self.assertIn('listen_addresses=*', launcher)
-        self.assertIn("scram-sha-256", launcher)
-        require_staged_image(self, POSTGRES_IMAGE)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            data = root / "data"
-            data.mkdir(mode=0o700)
-            password = root / "password"
-            credential = "SecPalFakePostgresCredential1234"
-            password.write_text(credential + "\n", encoding="utf-8")
-            password.chmod(0o400)
-            pgpass = root / "pgpass"
-            pgpass.write_text(f"postgres:5432:secpal:secpal:{credential}\n", encoding="utf-8")
-            pgpass.chmod(0o600)
-            subprocess.run(
-                [
-                    "podman",
-                    "unshare",
-                    "chown",
-                    "-R",
-                    "999:999",
-                    os.fspath(data),
-                    os.fspath(password),
-                    os.fspath(pgpass),
-                ],
-                check=True,
-            )
-            container_name = f"secpal-postgres-contract-{os.getpid()}"
-            network_name = f"secpal-postgres-contract-{os.getpid()}"
-            mounts = [
-                "--mount",
-                f"type=bind,source={POSTGRES_LAUNCHER_PATH},destination=/run/secpal/bootstrap/production-postgres-entrypoint.sh,ro=true",
-                "--mount",
-                f"type=bind,source={data},destination=/var/lib/postgresql/data,rw=true",
-                "--mount",
-                "type=tmpfs,destination=/tmp,tmpfs-mode=0700,U=true",
-                "--mount",
-                "type=tmpfs,destination=/run/postgresql,tmpfs-mode=0750,U=true",
-            ]
-            initializer_mounts = [
-                *mounts,
-                "--mount",
-                f"type=bind,source={password},destination=/run/secpal-secret/password,ro=true",
-            ]
-            base = [
-                "podman",
-                "run",
-                "--network",
-                "none",
-                "--user",
-                "999:999",
-                "--read-only",
-                "--entrypoint",
-                "/bin/sh",
-            ]
-            try:
-                result = subprocess.run(
-                    [
-                        *base,
-                        "--rm",
-                        *initializer_mounts,
-                        POSTGRES_IMAGE,
-                        "/run/secpal/bootstrap/production-postgres-entrypoint.sh",
-                        "initialize",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-
-                subprocess.run(
-                    ["podman", "unshare", "chown", "0:0", os.fspath(password)], check=True
-                )
-                password.chmod(0o600)
-                password.write_text("WrongButSyntacticallyValidCredential1234\n", encoding="utf-8")
-                password.chmod(0o400)
-                subprocess.run(
-                    ["podman", "unshare", "chown", "999:999", os.fspath(password)], check=True
-                )
-                rejected = subprocess.run(
-                    [
-                        *base,
-                        "--rm",
-                        *initializer_mounts,
-                        POSTGRES_IMAGE,
-                        "/run/secpal/bootstrap/production-postgres-entrypoint.sh",
-                        "initialize",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                self.assertEqual(rejected.returncode, 78)
-
-                subprocess.run(
-                    ["podman", "unshare", "chown", "0:0", os.fspath(password)], check=True
-                )
-                password.chmod(0o600)
-                password.write_text(credential + "\n", encoding="utf-8")
-                password.chmod(0o400)
-                subprocess.run(
-                    ["podman", "unshare", "chown", "999:999", os.fspath(password)], check=True
-                )
-                result = subprocess.run(
-                    [
-                        *base,
-                        "--rm",
-                        *initializer_mounts,
-                        POSTGRES_IMAGE,
-                        "/run/secpal/bootstrap/production-postgres-entrypoint.sh",
-                        "initialize",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                subprocess.run(
-                    ["podman", "network", "create", "--internal", network_name],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                subprocess.run(
-                    [
-                        "podman",
-                        "run",
-                        "--network",
-                        network_name,
-                        "--network-alias",
-                        "postgres",
-                        "--user",
-                        "999:999",
-                        "--read-only",
-                        "--entrypoint",
-                        "/bin/sh",
-                        "--detach",
-                        "--name",
-                        container_name,
-                        *mounts,
-                        POSTGRES_IMAGE,
-                        "/run/secpal/bootstrap/production-postgres-entrypoint.sh",
-                        "run",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                deadline = time.monotonic() + 10
-                while time.monotonic() < deadline:
-                    ready = subprocess.run(
-                        [
-                            "podman",
-                            "exec",
-                            container_name,
-                            "pg_isready",
-                            "-h",
-                            "/run/postgresql",
-                            "-U",
-                            "secpal",
-                            "-d",
-                            "secpal",
-                        ],
-                        capture_output=True,
-                        check=False,
-                    )
-                    if ready.returncode == 0:
-                        break
-                    time.sleep(0.1)
-                else:
-                    self.fail("the pinned PostgreSQL image did not become ready")
-                database = subprocess.run(
-                    [
-                        "podman",
-                        "run",
-                        "--rm",
-                        "--network",
-                        network_name,
-                        "--user",
-                        "999:999",
-                        "--read-only",
-                        "--env",
-                        "PGPASSFILE=/tmp/pgpass",
-                        "--mount",
-                        f"type=bind,source={pgpass},destination=/tmp/pgpass,ro=true",
-                        POSTGRES_IMAGE,
-                        "psql",
-                        "-h",
-                        "postgres",
-                        "-U",
-                        "secpal",
-                        "-d",
-                        "secpal",
-                        "-Atqc",
-                        "SELECT current_database()",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                self.assertEqual(database.stdout.strip(), "secpal")
-                environment = subprocess.run(
-                    [
-                        "podman",
-                        "exec",
-                        container_name,
-                        "/bin/sh",
-                        "-c",
-                        "tr '\\000' '\\n' </proc/1/environ | "
-                        "grep -Eq '^(POSTGRES_PASSWORD|POSTGRES_PASSWORD_FILE|PGPASSWORD)='",
-                    ],
-                    capture_output=True,
-                    check=False,
-                )
-                self.assertEqual(environment.returncode, 1)
-            finally:
-                subprocess.run(
-                    ["podman", "rm", "--force", container_name],
-                    capture_output=True,
-                    check=False,
-                )
-                subprocess.run(
-                    ["podman", "network", "rm", "--force", network_name],
-                    capture_output=True,
-                    check=False,
-                )
-                subprocess.run(
-                    [
-                        "podman",
-                        "unshare",
-                        "chown",
-                        "-R",
-                        "0:0",
-                        os.fspath(data),
-                        os.fspath(password),
-                        os.fspath(pgpass),
-                    ],
-                    check=True,
-                )
-
-    def test_pinned_valkey_launcher_accepts_the_canonical_password_grammar(self) -> None:
-        require_staged_image(self, VALKEY_IMAGE)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            password = root / "password"
-            password.write_text("SecPalFake$And&Star*Credential1234\n", encoding="utf-8")
-            password.chmod(0o400)
-            fake_server = root / "valkey-server"
-            fake_server.write_text(
-                "#!/bin/sh\n"
-                "set -eu\n"
-                "test \"$#\" -eq 1\n"
-                "test \"$(stat -c %a \"$1\")\" = 600\n"
-                "test \"$(wc -l <\"$1\")\" -eq 5\n"
-                "grep -Eq '^requirepass .{24,128}$' \"$1\"\n"
-                "grep -Fx 'dir /data' \"$1\" >/dev/null\n"
-                "grep -Fx 'appendonly yes' \"$1\" >/dev/null\n"
-                "grep -Fx 'appendfsync everysec' \"$1\" >/dev/null\n"
-                "grep -Fx 'save \"\"' \"$1\" >/dev/null\n",
-                encoding="utf-8",
-            )
-            fake_server.chmod(0o755)
-            subprocess.run(
-                ["podman", "unshare", "chown", "10002:10002", os.fspath(password)],
-                check=True,
-            )
-            try:
-                result = subprocess.run(
-                    [
-                        "podman",
-                        "run",
-                        "--rm",
-                        "--network",
-                        "none",
-                        "--user",
-                        "10002:10002",
-                        "--read-only",
-                        "--mount",
-                        "type=tmpfs,destination=/tmp,tmpfs-mode=0700,U=true",
-                        "--volume",
-                        f"{VALKEY_LAUNCHER_PATH}:/run/secpal/bootstrap/production-valkey-entrypoint.sh:ro",
-                        "--volume",
-                        f"{password}:/run/secpal-secret/password:ro",
-                        "--volume",
-                        f"{fake_server}:/usr/local/bin/valkey-server:ro",
-                        "--entrypoint",
-                        "/bin/sh",
-                        VALKEY_IMAGE,
-                        "/run/secpal/bootstrap/production-valkey-entrypoint.sh",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-            finally:
-                subprocess.run(
-                    ["podman", "unshare", "chown", "0:0", os.fspath(password)],
-                    check=True,
-                )
-            self.assertEqual(result.returncode, 0, result.stderr)
-
-            password.chmod(0o600)
-            password.write_text("SecPalFake$And&Star*Credential1234\n\n", encoding="utf-8")
-            password.chmod(0o400)
-            subprocess.run(
-                ["podman", "unshare", "chown", "10002:10002", os.fspath(password)],
-                check=True,
-            )
-            try:
-                rejected = subprocess.run(
-                    [
-                        "podman",
-                        "run",
-                        "--rm",
-                        "--network",
-                        "none",
-                        "--user",
-                        "10002:10002",
-                        "--read-only",
-                        "--mount",
-                        "type=tmpfs,destination=/tmp,tmpfs-mode=0700,U=true",
-                        "--volume",
-                        f"{VALKEY_LAUNCHER_PATH}:/run/secpal/bootstrap/production-valkey-entrypoint.sh:ro",
-                        "--volume",
-                        f"{password}:/run/secpal-secret/password:ro",
-                        "--volume",
-                        f"{fake_server}:/usr/local/bin/valkey-server:ro",
-                        "--entrypoint",
-                        "/bin/sh",
-                        VALKEY_IMAGE,
-                        "/run/secpal/bootstrap/production-valkey-entrypoint.sh",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-            finally:
-                subprocess.run(
-                    ["podman", "unshare", "chown", "0:0", os.fspath(password)],
-                    check=True,
-                )
-            self.assertEqual(rejected.returncode, 78)
-
-    def test_valkey_launcher_checks_raw_newline_count_before_normalization(self) -> None:
-        launcher = VALKEY_LAUNCHER_PATH.read_text(encoding="utf-8")
-        raw_check = launcher.index("newline_count=")
-        normalization = launcher.index('password="$(cat "$password_file")"')
-        self.assertLess(raw_check, normalization)
-        self.assertIn('"$newline_count" -gt 1', launcher)
+        self.assertNotIn("putenv($name.", bootstrap)
+        self.assertIn("putenv($name);", bootstrap)
 
     def test_state_initializer_is_idempotent_and_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -805,6 +473,34 @@ class ProductionStateContractTest(unittest.TestCase):
                     contract, namespace_view=True, require_secrets=True
                 )
 
+    def test_retired_postgres_secret_delivery_is_rejected(self) -> None:
+        import copy
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "secrets"
+            root.mkdir(mode=0o710)
+            root.chmod(0o710)
+            contract = copy.deepcopy(self.contract)
+            contract["secret_policy"]["delivery_root"] = os.fspath(root)
+            for delivery_name, delivery in contract["secret_delivery"].items():
+                directory = root / delivery_name
+                delivery["directory"] = os.fspath(directory)
+                directory.mkdir(mode=int(delivery["directory_mode"], 8))
+                directory.chmod(int(delivery["directory_mode"], 8))
+                for name, spec in delivery["files"].items():
+                    path = directory / name
+                    path.write_bytes(b"fixture")
+                    path.chmod(int(spec["mode"], 8))
+            retired = root / "postgres"
+            retired.mkdir(mode=0o710)
+            (retired / "password").write_bytes(b"retired-server-secret\n")
+            (retired / "password").chmod(0o400)
+            with mock.patch.object(self.state, "_assert_owner"):
+                with self.assertRaises(self.state.ContractError):
+                    self.state._validate_secret_deliveries(
+                        contract, namespace_view=True, require_secrets=True
+                    )
+
     def test_atomic_secret_publication_cleans_interruption_and_never_overwrites(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -816,10 +512,12 @@ class ProductionStateContractTest(unittest.TestCase):
                 "api/app-key": b"base64:" + b"A" * 43 + b"=\n",
                 "api/app-previous-keys": b"",
                 "api/tenant-kek": b"K" * 32,
-                "api/postgres-password": b"p" * 64 + b"\n",
-                "api/valkey-password": b"v" * 64 + b"\n",
-                "postgres/password": b"p" * 64 + b"\n",
-                "valkey/password": b"v" * 64 + b"\n",
+                "runtime/postgres-password": b"p" * 64 + b"\n",
+                "runtime/postgres-username": b"secpal_runtime_issued\n",
+                "runtime/postgres-ca.crt": FAKE_CA,
+                "migration/postgres-password": b"m" * 64 + b"\n",
+                "migration/postgres-username": b"secpal_migration_issued\n",
+                "migration/postgres-ca.crt": FAKE_CA,
             }
             modes = {
                 "api/tenant-kek": 0o600,
@@ -882,11 +580,13 @@ class ProductionStateContractTest(unittest.TestCase):
             values = {
                 "app-key": app_key + "\n",
                 "app-previous-keys": previous_key + "\n",
-                "postgres-password": "a" * 64 + "\n",
-                "valkey-password": "b" * 64 + "\n",
+                "database/postgres-password": "a" * 64 + "\n",
+                "database/postgres-username": "secpal_runtime_issued\n",
+                "database/postgres-ca.crt": FAKE_CA.decode(),
             }
             for name, value in values.items():
                 path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(value, encoding="utf-8")
                 path.chmod(0o400)
             kek = root / "tenant-kek"
@@ -894,13 +594,16 @@ class ProductionStateContractTest(unittest.TestCase):
             kek.chmod(0o600)
             probe = root / "probe.php"
             probe.write_text(
-                "<?php define('SECPAL_TEST_SECRET_ROOT', $argv[1]); require $argv[2]; "
+                "<?php define('SECPAL_TEST_SECRET_ROOT', $argv[1]); $_ENV['PGHOST'] = 'untrusted'; require $argv[2]; "
                 "$ok = isset($_ENV['APP_KEY'], $_SERVER['DB_PASSWORD']) "
-                "&& getenv('APP_KEY') === false && getenv('DB_PASSWORD') === false; "
+                "&& getenv('APP_KEY') === false && getenv('DB_PASSWORD') === false "
+                "&& getenv('PGSSLMODE') === false && getenv('PGHOST') === false "
+                "&& !isset($_ENV['PGHOST']) && $_ENV['DB_SSLMODE'] === 'verify-full' "
+                "&& $_ENV['DB_HOST'] === 'db.secpal.internal'; "
                 "exit($ok ? 0 : 1);\n",
                 encoding="utf-8",
             )
-            environment = dict(os.environ)
+            environment = dict(os.environ, PGSSLMODE="disable", PGHOST="untrusted", PGOPTIONS="-c role=secpal_owner", SECPAL_TEST_DATABASE="untrusted")
             result = subprocess.run(
                 ["php", os.fspath(probe), os.fspath(root), os.fspath(BOOTSTRAP_PATH)],
                 env=environment,
@@ -933,11 +636,13 @@ class ProductionStateContractTest(unittest.TestCase):
             sentinels = {
                 "app-key": "base64:" + "C" * 43 + "=",
                 "app-previous-keys": "base64:" + "D" * 43 + "=",
-                "postgres-password": "SECPAL_FAKE_POSTGRES_PASSWORD_4ec96de8",
-                "valkey-password": "SECPAL_FAKE_VALKEY_PASSWORD_f7967389",
+                "database/postgres-password": "SECPAL_FAKE_POSTGRES_PASSWORD_4ec96de8",
+                "database/postgres-username": "secpal_runtime_issued",
+                "database/postgres-ca.crt": FAKE_CA.decode().rstrip("\n"),
             }
             for name, value in sentinels.items():
                 path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(value + "\n", encoding="utf-8")
                 path.chmod(0o400)
             kek = root / "tenant-kek"
@@ -1006,13 +711,13 @@ class ProductionStateContractTest(unittest.TestCase):
         self.assertIn('shutil.which("podman")', source)
         with mock.patch.object(shutil, "which", return_value=None):
             with self.assertRaises(unittest.SkipTest):
-                require_staged_image(self, POSTGRES_IMAGE)
+                require_staged_image(self, self.renderer.API_IMAGE)
         invalid = subprocess.CompletedProcess(["podman"], 125)
         with mock.patch.object(shutil, "which", return_value="/usr/bin/podman"), mock.patch.object(
             subprocess, "run", return_value=invalid
         ):
             with self.assertRaises(AssertionError):
-                require_staged_image(self, POSTGRES_IMAGE)
+                require_staged_image(self, self.renderer.API_IMAGE)
 
     def test_independent_secret_publication_checks_parent_before_staging(self) -> None:
         import copy

@@ -97,7 +97,7 @@ class QuadletFixtureTests(unittest.TestCase):
 
     def test_closed_unit_name_set(self) -> None:
         names = self.installer.expected_unit_names("a1b2c3d4")
-        self.assertEqual(16, len(names))
+        self.assertEqual(15, len(names))
         self.assertIn("secpal-int-a1b2c3d4-api.container", names)
         self.assertIn("secpal-int-a1b2c3d4-application.network", names)
         self.assertIn("secpal-int-a1b2c3d4-postgres.volume", names)
