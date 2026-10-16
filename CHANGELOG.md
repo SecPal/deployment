@@ -9,6 +9,10 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- Provider-neutral Secret Authority and purpose-bound Deployment Activation with
+  current Host Enrollment verification, encrypted native PG18 state, independent
+  recovery-custody admission, credential isolation, rotation and retention.
+
 - Provider-neutral capacity qualification, separated from functional host
   conformance and inventory-selected operating reserves.
 

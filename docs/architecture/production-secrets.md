@@ -133,7 +133,9 @@ proven by the actual application connection, not by the delivery grammar.
 Issue #100 owns generation, delivery, rotation, escrow/recovery and rollback. The
 native infrastructure consumes its server material generation and distinct
 SCRAM LOGIN memberships. Recreating a container does not change an identity or
-credential. No #100 implementation is introduced by this contract.
+credential. The provider-neutral authority and Activation implementation is described in
+[Secret Authority](../secret-authority.md); this document remains the native
+production delivery contract.
 
 ## Infrastructure and operator secrets
 
