@@ -262,6 +262,12 @@ python3 scripts/validate-capacity-qualification.py \
   --evaluation-time 2026-08-29T00:00:00Z
 ```
 
+Timestamps use the supported RFC 3339 subset: uppercase `T`/`Z`, an explicit
+minute UTC offset when not `Z`, seconds 00–59 and at most six fractional digits.
+Collectors normalize to this explicit precision; admission never silently
+truncates a higher-precision timestamp or normalizes an invalid minute offset.
+The schema and native parser enforce the same lexical contract.
+
 The validator strictly parses bounded UTF-8 JSON, rejects duplicate keys,
 validates the repository schema and probe contract, recomputes the source
 digest, and applies cross-field admission. It does not read the system clock,

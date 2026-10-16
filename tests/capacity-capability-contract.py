@@ -420,6 +420,27 @@ class CapacityCapabilityContractTests(unittest.TestCase):
             self.run_validator(evidence, source=source), "reviewed duration"
         )
 
+    def test_zero_duration_storage_cycle_cannot_qualify(self) -> None:
+        evidence = provider_evidence()
+        source = source_evidence(evidence)
+        source["collection"]["storage"]["maximum_cycle_duration_microseconds"] = 0
+        self.assert_not_qualified(self.run_validator(evidence, source=source))
+
+    def test_timestamp_schema_and_native_parser_share_microsecond_precision(self) -> None:
+        schema = self.schema["$defs"]["timestamp"]
+        parser_spec = importlib.util.spec_from_file_location("capacity_timestamp_probe", VALIDATOR)
+        parser = importlib.util.module_from_spec(parser_spec)
+        parser_spec.loader.exec_module(parser)
+        for value in ("2026-08-01T00:00:00Z", "2026-08-01T00:00:00.123456Z"):
+            jsonschema.validate(value, schema)
+            parser.parse_timestamp(value, "probe")
+        for value in ("2026-08-01T00:00:00.123456789Z", "2026-08-01T00:00:00+00:60"):
+            with self.subTest(value=value):
+                with self.assertRaises(jsonschema.ValidationError):
+                    jsonschema.validate(value, schema)
+                with self.assertRaises(parser.QualificationError):
+                    parser.parse_timestamp(value, "probe")
+
     def test_pathological_storage_cannot_pass_reviewed_probe(self) -> None:
         evidence = provider_evidence()
         evidence["observations"]["storage"]["performance"].update(
@@ -572,7 +593,7 @@ class CapacityCapabilityContractTests(unittest.TestCase):
     def test_rfc3339_and_malformed_schema_are_bounded(self) -> None:
         evidence = provider_evidence()
         evidence["qualification"]["observed_at"] = "2026-08-01 00:00:00Z"
-        self.assert_not_qualified(self.run_validator(evidence), "RFC 3339")
+        self.assert_not_qualified(self.run_validator(evidence), "schema validation")
         specification = importlib.util.spec_from_file_location("capacity_validator", VALIDATOR)
         assert specification is not None and specification.loader is not None
         module = importlib.util.module_from_spec(specification)

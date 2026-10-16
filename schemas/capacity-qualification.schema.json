@@ -64,7 +64,12 @@
     "timestamp": {
       "type": "string",
       "format": "date-time",
-      "maxLength": 32
+      "maxLength": 32,
+      "description": "Supported RFC 3339 subset: uppercase T/Z, explicit minute UTC offset, seconds 00\u201359 and at most six fractional digits; no implicit precision truncation.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,6})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$",
+      "not": {
+        "pattern": "[^0-9T:Z.+-]"
+      }
     },
     "capacityProfile": {
       "description": "Optional preliminary planning envelope, not a universal platform or Enrollment prerequisite. PASS admits only its independently measured bounded probe; it is not customer-production capacity.",
@@ -856,7 +861,7 @@
                 },
                 "maximum_cycle_duration_microseconds": {
                   "type": "integer",
-                  "minimum": 0
+                  "minimum": 1
                 },
                 "same_persistent_filesystem_observed": {
                   "type": "boolean"
