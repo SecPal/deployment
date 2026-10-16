@@ -542,6 +542,8 @@ class EnrollmentTests(unittest.TestCase):
             {**parameters, "hostaddr": "127.0.0.1"},
             {**parameters, "service": "unadmitted-service"},
             {**parameters, "connect_timeout": 0},
+            {k: v for k, v in parameters.items() if k != "user"},
+            {k: v for k, v in parameters.items() if k != "dbname"},
         ]
         with patch.object(psycopg, "connect") as connect:
             for value in bad:
@@ -550,6 +552,14 @@ class EnrollmentTests(unittest.TestCase):
                         with enrollment.authority_transaction(value):
                             self.fail("unadmitted database reached transaction")
             connect.assert_not_called()
+            for variable in ["PGOPTIONS", "PGUSER", "PGDATABASE", "PGPORT", "PGSSLMODE"]:
+                with self.subTest(variable=variable):
+                    connect.reset_mock()
+                    with patch.dict(os.environ, {variable: "unadmitted"}):
+                        with self.assertRaises(enrollment.EnrollmentError):
+                            with enrollment.authority_transaction(parameters):
+                                self.fail("ambient libpq configuration reached transaction")
+                    connect.assert_not_called()
 
     def test_database_transport_rejects_untrusted_local_sockets(self):
         path = self.root / "socket"
@@ -688,6 +698,22 @@ class EnrollmentTests(unittest.TestCase):
         with self.assertRaises(enrollment.EnrollmentError):
             self.authority.current_identity()
         self.assertFalse(pin.exists())
+
+    def test_committed_state_is_independently_verified_after_lost_ack(self):
+        grant = self.authority.grant(self.request)
+        proof = self.host.prove(grant, self.ca)
+        commit = psycopg.Connection.commit
+        def committed_then_lost(db):
+            commit(db)
+            raise psycopg.OperationalError("synthetic-acknowledgement-loss")
+        with patch.object(psycopg.Connection, "commit", committed_then_lost):
+            with self.assertRaises(enrollment.EnrollmentError):
+                self.authority.consume(self.request, grant, proof)
+        record = self.authority.current_identity()
+        self.assertEqual(record["identity"]["generation"], 1)
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.authority.consume(self.request, grant, proof)
+        self.assertEqual(self.authority.current_identity(), record)
 
     def test_signed_grant_id_cannot_alias_a_different_ledger_key(self):
         grant, _ = self.complete()

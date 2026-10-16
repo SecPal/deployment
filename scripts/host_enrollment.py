@@ -702,7 +702,14 @@ def authority_transaction(database):
         if (type(database) is not dict or "service" in database or "hostaddr" in database
                 or os.environ.get("PGSERVICE") or os.environ.get("PGHOSTADDR")):
             raise EnrollmentError("authority-database-parameters")
+        # libpq owns its environment catalog; do not maintain a second list.
+        if any(option.envvar and option.envvar.decode("ascii") in os.environ
+               for option in psycopg.pq.Conninfo.get_defaults()):
+            raise EnrollmentError("authority-database-environment")
         parameters = conninfo_to_dict("", **database)
+        if any(type(parameters.get(key)) is not str or not parameters[key]
+               for key in ("user", "dbname")):
+            raise EnrollmentError("authority-database-identity")
         parameters.setdefault("port", "5432")
         parameters.setdefault("connect_timeout", "5")
         try:
@@ -716,6 +723,8 @@ def authority_transaction(database):
         db = psycopg.connect(**parameters)
         if db.info.host != host or db.info.port != port:
             raise EnrollmentError("authority-database-transport")
+        if db.info.user != parameters["user"] or db.info.dbname != parameters["dbname"]:
+            raise EnrollmentError("authority-database-identity")
         if db.autocommit or not 180000 <= db.info.server_version < 190000:
             raise EnrollmentError("authority-database-contract")
         db.row_factory = dict_row
@@ -837,7 +846,7 @@ class EnrollmentAuthority:
                 raise EnrollmentError("authority-state-integrity")
             yield db
             if write:
-                # No automatic pin repair after a failed/ambiguous commit.
+                # Never repair a pin/state mismatch after a failed/unknown commit.
                 # The existing Recovery Authority must establish fresh trust.
                 _publish(pin, database_digest(db))
 

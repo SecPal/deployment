@@ -113,7 +113,9 @@ directory, non-writable directory permissions, socket type and trusted ownership
 host and credentials; they never enter requests, grants or evidence. The SDK
 admits the canonical socket/inode or explicit verify-full policy before opening
 the connection, and re-admits the actual transport afterward. It bounds native
-connection timeout to 1–10 seconds (default 5). Unresolved service/hostaddr
+connection timeout to 1–10 seconds (default 5). User/database identity is explicit
+and read back. Inherited libpq overrides are rejected using libpq's own option
+catalog, including role/credential/transport overrides. Unresolved service/hostaddr
 indirection, abstract sockets and multi-host targets are rejected before any
 connection. Native password-file use remains within libpq; no credential broker
 or alternate client factory is added.
@@ -132,10 +134,14 @@ digest durably before database commit. File locking and native serializable
 transactions keep concurrent issuer operations consistent. There is no external
 service, historical journal, counter registry or automatic pin repair.
 
-A restored database, missing pin, unauthorized state change or ambiguous commit
-fails closed, including identity read-back. An issuance failure before the
-commit boundary still rolls back normally; a lost response after a confirmed
-commit uses the existing explicitly authorized recovery-grant protocol. If
+A restored database, missing pin or unauthorized state change fails closed,
+including identity read-back. A lost commit acknowledgement fails the current
+call. A subsequent independent read-back may establish the committed state only
+when its complete digest matches the external pin and signed records validate;
+the consumed grant still cannot be replayed. A pin/state mismatch remains
+blocked without automatic repair. An issuance failure before the commit boundary
+still rolls back normally. Recovering an interrupted host enrollment uses the
+existing explicitly authorized recovery-grant protocol. If
 commit outcome or integrity cannot be established, the existing Recovery
 Authority must establish fresh authority trust and revoke the old CA/activation
 authority before re-enrollment. The SDK deliberately has no in-place rebaseline
