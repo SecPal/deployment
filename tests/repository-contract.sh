@@ -42,6 +42,11 @@ required_files=(
   .editorconfig
   .pre-commit-config.yaml
   CHANGELOG.md
+  config/capacity-probes-v1.json
+  docs/architecture/capacity-capabilities.md
+  schemas/capacity-qualification.schema.json
+  scripts/validate-capacity-qualification.py
+  tests/capacity-capability-contract.py
   docs/architecture/scope.md
   docs/architecture/production-host.md
   docs/architecture/production-inventory.md

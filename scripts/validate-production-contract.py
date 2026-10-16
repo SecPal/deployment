@@ -1287,6 +1287,14 @@ def validate_host_facts(
         native_postgresql.admit_native_storage(facts["native_postgresql"])
     except native_postgresql.QualificationError:
         raise ContractViolation("native PostgreSQL data capacity is insufficient or invalid") from None
+    pg_headroom = facts["native_postgresql"]["headroom"]
+    for filesystem_total, host_total in (
+        ("filesystem_total_bytes", "storage_total_bytes"),
+        ("filesystem_total_inodes", "total_inodes"),
+    ):
+        if pg_headroom[filesystem_total] > facts["resources"][host_total]:
+            raise ContractViolation("native PostgreSQL filesystem exceeds host total")
+
 
 
 def parse_arguments() -> argparse.Namespace:

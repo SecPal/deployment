@@ -198,15 +198,23 @@ remains outside it.
 
 ### `resources`
 
-The inventory declares admission requirements. CPU, total storage, and total
-inode values cannot be lower than the schema contract. Memory remains an
-explicit positive operator-selected byte requirement until D.10 supplies a
-measured universal floor; it is still compared exactly with supplied facts.
-`resources.storage` contains only byte and inode
-headroom observations plus the backing filesystem's byte and inode totals.
-Each absolute/percentage pair must exactly match those per-filesystem totals,
-allowing whole-number flooring, and each filesystem total must fit within the
-corresponding aggregate host total.
+The inventory declares operating-profile admission requirements. CPU, RAM,
+total storage and total inode values are explicit positive operator-selected
+requirements, compared exactly with observed host facts. The example's four
+CPUs, 8 GiB, 100 GiB and one million inodes are preliminary planning estimates;
+they are neither universal platform minimums nor measured customer capacity.
+Functional platform conformance, workload capacity qualification and production
+operating reserve are distinct [contracts](production-host.md#kernel-resources-and-basic-host-prerequisites).
+No named capacity profile is required merely to prove Host Enrollment.
+
+The existing per-path absolute byte/inode reserve policy and 20% free-byte and
+free-inode guard remain enforced. Native PostgreSQL PGDATA/WAL reserve and durability
+admission remain independently owned and unchanged. A configured profile cannot
+waive any filesystem, security or durability check.
+
+Supplied storage headroom facts include backing filesystem totals. Each
+absolute/percentage pair must agree with those totals, allowing whole-number
+flooring, and each filesystem total must fit within the aggregate host total.
 The separate closed `filesystems` fact group contains a shared `access` fact
 for canonical path, ownership, mode, locality, and effective account access,
 plus filesystem type, effective read-only mount state, `d_type`, and XFS

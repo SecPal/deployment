@@ -245,8 +245,9 @@
       "properties": {
         "logical_cpus": {
           "type": "integer",
-          "minimum": 4,
-          "maximum": 1024
+          "minimum": 1,
+          "maximum": 1024,
+          "description": "Positive operator-selected operating-profile requirement, not a universal SecPal platform minimum."
         },
         "memory_bytes": {
           "type": "integer",
@@ -254,11 +255,13 @@
         },
         "storage_total_bytes": {
           "type": "integer",
-          "minimum": 107374182400
+          "minimum": 1,
+          "description": "Positive operator-selected operating-profile requirement, not a universal SecPal platform minimum."
         },
         "total_inodes": {
           "type": "integer",
-          "minimum": 1000000
+          "minimum": 1,
+          "description": "Positive operator-selected operating-profile requirement, not a universal SecPal platform minimum."
         },
         "storage": {
           "type": "object",

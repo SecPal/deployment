@@ -142,21 +142,39 @@ kernels, and mismatched package architecture fail closed. Unified cgroup v2,
 OverlayFS, effective Podman seccomp support, local `ext4` or XFS with `ftype=1`,
 and working `d_type` are required.
 
-The admission floors remain provider-neutral:
+Resource admission separates three independent contracts:
 
-| Resource      |                           Minimum |
-| ------------- | --------------------------------: |
-| Logical CPUs  |                                 4 |
-| RAM           | explicit positive inventory value |
-| Local storage |                           100 GiB |
-| Inodes        |                         1,000,000 |
-| Clock offset  | at most 1,000 ms and synchronized |
+- **Functional platform conformance:** the supported CPU instruction set, Rocky
+  kernel/package provenance, SELinux isolation, local persistent POSIX storage,
+  rootless Podman/Quadlet and effective security probes below. A positive
+  CPU/memory/storage/inode inventory value is required; no named capacity
+  profile is a prerequisite for Host Enrollment.
+- **Capacity qualification:** a source-, host- and workload-bound measurement.
+  The optional [capacity profile contract](capacity-capabilities.md) does not
+  confer platform conformance or customer-production acceptance.
+- **Operating reserve:** every inventory declares CPU, memory, storage and inode
+  requirements for its intended operating profile. Observed resources must meet
+  that declaration and every managed filesystem's declared absolute and
+  percentage headroom; a smaller host cannot override a larger declaration.
 
-Every managed filesystem also retains its inventory-defined free-byte,
-free-inode, and percentage headroom. Network filesystems and remote rootless
-storage are unsupported. The host must provide the tools named by the closed
-fact contract, including SELinux inspection, audit, persistent labeling,
-Podman, systemd-user, subordinate-ID, storage, time, and RPM tooling.
+The historical four-CPU, 8-GiB planning share, 100-GiB local-storage and
+one-million-inode values are preliminary sizing estimates, not measured
+universal SecPal minimums. They remain example/profile values, not hard schema
+floors for all hosts. Positive schema bounds are representation requirements,
+not evidence that a one-byte or one-inode machine can install SecPal: effective
+installation, security probes and declared operating reserves must still pass.
+
+The current conservative filesystem reserve policy is retained: path-specific
+absolute byte/inode reserves and at least 20% free bytes/inodes, as independently
+enforced by the inventory validator. Those reserves are safety policy, not
+empirical customer-capacity measurements. Native PostgreSQL separately retains
+its own PGDATA/WAL capacity and durability admission; this correction does not
+reduce it. Local rootless graphroot, safe filesystem semantics, reliable fsync,
+clock synchronization and the at-most-1,000-ms offset remain hard requirements.
+Network filesystems and remote rootless storage remain unsupported. The host
+must provide the tools named by the closed fact contract, including SELinux
+inspection, audit, persistent labeling, Podman, systemd-user, subordinate-ID,
+storage, time and RPM tooling.
 
 ## SELinux admission
 
