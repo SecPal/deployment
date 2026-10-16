@@ -80,8 +80,12 @@ ADR-017 applies: PostgreSQL 18 is the sole state engine. Psycopg 3 is required
 only by the Enrollment Authority; host-side key operations use the native
 OpenSSL tools and Python standard library. Use distribution-controlled libpq
 and verify-full for a remote database (runtime rejects unverified or unencrypted network connections); a private, authenticated Unix socket is
-also appropriate. The trusted connection factory owns credentials and bounded
-connection timeouts; they never enter requests, grants or evidence.
+also appropriate. Local socket admission checks canonical paths, every parent
+directory, non-writable directory permissions, socket type and trusted ownership
+(root, the authority user or the local PostgreSQL administrator). A shared
+`/tmp` socket or a symlink alias is rejected. The trusted connection factory owns
+credentials and bounded connection timeouts; they never enter requests, grants
+or evidence.
 
 The DBA explicitly calls `initialize_authority_store(connect, ca_certificate)`
 once on a dedicated authority database. Runtime never initializes, recreates or
@@ -97,10 +101,20 @@ DDL, application-database access or Secret Authority permissions. Transactions
 require durable synchronous commits. The database holds public identities,
 certificates and grant consumption state, not host private keys.
 
+Database rows alone cannot assert ENROLLED. Both authority read-back and the
+public verifier authenticate the existing signed grant and CA-issued client
+certificate, its exact identity/generation/scope and registered public key.
+The certificate proves completed registration at its original issuance time
+even after its temporary bootstrap validity ends. Live grant consumption and
+bootstrap certificate admission still enforce current expiration. Direct
+database write access without the Enrollment CA key cannot forge a registration;
+malformed state fails closed rather than falling back to an older identity.
+
 ## Consumer interface for #100
 
-`current_identity()` returns only the current public identity, CSR and machine correlation facts for the
-authority's exact resource scope. `EnrollmentVerifier` needs the public CA,
+`current_identity()` returns only the current public identity, CSR, machine
+correlation facts and existing public grant/certificate for the authority's exact
+resource scope. `EnrollmentVerifier` needs the public CA,
 trusted provider/management observation, and authenticated current-identity
 read-back; it does not need the Enrollment CA private key or database write
 authority.
@@ -116,7 +130,8 @@ restarts; new proof still requires fresh provider/management correlation and
 current-generation read-back. `verify(credential, challenge, proof)` additionally
 validates the temporary certificate and grant during their validity window.
 A certificate without the private key, a stale generation, a changed resource
-or a copied Host Identity cannot authenticate. #100 separately owns challenge/session replay protection,
+or a copied Host Identity cannot authenticate. #100 separately owns
+challenge/session replay protection,
 purpose-bounded Activation Sessions, Secret delivery and subsequent
 re-authorization. Enrollment grants none of those authorities.
 

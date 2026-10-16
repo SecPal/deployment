@@ -20,6 +20,8 @@ import json
 import os
 from pathlib import Path
 import re
+import pwd
+import ssl
 import stat
 import subprocess
 import sys
@@ -386,7 +388,7 @@ def _request(request):
     return public
 
 
-def _grant(grant, ca, directory):
+def _signed_grant(grant, ca, directory):
     _closed(grant, {"payload", "signature"}, "grant-fields")
     p = grant["payload"]
     _closed(p, GRANT_FIELDS, "grant-payload")
@@ -402,7 +404,6 @@ def _grant(grant, ca, directory):
     for name in ["generation", "issued_at", "expires_at"]:
         _integer(p[name])
     if (type(p["purpose"]) is not str or p["purpose"] not in {"enroll", "recover"}
-            or not p["issued_at"] <= now() < p["expires_at"]
             or not 0 < p["expires_at"] - p["issued_at"] <= MAX_GRANT_SECONDS):
         raise EnrollmentError("grant-time-or-purpose")
     public, fingerprint = _ca(ca)
@@ -411,6 +412,13 @@ def _grant(grant, ca, directory):
     _verify(public, b"SecPal Enrollment Grant v1\n" + canonical(p),
             grant["signature"], directory)
     return p
+
+
+def _grant(grant, ca, directory):
+    payload = _signed_grant(grant, ca, directory)
+    if not payload["issued_at"] <= now() < payload["expires_at"]:
+        raise EnrollmentError("grant-time-or-purpose")
+    return payload
 
 
 def _proof_message(grant):
@@ -425,16 +433,36 @@ def _identity(grant, certificate):
         "certificate_sha256": hashlib.sha256(certificate.encode()).hexdigest()}
 
 
-def _admit_certificate(certificate, grant, ca, directory):
+def _admit_certificate(certificate, grant, ca, directory, *, registered=False):
     if (type(certificate) is not str or not 0 < len(certificate) <= 16384
             or certificate.count("-----BEGIN CERTIFICATE-----") != 1):
         raise EnrollmentError("certificate-format")
     with tempfile.TemporaryDirectory(prefix=".certificate-", dir=directory) as raw:
         path = Path(raw) / "client.pem"
         _write(path, certificate)
+        at = now()
+        if registered:
+            # A completed registration remains authentic after its bootstrap
+            # credential expires. Verify its existing CA signature at issuance,
+            # never use this path for consuming a grant or live TLS admission.
+            try:
+                dates = openssl("certificate-registration-time", [
+                    "x509", "-in", path, "-noout", "-dates"]).decode("ascii").splitlines()
+                fields = dict(line.split("=", 1) for line in dates)
+                before = int(ssl.cert_time_to_seconds(fields["notBefore"]))
+                after = int(ssl.cert_time_to_seconds(fields["notAfter"]))
+                payload = grant["payload"]
+                if (set(fields) != {"notBefore", "notAfter"}
+                        or not payload["issued_at"] - 1 <= before < after
+                        or after != payload["expires_at"] or before > now()
+                        or payload["issued_at"] > now()):
+                    raise EnrollmentError("registration-certificate-time")
+                at = max(before, payload["issued_at"])
+            except (ValueError, KeyError, UnicodeError):
+                raise EnrollmentError("registration-certificate-time") from None
         openssl("verify-certificate", ["verify", "-CAfile", ca, "-no-CApath",
                                       "-no-CAstore", "-purpose", "sslclient",
-                                      "-attime", str(now()), path])
+                                      "-attime", str(at), path])
         subject = openssl("certificate-binding", ["x509", "-in", path, "-noout",
                                                    "-subject", "-nameopt", "RFC2253"])
         if subject.strip() != ("subject=CN=" + digest(grant["payload"])).encode():
@@ -443,6 +471,26 @@ def _admit_certificate(certificate, grant, ca, directory):
         if fingerprint != grant["payload"]["public_key_sha256"]:
             raise EnrollmentError("certificate-key")
     return _identity(grant, certificate)
+
+
+def admit_registration(record, ca, directory):
+    """Authenticate stored completion using the existing CA-issued certificate."""
+    _closed(record, {"identity", "csr", "machine", "credential"}, "registration-fields")
+    credential = record["credential"]
+    _closed(credential, {"grant", "certificate"}, "credential-fields")
+    grant = credential["grant"]
+    payload = _signed_grant(grant, ca, directory)
+    identity = _admit_certificate(credential["certificate"], grant, ca, directory,
+                                  registered=True)
+    if (canonical(record["identity"]) != canonical(identity)
+            or canonical(record["machine"]) != canonical(payload["machine"])):
+        raise EnrollmentError("registration-binding")
+    public, fingerprint = _public(record["csr"], "req")
+    if fingerprint != payload["public_key_sha256"]:
+        raise EnrollmentError("registered-key-binding")
+    return identity, public
+
+
 
 
 class LocalHost:
@@ -577,9 +625,32 @@ class TrustedHost:
     observed_at: int
 
 
-def admit_database_transport(host, sslmode, encrypted):
-    """ADR-017: authenticated local socket or hostname-verified TLS."""
+def admit_database_transport(host, sslmode, encrypted, *, port=5432):
+    """ADR-017: independently protected local socket or hostname-verified TLS."""
     if type(host) is str and host.startswith("/"):
+        directory = Path(host)
+        try:
+            if ".." in directory.parts or directory.resolve(strict=True) != directory:
+                raise EnrollmentError("authority-database-socket")
+            owners = {0, os.geteuid()}
+            try:
+                owners.add(pwd.getpwnam("postgres").pw_uid)
+            except KeyError:
+                pass
+            for path in (directory, *directory.parents):
+                info = path.lstat()
+                sticky_parent = (path != directory and path == Path("/tmp")
+                                 and info.st_uid == 0 and info.st_mode & stat.S_ISVTX)
+                if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in owners
+                        or (info.st_mode & 0o022 and not sticky_parent)):
+                    raise EnrollmentError("authority-database-socket")
+            if str(int(port)) != str(port) or not 1 <= int(port) <= 65535:
+                raise EnrollmentError("authority-database-socket")
+            info = (directory / (".s.PGSQL." + str(port))).lstat()
+            if not stat.S_ISSOCK(info.st_mode) or info.st_uid not in owners or info.st_nlink != 1:
+                raise EnrollmentError("authority-database-socket")
+        except (OSError, ValueError):
+            raise EnrollmentError("authority-database-socket") from None
         return
     if sslmode != "verify-full" or encrypted is not True:
         raise EnrollmentError("authority-database-transport")
@@ -605,7 +676,8 @@ def authority_transaction(connect):
                 encrypted = db.execute(
                     "SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()").fetchone()["ssl"]
             admit_database_transport(db.info.host,
-                                     db.info.get_parameters().get("sslmode"), encrypted)
+                                     db.info.get_parameters().get("sslmode"), encrypted,
+                                     port=db.info.port)
             for setting in ["fsync", "full_page_writes"]:
                 if db.execute("SHOW " + setting).fetchone()[setting] != "on":
                     raise EnrollmentError("authority-database-durability")
@@ -704,18 +776,20 @@ class EnrollmentAuthority:
 
     def _generation(self, db, request, purpose):
         previous = self._previous(db)
+        previous_record = None if previous is None else self._record(db, previous)
         if purpose == "enroll":
             if previous is not None:
                 raise EnrollmentError("duplicate-enrollment")
         elif purpose == "recover":
             if previous is None or not callable(self.recovery):
                 raise EnrollmentError("recovery-authorization-required")
-            _ready(self.recovery, request, json.loads(previous["identity"]))
+            _ready(self.recovery, request, previous_record["identity"])
         else:
             raise EnrollmentError("grant-purpose")
         # A known key cannot migrate to another resource/machine/host identity.
-        for row in db.execute("SELECT request FROM secpal_enrollment.enrollments WHERE fingerprint=%s OR host_id=%s",
+        for row in db.execute("SELECT * FROM secpal_enrollment.enrollments WHERE fingerprint=%s OR host_id=%s",
                               (request["public_key_sha256"], request["host_id"])):
+            self._record(db, row)
             old = json.loads(row["request"])
             if any(old[key] != request[key] for key in [
                     "host_id", "deployment_id", "resource", "machine", "role", "public_key_sha256"]):
@@ -729,13 +803,14 @@ class EnrollmentAuthority:
             raise EnrollmentError("grant-lifetime")
         with self._transaction() as db:
             generation = self._generation(db, request, purpose)
+            issued_at = now()
             payload = {"version": 1, "grant_id": str(uuid.uuid4()),
                        "deployment_id": self.deployment_id, "resource": asdict(self.resource),
                        "role": self.role, "host_id": request["host_id"],
                        "machine": request["machine"],
                        "public_key_sha256": request["public_key_sha256"],
                        "request_sha256": digest(request), "generation": generation,
-                       "purpose": purpose, "issued_at": now(), "expires_at": now() + ttl,
+                       "purpose": purpose, "issued_at": issued_at, "expires_at": issued_at + ttl,
                        "authority_sha256": self.ca_fingerprint}
             signature = _sign(self.key, b"SecPal Enrollment Grant v1\n" + canonical(payload),
                               self.directory)
@@ -812,15 +887,50 @@ class EnrollmentAuthority:
                        (payload["grant_id"],))
         return {"grant": grant, "certificate": certificate}
 
+    def _record(self, db, row):
+        """One authenticated persisted-record boundary, including recovery inputs."""
+        try:
+            grant_row = db.execute(
+                "SELECT envelope,consumed FROM secpal_enrollment.grants WHERE grant_id=%s",
+                (row["grant_id"],)).fetchone()
+            if grant_row is None or grant_row["consumed"] is not True:
+                raise EnrollmentError("authority-record")
+            grant = json.loads(grant_row["envelope"])
+            request = json.loads(row["request"])
+            _closed(request, REQUEST_FIELDS, "authority-record")
+            record = {"identity": json.loads(row["identity"]),
+                      "csr": request["csr"], "machine": request["machine"],
+                      "credential": {"grant": grant, "certificate": row["certificate"]}}
+            admit_registration(record, self.certificate, self.directory)
+            payload = grant["payload"]
+            if (digest(request) != payload["request_sha256"]
+                    or any(request[k] != payload[k] for k in [
+                        "deployment_id", "resource", "role", "host_id",
+                        "machine", "public_key_sha256"])
+                    or row["resource"] != resource_slot(_resource(payload["resource"]))
+                    or row["generation"] != payload["generation"]
+                    or row["host_id"] != payload["host_id"]
+                    or row["fingerprint"] != payload["public_key_sha256"]):
+                raise EnrollmentError("authority-record")
+            return record
+        except EnrollmentError:
+            raise
+        except (ValueError, KeyError, TypeError):
+            raise EnrollmentError("authority-record") from None
+
     def current_identity(self):
-        """Exact current public identity/CSR for #100; no secret or fleet listing."""
+        """Exact signed public registration for #100; no secret or fleet listing."""
         with self._transaction() as db:
             row = self._previous(db)
             if row is None:
                 raise EnrollmentError("not-enrolled")
-            request = json.loads(row["request"])
-            return {"identity": json.loads(row["identity"]),
-                    "csr": request["csr"], "machine": request["machine"]}
+            record = self._record(db, row)
+            identity = record["identity"]
+            if (identity["resource"] != asdict(self.resource)
+                    or identity["deployment_id"] != self.deployment_id
+                    or identity["role"] != self.role):
+                raise EnrollmentError("enrollment-scope")
+            return record
 
     def authenticate(self, identity, challenge, proof):
         """Public verification path; Secret Authority never needs our signing key."""
@@ -912,12 +1022,9 @@ class EnrollmentVerifier:
             current = self.current(identity["host_id"])
         except Exception:
             raise EnrollmentError("observe-current-enrollment") from None
-        _closed(current, {"identity", "csr", "machine"}, "current-enrollment-format")
-        if canonical(current["identity"]) != canonical(identity):
+        registered, public = admit_registration(current, self.certificate, self.directory)
+        if canonical(registered) != canonical(identity):
             raise EnrollmentError("identity-not-current")
-        public, fingerprint = _public(current["csr"], "req")
-        if fingerprint != identity["public_key_sha256"]:
-            raise EnrollmentError("registered-key-binding")
         document = {**identity, "machine": current["machine"]}
         _observe_control(self.observe, document, self.deployment_id, self.resource, self.role)
         message = b"SecPal Enrolled Host Possession v1\n" + canonical(identity) + challenge

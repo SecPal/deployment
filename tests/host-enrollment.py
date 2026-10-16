@@ -7,6 +7,8 @@ import concurrent.futures
 import dataclasses
 import importlib.util
 import json
+import itertools
+import socket
 import getpass
 import shutil
 from contextlib import contextmanager
@@ -457,8 +459,25 @@ class EnrollmentTests(unittest.TestCase):
         credential = self.authority.consume(self.request, grant, proof)
         self.assertEqual(self.host.accept(credential, self.ca)["generation"], 1)
 
+    def test_database_transport_rejects_untrusted_local_sockets(self):
+        path = self.root / "socket"
+        path.mkdir(mode=0o700)
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(str(path / ".s.PGSQL.5432"))
+            enrollment.admit_database_transport(str(path), None, False)
+            for candidate in ["/tmp", str(path) + "/../socket"]:
+                with self.assertRaises(enrollment.EnrollmentError):
+                    enrollment.admit_database_transport(candidate, None, False)
+            path.chmod(0o777)
+            with self.assertRaises(enrollment.EnrollmentError):
+                enrollment.admit_database_transport(str(path), None, False)
+            path.chmod(0o700)
+            alias = self.root / "socket-alias"
+            alias.symlink_to(path, target_is_directory=True)
+            with self.assertRaises(enrollment.EnrollmentError):
+                enrollment.admit_database_transport(str(alias), None, False)
+
     def test_database_transport_rejects_plaintext_and_unverified_network(self):
-        enrollment.admit_database_transport("/private/socket", None, False)
         enrollment.admit_database_transport("db.example", "verify-full", True)
         for mode, encrypted in [("disable", False), ("prefer", True),
                                 ("require", True), ("verify-ca", True),
@@ -466,6 +485,48 @@ class EnrollmentTests(unittest.TestCase):
             with self.subTest(mode=mode, encrypted=encrypted):
                 with self.assertRaises(enrollment.EnrollmentError):
                     enrollment.admit_database_transport("db.example", mode, encrypted)
+
+    def test_grant_lifetime_uses_one_clock_observation(self):
+        clock = itertools.count(int(time.time()))
+        with patch.object(enrollment, "now", side_effect=lambda: next(clock)):
+            grant = self.authority.grant(self.request)
+        payload = grant["payload"]
+        self.assertEqual(payload["expires_at"] - payload["issued_at"], 300)
+
+    def test_database_writer_without_ca_key_cannot_forge_current_identity(self):
+        _, credential = self.complete()
+        previous = self.host.accept(credential, self.ca)
+        self.authority.recovery = lambda request, identity: None
+        request = self.host.request()
+        issued = self.authority.grant(request, purpose="recover")
+        p = issued["payload"]
+        forged = {**previous, "generation": 2, "grant_id": p["grant_id"]}
+        self.key.rename(self.key.with_suffix(".retained"))
+        with self.runtime_connect() as db:
+            db.execute("INSERT INTO secpal_enrollment.enrollments VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", (
+                p["grant_id"], enrollment.resource_slot(self.target), 2, p["host_id"],
+                p["public_key_sha256"], enrollment.canonical(request).decode(),
+                credential["certificate"], enrollment.canonical(forged).decode()))
+            db.execute("UPDATE secpal_enrollment.grants SET consumed=true WHERE grant_id=%s",
+                       (p["grant_id"],))
+        challenge = os.urandom(32)
+        proof = self.host.prove_identity(forged, challenge)
+        record = {"identity": forged, "csr": request["csr"], "machine": self.machine,
+                  "credential": {"grant": issued, "certificate": credential["certificate"]}}
+        verifier = enrollment.EnrollmentVerifier(
+            self.root / "consumer", self.ca, self.deployment, self.target,
+            "single-host", observe=self.observe, current=lambda host_id: record)
+        for operation in [self.authority.current_identity,
+                          lambda: verifier.authenticate(forged, challenge, proof)]:
+            with self.subTest(operation=operation):
+                with self.assertRaises(enrollment.EnrollmentError):
+                    operation()
+        self.key.with_suffix(".retained").rename(self.key)
+        recovery_calls = []
+        self.authority.recovery = lambda *args: recovery_calls.append(args)
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.authority.grant(self.host.request(), purpose="recover")
+        self.assertEqual(recovery_calls, [])
 
     def test_blue_green_resources_have_distinct_host_identities(self):
         _, blue_credential = self.complete()
