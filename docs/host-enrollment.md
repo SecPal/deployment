@@ -41,7 +41,11 @@ The separately held `EnrollmentAuthority` takes:
 Admission callbacks return `None` on success and raise on rejection; boolean
 claims are rejected. They are trusted in-process interfaces, never wire fields.
 The #169 contract owns provider request/result admission. Its resource versions are transient
-inspection preconditions, not permanent host fingerprints. IP addresses,
+inspection preconditions, not permanent host fingerprints. On grant consumption
+the observation binds the exact grant and possession signature; authentication
+binds the fresh challenge and signature. The trusted adapter must obtain this
+exchange from the expected host through its authenticated management path,
+never echo an untrusted request as an observation. IP addresses,
 unsigned metadata and a caller-constructed dictionary cannot substitute for the
 trusted provider/management boundary.
 
@@ -87,12 +91,30 @@ directory, non-writable directory permissions, socket type and trusted ownership
 credentials and bounded connection timeouts; they never enter requests, grants
 or evidence.
 
-The DBA explicitly calls `initialize_authority_store(connect, ca_certificate)`
-once on a dedicated authority database. Runtime never initializes, recreates or
+The DBA explicitly calls `initialize_authority_store(connect, ca_certificate, directory=private_root)`
+once on a dedicated authority database with a new private root directory. Runtime never initializes, recreates or
 repairs missing replay state. State is pinned to the CA fingerprint. Preserve
-it across authority restarts and recover it under independently owned database
-durability/recovery requirements; restoring an older replay ledger must never
-silently re-enable consumed grants.
+it across authority restarts under independently owned database durability and
+recovery requirements.
+
+The existing private authority root also holds a single integrity digest
+(`database-sha256.json`), outside the database's backup/restore domain, protected
+like the CA key. Every transaction compares a stable PostgreSQL snapshot with
+this digest before trusting any state. A normal mutation publishes its new
+digest durably before database commit. File locking and native serializable
+transactions keep concurrent issuer operations consistent. There is no external
+service, historical journal, counter registry or automatic pin repair.
+
+A restored database, missing pin, unauthorized state change or ambiguous commit
+fails closed, including identity read-back. An issuance failure before the
+commit boundary still rolls back normally; a lost response after a confirmed
+commit uses the existing explicitly authorized recovery-grant protocol. If
+commit outcome or integrity cannot be established, the existing Recovery
+Authority must establish fresh authority trust and revoke the old CA/activation
+authority before re-enrollment. The SDK deliberately has no in-place rebaseline
+or weaker recovery endpoint. Restoring the private CA/pin together with stale
+database state is outside this trust boundary and cannot establish freshness;
+such recovery must remain offline until independently authorized fresh trust.
 
 Keep schema ownership separate from the runtime role. Grant runtime USAGE on
 `secpal_enrollment`, SELECT on its tables, INSERT on `grants`/`enrollments`,

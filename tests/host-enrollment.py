@@ -71,7 +71,8 @@ class EnrollmentTests(unittest.TestCase):
         self.addCleanup(self.machine_patch.stop)
         self.host = enrollment.LocalHost.create(self.root / "host", self.deployment,
                                                self.target, "single-host", ready=lambda: None)
-        enrollment.initialize_authority_store(self.connect, self.ca)
+        enrollment.initialize_authority_store(self.connect, self.ca,
+                                             directory=self.root / "authority")
         with self.connect() as db:
             db.execute("GRANT USAGE ON SCHEMA secpal_enrollment TO secpal_enrollment_runtime")
             db.execute("GRANT SELECT ON ALL TABLES IN SCHEMA secpal_enrollment"
@@ -527,6 +528,75 @@ class EnrollmentTests(unittest.TestCase):
         with self.assertRaises(enrollment.EnrollmentError):
             self.authority.grant(self.host.request(), purpose="recover")
         self.assertEqual(recovery_calls, [])
+
+    def test_management_observation_binds_the_fresh_possession_exchange(self):
+        grant = self.authority.grant(self.request)
+        proof = self.host.prove(grant, self.ca)
+        request_only = self.observe(self.request)
+        with patch.object(self.authority, "observe", return_value=request_only):
+            with self.assertRaises(enrollment.EnrollmentError):
+                self.authority.consume(self.request, grant, proof)
+        credential = self.authority.consume(self.request, grant, proof)
+        identity = self.host.accept(credential, self.ca)
+        challenge = os.urandom(32)
+        proof = self.host.prove_identity(identity, challenge)
+        identity_only = self.observe({**identity, "machine": self.machine})
+        with patch.object(self.authority, "observe", return_value=identity_only):
+            with self.assertRaises(enrollment.EnrollmentError):
+                self.authority.authenticate(identity, challenge, proof)
+
+    def test_restored_pre_consumption_database_fails_closed(self):
+        grant = self.authority.grant(self.request)
+        proof = self.host.prove(grant, self.ca)
+        self.authority.consume(self.request, grant, proof)
+        with self.connect() as db:
+            db.execute("DELETE FROM secpal_enrollment.enrollments")
+            db.execute("UPDATE secpal_enrollment.grants SET consumed=false")
+        for operation in [
+                lambda: self.authority.consume(self.request, grant, proof),
+                self.authority.current_identity,
+                lambda: enrollment.EnrollmentAuthority(
+                    self.root / "authority", self.ca, self.key, self.deployment,
+                    self.target, "single-host", observe=self.observe,
+                    ready=lambda observed: None, connect=self.runtime_connect)]:
+            with self.subTest(operation=operation):
+                with self.assertRaises(enrollment.EnrollmentError):
+                    operation()
+
+    def test_restored_database_cannot_reactivate_a_revoked_generation(self):
+        _, first = self.complete()
+        previous = self.host.accept(first, self.ca)
+        self.authority.recovery = lambda request, identity: None
+        self.request = self.host.request()
+        second_grant, second = self.complete(purpose="recover")
+        self.host.accept(second, self.ca)
+        with self.connect() as db:
+            db.execute("DELETE FROM secpal_enrollment.enrollments WHERE generation=2")
+            db.execute("DELETE FROM secpal_enrollment.grants WHERE grant_id=%s",
+                       (second_grant["payload"]["grant_id"],))
+        challenge = os.urandom(32)
+        proof = self.host.prove_identity(previous, challenge)
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.authority.authenticate(previous, challenge, proof)
+
+    def test_ambiguous_commit_never_automatically_rebaselines_integrity(self):
+        grant = self.authority.grant(self.request)
+        proof = self.host.prove(grant, self.ca)
+        pin = self.root / "authority/database-sha256.json"
+        previous = pin.read_bytes()
+        with patch.object(psycopg.Connection, "commit",
+                          side_effect=psycopg.OperationalError("synthetic-commit-ambiguity")):
+            with self.assertRaises(enrollment.EnrollmentError):
+                self.authority.consume(self.request, grant, proof)
+        self.assertNotEqual(pin.read_bytes(), previous)
+        for operation in [self.authority.current_identity,
+                          lambda: self.authority.consume(self.request, grant, proof)]:
+            with self.assertRaises(enrollment.EnrollmentError):
+                operation()
+        pin.unlink()
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.authority.current_identity()
+        self.assertFalse(pin.exists())
 
     def test_blue_green_resources_have_distinct_host_identities(self):
         _, blue_credential = self.complete()

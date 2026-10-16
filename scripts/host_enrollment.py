@@ -671,6 +671,7 @@ def authority_transaction(connect):
             raise EnrollmentError("authority-database-contract")
         db.row_factory = dict_row
         with db:
+            db.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
             encrypted = False
             if not db.info.host.startswith("/"):
                 encrypted = db.execute(
@@ -700,10 +701,29 @@ def authority_transaction(connect):
                 raise EnrollmentError("authority-state-close") from None
 
 
-def initialize_authority_store(connect, authority_certificate):
+def database_digest(db):
+    """Stream a stable native transaction snapshot, never private host material."""
+    result = hashlib.sha256(b"SecPal Enrollment Authority Database v1\n")
+    for table, order in [("authority", "singleton"), ("grants", "grant_id"),
+                         ("enrollments", "grant_id")]:
+        result.update(table.encode() + b"\0")
+        with db.cursor(name="secpal_integrity_" + table) as rows:
+            rows.execute("SELECT * FROM secpal_enrollment." + table + " ORDER BY " + order)
+            for row in rows:
+                result.update(canonical(row) + b"\n")
+    return result.hexdigest()
+
+
+def initialize_authority_store(connect, authority_certificate, *, directory):
     """Explicit one-time DBA operation; never called by enrollment runtime."""
     _, fingerprint = _ca(Path(authority_certificate))
-    with authority_transaction(connect) as db:
+    directory = Path(directory)
+    _ancestry(directory.parent)
+    try:
+        directory.mkdir(mode=0o700)
+    except OSError:
+        raise EnrollmentError("authority-already-exists") from None
+    with _lock(directory), authority_transaction(connect) as db:
         db.execute("CREATE SCHEMA secpal_enrollment")
         db.execute("""CREATE TABLE secpal_enrollment.authority(
             singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
@@ -722,6 +742,10 @@ def initialize_authority_store(connect, authority_certificate):
             UNIQUE(resource,generation))""")
         db.execute("REVOKE ALL ON SCHEMA secpal_enrollment FROM PUBLIC")
         db.execute("REVOKE ALL ON ALL TABLES IN SCHEMA secpal_enrollment FROM PUBLIC")
+        # The pin is deliberately outside the database restoration domain.
+        # Persist before commit: ambiguity poisons admission rather than
+        # silently trusting potentially restored or partially committed state.
+        _publish(directory / "database-sha256.json", database_digest(db))
 
 
 class EnrollmentAuthority:
@@ -737,12 +761,6 @@ class EnrollmentAuthority:
         own = openssl("authority-key-binding", ["pkey", "-in", self.key, "-pubout"])
         if own != ca_public:
             raise EnrollmentError("authority-key-binding")
-        if not self.directory.exists():
-            _ancestry(self.directory.parent)
-            try:
-                self.directory.mkdir(mode=0o700)
-            except OSError:
-                raise EnrollmentError("authority-directory") from None
         _directory(self.directory)
         self.deployment_id, self.resource, self.role = deployment_id, host_resource(resource), role
         self.observe, self.ready, self.recovery = observe, ready, recovery
@@ -752,19 +770,29 @@ class EnrollmentAuthority:
             pass
 
     @contextmanager
-    def _transaction(self):
-        _directory(self.directory)
-        with authority_transaction(self.connect) as db:
+    def _transaction(self, *, write=False):
+        # All instances of this authority share this existing private root.
+        with _lock(self.directory), authority_transaction(self.connect) as db:
             row = db.execute(
                 "SELECT version, authority_sha256 FROM secpal_enrollment.authority"
                 " WHERE singleton=true").fetchone()
             if row is None or row["version"] != 1 or row["authority_sha256"] != self.ca_fingerprint:
                 raise EnrollmentError("authority-state-binding")
+            pin = self.directory / "database-sha256.json"
+            expected = _json_file(pin)
+            _hash(expected)
+            if database_digest(db) != expected:
+                raise EnrollmentError("authority-state-integrity")
             yield db
+            if write:
+                # No automatic pin repair after a failed/ambiguous commit.
+                # The existing Recovery Authority must establish fresh trust.
+                _publish(pin, database_digest(db))
 
-    def _observe(self, request):
+    def _observe(self, request, *, possession=None):
         _request(request)
-        observation = _observe_control(self.observe, request, self.deployment_id,
+        document = request if possession is None else {**request, "possession": possession}
+        observation = _observe_control(self.observe, document, self.deployment_id,
                                        self.resource, self.role)
         _ready(self.ready, observation)
         return observation
@@ -801,7 +829,7 @@ class EnrollmentAuthority:
         self._observe(request)
         if type(ttl) is not int or not 1 <= ttl <= MAX_GRANT_SECONDS:
             raise EnrollmentError("grant-lifetime")
-        with self._transaction() as db:
+        with self._transaction(write=True) as db:
             generation = self._generation(db, request, purpose)
             issued_at = now()
             payload = {"version": 1, "grant_id": str(uuid.uuid4()),
@@ -855,7 +883,6 @@ class EnrollmentAuthority:
 
     def consume(self, request, grant, proof):
         request, grant = json.loads(canonical(request)), json.loads(canonical(grant))
-        self._observe(request)  # Fresh independent provider/management/readiness.
         payload = _grant(grant, self.certificate, self.directory)
         if (payload["request_sha256"] != digest(request)
                 or any(payload[k] != request[k] for k in [
@@ -864,7 +891,8 @@ class EnrollmentAuthority:
             raise EnrollmentError("grant-request-binding")
         public = _request(request)
         _verify(public, _proof_message(grant), proof, self.directory)
-        with self._transaction() as db:
+        self._observe(request, possession={"grant_sha256": digest(grant), "proof": proof})
+        with self._transaction(write=True) as db:
             row = db.execute("SELECT * FROM secpal_enrollment.grants WHERE grant_id=%s",
                              (payload["grant_id"],)).fetchone()
             if row is None or row["envelope"] != canonical(grant).decode():
@@ -1025,8 +1053,9 @@ class EnrollmentVerifier:
         registered, public = admit_registration(current, self.certificate, self.directory)
         if canonical(registered) != canonical(identity):
             raise EnrollmentError("identity-not-current")
-        document = {**identity, "machine": current["machine"]}
-        _observe_control(self.observe, document, self.deployment_id, self.resource, self.role)
         message = b"SecPal Enrolled Host Possession v1\n" + canonical(identity) + challenge
         _verify(public, message, proof, self.directory)
+        document = {**identity, "machine": current["machine"],
+                    "challenge": base64.b64encode(challenge).decode(), "proof": proof}
+        _observe_control(self.observe, document, self.deployment_id, self.resource, self.role)
         return identity
