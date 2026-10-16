@@ -51,8 +51,10 @@ The SDK adds no network listener, provider credential, daemon or privilege.
 Rotation uses the same session/possession mechanism through
 `challenge_rotation(..., candidate=ref)`. It additionally requires the
 independent `authorize_rotation` callback; ordinary authorization cannot enable
-it. The session binds the exact candidate, and candidate APP_KEY delivery
-includes the accepted key for decryption. Normal Activation cannot retrieve a
+it. Durable rotation-pending intent must already exist before issuing or
+redeeming a candidate session. The session binds both the exact candidate and
+operation ID, so a rollback/retry cannot reuse an earlier attempt's authorization.
+Candidate APP_KEY delivery includes the accepted key for decryption. Normal Activation cannot retrieve a
 candidate.
 
 A copied session/challenge is not a bearer credential. It cannot replace host

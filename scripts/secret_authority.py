@@ -909,8 +909,8 @@ class DeploymentActivation:
         for ref in refs:
             authority, row = _record(state, ref)
             if ref == rotation:
-                if row["status"] not in {"candidate", "rotation-pending"}:
-                    raise SecretError("rotation-not-candidate")
+                if row["status"] != "rotation-pending" or type(row["rotation"]) is not dict:
+                    raise SecretError("rotation-intent-required")
             elif row["status"] != "current" or authority["current"] != ref["generation"]:
                 raise SecretError("generation-not-current")
             if row["host_id"] is not None and (row["host_id"] != identity.get("host_id")
@@ -945,6 +945,8 @@ class DeploymentActivation:
                 "identity": deepcopy(identity), "purpose": purpose, "refs": refs,
                 "challenge": base64.b64encode(challenge).decode(),
                 "expires_at": expires, "consumed": False, "rotation": rotation,
+                "operation_id": (_record(state, rotation)[1]["rotation"]["operation_id"]
+                                 if rotation is not None else None),
             }
         return {"session_id": sid, "challenge": challenge, "expires_at": expires}
 
@@ -970,6 +972,10 @@ class DeploymentActivation:
             _admit_custody(state, rotation=session["rotation"])
             metadata = self._policy(state, actual, session["purpose"], session["refs"],
                                     rotation=session["rotation"])
+            if session["rotation"] is not None:
+                _, candidate = _record(state, session["rotation"])
+                if candidate["rotation"]["operation_id"] != session["operation_id"]:
+                    raise SecretError("rotation-operation-binding")
             values = _delivery_values(state, session["refs"])
             current["consumed"] = True
         # Commit acknowledgement precedes release. A delivery failure does not

@@ -534,23 +534,38 @@ class SecretAuthorityTests(unittest.TestCase):
         self.admin.checkpoint(self.custody, recovery_key=self.custody.key)
         with self.assertRaises(secret.SecretError):
             self.challenge([candidate])
+        self.activation.authorize_rotation = lambda identity, purpose, metadata: None
+        # Even an authorized rotation cannot release a plain, unclaimed candidate.
         with self.assertRaises(secret.SecretError):
             self.activation.challenge_rotation(self.identity, "api", [candidate],
                                                candidate=candidate)
-        self.activation.authorize_rotation = lambda identity, purpose, metadata: None
-        challenge = self.activation.challenge_rotation(self.identity, "api", [candidate],
-                                                        candidate=candidate)
-        result = self.redeem(challenge)
-        path = Path(result["directory"])
-        with self.store.transaction() as state:
-            previous = secret._value(state, self.app)
-        self.assertTrue(__import__("hmac").compare_digest(
-            (path / "app-previous-keys").read_bytes(), previous),
-            "candidate cannot decrypt state written by the accepted current key")
-        self.assertEqual(self.admin.metadata(candidate)["status"], "candidate")
-        self.assertEqual(self.admin.metadata(self.app)["status"], "current")
+        delivered = []
+        def stage(ref, previous):
+            self.activation.authorize_rotation = None
+            with self.assertRaises(secret.SecretError):
+                self.activation.challenge_rotation(self.identity, "api", [candidate],
+                                                   candidate=candidate)
+            self.activation.authorize_rotation = lambda identity, purpose, metadata: None
+            challenge = self.activation.challenge_rotation(self.identity, "api", [candidate],
+                                                            candidate=candidate)
+            result = self.redeem(challenge)
+            path = Path(result["directory"])
+            with self.store.transaction() as state:
+                old = secret._value(state, self.app)
+            self.assertTrue(__import__("hmac").compare_digest(
+                (path / "app-previous-keys").read_bytes(), old),
+                "candidate cannot decrypt state written by the accepted current key")
+            self.assertEqual(self.admin.metadata(candidate)["status"], "rotation-pending")
+            with self.assertRaises(secret.SecretError):
+                self.admin.retire(candidate, authorize=lambda metadata: None)
+            self.assertEqual(self.admin.metadata(self.app)["status"], "current")
+            delivered.append(challenge)
+        self.admin.rotate(candidate, validate=stage, start=lambda *a: None,
+                          ready=lambda *a: None, accept=lambda *a: None,
+                          revoke=lambda *a: None, rollback=lambda *a: None)
+        self.assertEqual(self.admin.metadata(candidate)["status"], "current")
         with self.assertRaises(secret.SecretError):
-            self.redeem(challenge)
+            self.redeem(delivered[0])
 
     def test_concurrent_rotation_cannot_rollback_a_different_accepted_rotation(self):
         import threading
@@ -681,6 +696,33 @@ class SecretAuthorityTests(unittest.TestCase):
             with self.assertRaises(psycopg.errors.CheckViolation):
                 db.execute("UPDATE secpal_secrets.state SET ciphertext=%s",
                            (b"x" * (secret.MAX_STATE + 29),))
+
+    def test_rotation_session_cannot_cross_a_verified_rollback_into_another_attempt(self):
+        candidate = self.admin.candidate("app-key", b"base64:" + __import__("base64").b64encode(os.urandom(32)),
+                                         authority_id=self.app["authority_id"])
+        self.admin.checkpoint(self.custody, recovery_key=self.custody.key)
+        self.activation.authorize_rotation = lambda *args: None
+        held = []
+        def prepare(*args):
+            held.append(self.activation.challenge_rotation(
+                self.identity, "api", [candidate], candidate=candidate))
+        def fail(*args):raise RuntimeError("synthetic readiness failure")
+        with self.assertRaises(secret.SecretError):
+            self.admin.rotate(candidate, validate=prepare, start=lambda *a: None,
+                              ready=fail, accept=lambda *a: None, revoke=lambda *a: None,
+                              rollback=lambda *a: None)
+        outcomes = []
+        def retry(*args):
+            try:
+                self.redeem(held[0])
+                outcomes.append("accepted-stale-session")
+            except secret.SecretError:
+                outcomes.append("rejected")
+        self.admin.rotate(candidate, validate=retry, start=lambda *a: None,
+                          ready=lambda *a: None, accept=lambda *a: None,
+                          revoke=lambda *a: None, rollback=lambda *a: None)
+        self.assertEqual(outcomes, ["rejected"])
+        self.assertEqual(list(self.delivery.root.iterdir()), [])
 
 
 if __name__ == "__main__":
