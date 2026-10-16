@@ -369,6 +369,7 @@ def admit(
         raise QualificationError("trusted workload observation contains a deadline miss")
     if (
         workload["duration_seconds"] < workload_contract["minimum_duration_seconds"]
+        or workload["completed_iterations"] < workload_contract["minimum_completed_iterations"]
         or not workload_contract["minimum_duration_seconds"]
         <= collected_workload["minimum_iteration_duration_seconds"]
         <= collected_workload["maximum_iteration_duration_seconds"]

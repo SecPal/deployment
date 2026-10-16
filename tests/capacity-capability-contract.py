@@ -420,6 +420,25 @@ class CapacityCapabilityContractTests(unittest.TestCase):
             self.run_validator(evidence, source=source), "reviewed duration"
         )
 
+    def test_reviewed_manifest_iteration_count_is_enforced(self) -> None:
+        spec = importlib.util.spec_from_file_location("capacity_count_probe", VALIDATOR)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        probes, _, storage_revision = module.load_probe_contract()
+        probes["workload"]["iteration"]["minimum_completed_iterations"] = 2
+        workload_revision = canonical_digest(probes["workload"])
+        evidence = provider_evidence()
+        evidence["qualification"]["workload_probe_revision_sha256"] = workload_revision
+        evidence["observations"]["workload"]["probe_revision_sha256"] = workload_revision
+        source = source_evidence(evidence)
+        payload = json.dumps(source, sort_keys=True, separators=(",", ":")).encode()
+        evidence["qualification"]["source_evidence_sha256"] = hashlib.sha256(payload).hexdigest()
+        with self.assertRaises(module.QualificationError):
+            module.admit(evidence, source, payload,
+                         module.parse_timestamp(EVALUATION_TIME, "evaluation"),
+                         self.schema, probes, workload_revision, storage_revision,
+                         SHA_A, SHA_B, HASH_A, workload_revision, storage_revision)
+
     def test_zero_duration_storage_cycle_cannot_qualify(self) -> None:
         evidence = provider_evidence()
         source = source_evidence(evidence)
