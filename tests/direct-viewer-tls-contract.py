@@ -105,6 +105,132 @@ class TLSContract(unittest.TestCase):
             native.assert_called_once()
             self.assertEqual(native.call_args.kwargs['timeout'],15)
 
+
+    def test_systemd_package_prerequisite_is_current_exact_and_successful(self):
+        spec=importlib.util.spec_from_file_location('tls_systemd_controller',ROOT/'scripts/direct-viewer-tls.py')
+        controller=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(controller)
+        command=['/usr/bin/python3','-I','-S',str(controller.HELPER),'--verify-packages']
+        # Actual systemd 257 busctl JSON representation, with synthetic times.
+        values={
+            'InvocationID':{'type':'ay','data':list(range(16))},
+            'ExecStartPre':{'type':'a(sasbttttuii)','data':[
+                ['/usr/bin/python3',command,False,100000,100,100500,500,42,1,0]]},
+            'ExecMainStartTimestampMonotonic':{'type':'t','data':501},
+            'InactiveExitTimestampMonotonic':{'type':'t','data':101},
+            'ActiveState':{'type':'s','data':'activating'},
+        }
+        def observe(operation,arguments,**_):
+            self.assertEqual(operation,'observe-systemd-package-prerequisite')
+            self.assertEqual(arguments[:5],['/usr/bin/busctl','--system','--json=short',
+                                           '--timeout=5','get-property'])
+            return json.dumps(values[arguments[-1]]).encode()
+        with mock.patch.object(Path,'read_text',return_value='0::/system.slice/secpal-viewer-renew.service\n'), \
+                mock.patch.object(controller,'run',side_effect=observe):
+            self.assertTrue(controller.systemd_package_admission())
+            for field,bad in [('ExecStartPre',[]),('ExecStartPre',[
+                    ['/usr/bin/python3',command,False,100000,100,100500,500,42,1,1]]),
+                    ('ExecStartPre',[
+                    ['/usr/bin/python3',command,True,100000,100,100500,500,42,1,0]]),
+                    ('ExecStartPre',[
+                    ['/usr/bin/python3',command[:-1]+['--health'],False,100000,100,100500,500,42,1,0]]),
+                    ('InactiveExitTimestampMonotonic',502),
+                    ('ExecMainStartTimestampMonotonic',499),
+                    ('ActiveState','failed'),('InvocationID',[0]*16)]:
+                with self.subTest(field=field,bad=bad):
+                    previous=values[field]['data']
+                    values[field]['data']=bad
+                    try:
+                        with self.assertRaisesRegex(ValueError,'admit-systemd-package-prerequisite'):
+                            controller.systemd_package_admission()
+                    finally: values[field]['data']=previous
+            with mock.patch.object(controller,'run',side_effect=ValueError('dbus-unavailable')):
+                with self.assertRaises(ValueError): controller.systemd_package_admission()
+            original_type=values['ExecStartPre']['type']
+            values['ExecStartPre']['type']='s'
+            with self.assertRaisesRegex(ValueError,'admit-systemd-package-prerequisite'):
+                controller.systemd_package_admission()
+            values['ExecStartPre']['type']=original_type
+            calls=0
+            def changed_invocation(operation,arguments,**kwargs):
+                nonlocal calls
+                if arguments[-1]=='InvocationID':
+                    calls+=1
+                    return json.dumps({'type':'ay','data':[calls]*16}).encode()
+                return observe(operation,arguments,**kwargs)
+            with mock.patch.object(controller,'run',side_effect=changed_invocation):
+                with self.assertRaisesRegex(ValueError,'admit-systemd-package-prerequisite'):
+                    controller.systemd_package_admission()
+        with mock.patch.object(Path,'read_text',return_value='0::/system.slice/unrelated.service\n'), \
+                mock.patch.object(controller,'run') as native:
+            self.assertFalse(controller.systemd_package_admission())
+            native.assert_not_called()
+
+    def test_host_prerequisite_always_runs_full_package_observer(self):
+        spec=importlib.util.spec_from_file_location('tls_host_observer',ROOT/'scripts/direct-viewer-tls.py')
+        controller=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(controller)
+        class PackageMismatch(RuntimeError):
+            operation='verify-installed-package-payload'
+            reason='command-failed'
+        observer=mock.Mock()
+        actual_stat=Path.stat
+        def namespace_metadata(path,*args,**kwargs):
+            if str(path) in ('/proc/1/ns/mnt','/proc/self/ns/mnt'):
+                return SimpleNamespace(st_dev=1,st_ino=10 if str(path).startswith('/proc/1/') else 11)
+            return actual_stat(path,*args,**kwargs)
+        module=SimpleNamespace(observe_installed=observer,QualificationError=PackageMismatch)
+        with mock.patch.object(Path,'stat',namespace_metadata), \
+                mock.patch.object(controller,'SOURCE',ROOT), mock.patch.object(controller,'trusted'), \
+                mock.patch.object(controller.importlib.util,'module_from_spec',return_value=module), \
+                mock.patch.object(controller.importlib.util,'spec_from_file_location',
+                                  return_value=SimpleNamespace(loader=mock.Mock())), \
+                mock.patch.object(controller,'systemd_package_admission',return_value=True) as bypass, \
+                mock.patch('sysconfig.get_path',return_value='/unused'), \
+                mock.patch.object(sys,'path',sys.path.copy()), \
+                mock.patch.object(controller,'run',return_value=b'ActiveState=inactive\nUnitFileState=disabled'):
+            controller.package_authority(host_view=True)
+            observer.assert_called_once_with(controller.BUNDLE,controller.platform.machine(),
+                json.loads((ROOT/'config/production/certbot-package-policy.json').read_bytes()))
+            bypass.assert_not_called()
+            observer.side_effect=PackageMismatch()
+            with self.assertRaisesRegex(ValueError,'certbot-supply-verify-installed-package-payload-command-failed'):
+                controller.package_authority(host_view=True)
+        for group in ['0::/system.slice/unrelated.service\n',
+                      '0::/system.slice/secpal-viewer-renew.service-attacker\n']:
+            with mock.patch.object(Path,'read_text',return_value=group), \
+                    mock.patch.dict(controller.os.environ,{'INVOCATION_ID':'a'*32}), \
+                    mock.patch.object(controller,'run') as native:
+                self.assertFalse(controller.systemd_package_admission())
+                native.assert_not_called()
+
+    def test_package_prerequisite_retains_host_verification_and_runtime_sandbox(self):
+        for name in ('renew','health'):
+            text=(ROOT/f'config/production/host-systemd/secpal-viewer-{name}.service').read_text()
+            self.assertIn('ExecStartPre=+/usr/bin/python3 -I -S '
+                          '/usr/local/libexec/secpal/viewer-tls-source/scripts/direct-viewer-tls.py --verify-packages',text)
+            self.assertIn('ExecStart=/usr/bin/python3 -I -S ',text)
+            for restriction in ('NoNewPrivileges=true','ProtectSystem=strict','ProtectHome=true',
+                                'PrivateTmp=true','PrivateDevices=true','ProtectKernelTunables=true',
+                                'ProtectKernelModules=true','ProtectControlGroups=true','SocketBindDeny=any'):
+                self.assertIn(restriction,text)
+        state=policy(188)['state_cil']
+        self.assertIn('(allow init_t secpal_acme_state_t (dir (mounton)))',state)
+        self.assertNotIn('(allow container_t',state)
+        self.assertNotIn('(allow haproxy_t',state)
+        self.assertNotIn('(allow init_t file_type',state)
+
+    def test_failed_package_prerequisite_cannot_publish_or_execute_acme(self):
+        spec=importlib.util.spec_from_file_location('tls_failed_package_controller',ROOT/'scripts/direct-viewer-tls.py')
+        controller=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(controller)
+        with mock.patch.object(sys,'argv',['direct-viewer-tls.py','--renew']), \
+                mock.patch.object(controller,'package_authority',side_effect=ValueError('package-tampered')), \
+                mock.patch.object(controller,'renew') as renew, mock.patch.object(controller,'deploy') as deploy:
+            with self.assertRaisesRegex(ValueError,'package-tampered'): controller.main()
+            renew.assert_not_called()
+            deploy.assert_not_called()
+
     def spec(self, lifecycle='http01'):
         return direct.from_document({'topology':'single','frontend_host':'app.example.test',
             'api_host':'api.example.test','tls_lifecycle':lifecycle,

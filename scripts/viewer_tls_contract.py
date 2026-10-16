@@ -196,6 +196,7 @@ def policy(uid):
 (type secpal_acme_state_t)
 (typeattributeset file_type (secpal_acme_state_t))
 (roletype object_r secpal_acme_state_t)
+(allow init_t secpal_acme_state_t (dir (mounton)))
 (filecon "/srv/secpal/acme(/.*)?" any (system_u object_r secpal_acme_state_t ((s0) (s0))))
 '''
     return {'nft':nft,'cil':cil,'state_cil':state_cil}

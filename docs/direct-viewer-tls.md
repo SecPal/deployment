@@ -44,6 +44,21 @@ requires an operator-reviewed package-policy update. Runtime imports use the
 accepted RPM interpreter scheme, excluding user sites, `/usr/local` imports and
 site hooks. A private disposable import cache excludes adjacent bytecode.
 
+Native health and renewal units run that same observer as their fixed root
+ExecStartPre with systemd's + prefix, before applying the controller's filesystem
+namespace restrictions. ProtectHome and ProtectKernelModules intentionally mask
+installed directory metadata inside the later sandbox. A separate namespace may
+still be created for the prerequisite; its inode is not an admission criterion.
+The full signed RPM verifier grades the exposed host files, and no payload
+mismatch is ignored to accommodate sandbox masks.
+The controller and its deploy-hook descendants consume only PID 1's typed
+D-Bus ExecStartPre result for their exact native cgroup, successful fixed command
+and current, still-running activation. Monotonic start/stop times and an unchanged
+InvocationID exclude stale results; missing or failed prerequisites fail closed.
+Manual administrator invocations still perform the full observer directly.
+There is no admission file, cached qualification or additional privileged service.
+All existing ExecStart sandbox restrictions remain in effect.
+
 The strong-dependency observer bootstraps DNF/RPM **before** Certbot admission
 without extending the controller's search path. Its scoped finder resolves only
 `dnf`, `rpm`, `hawkey`, `libdnf` and `libcomps` from Rocky Python 3.12's reviewed
@@ -92,7 +107,11 @@ listener drop-in adds `BindsTo/After=secpal-acme-policy.service` through the exi
 configuration owner, without another HAProxy drop-in or reload controller.
 `secpal-acme-policy.service` constructs policy only while HAProxy and renewal are
 inactive. The supplied units explicitly select root `unconfined_service_t`;
-manual root administration also admits `unconfined_t`. Its CIL maps private state
+manual root administration also admits unconfined_t. The persistent state CIL
+allows only init_t mounton on secpal_acme_state_t directories so PID 1 can
+construct the reviewed ReadWritePaths namespace before entering the service
+domain. This grants no product identity access, new network permission or general
+filesystem mount authority. Its CIL maps private state
 and TCP 18084, permits `haproxy_t` connect, root service bind and the explicit
 `init_t` to root service transition under NoNewPrivileges, and changes no broad
 SELinux boolean. Native
