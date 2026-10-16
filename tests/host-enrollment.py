@@ -65,6 +65,7 @@ class EnrollmentTests(unittest.TestCase):
         self.deployment = str(uuid.uuid4())
         self.target = provider.ResourceTarget("synthetic-provider", "project/region",
                                               "node-1", "resource-1", "incarnation-1")
+        self.incarnation = str(uuid.uuid4())
         self.machine = {"machine_id": "a" * 32,
                         "ssh_host_key": "SHA256:" + "A" * 43}
         self.machine_patch = patch.object(enrollment, "observe_machine", return_value=self.machine)
@@ -113,7 +114,7 @@ class EnrollmentTests(unittest.TestCase):
                                             target.provider_resource_id,
                                             target.expected_version)
         return enrollment.TrustedHost(call, authority, result, dict(self.machine),
-                                      enrollment.digest(request), enrollment.now())
+                                      enrollment.digest(request), enrollment.now(), self.incarnation)
 
     def complete(self, purpose="enroll"):
         grant = self.authority.grant(self.request, purpose=purpose)
@@ -720,6 +721,48 @@ class EnrollmentTests(unittest.TestCase):
         self.assertEqual(self.host.accept(latest, self.ca)["generation"], 3)
         with self.assertRaises(enrollment.EnrollmentError):
             self.host.accept(lost, self.ca)
+
+    def test_copied_disk_identity_cannot_authenticate_after_full_rebuild(self):
+        _, credential = self.complete()
+        identity = self.host.accept(credential, self.ca)
+        copied = self.root / "cloned-disk"
+        shutil.copytree(self.root / "host", copied)
+        clone = enrollment.LocalHost(copied)
+        # The complete disk clone includes machine-id, SSH key, enrollment key
+        # and public identity. Only independently held installation state changes.
+        self.incarnation = str(uuid.uuid4())
+        challenge = os.urandom(32)
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.authority.authenticate(identity, challenge, clone.prove_identity(identity, challenge))
+        self.authority.recovery = lambda request, previous: None
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.authority.grant(clone.request(), purpose="recover")
+        fresh = enrollment.LocalHost.create(
+            self.root / "fresh-incarnation", self.deployment, self.target,
+            "single-host", ready=lambda: None)
+        request = fresh.request()
+        grant = self.authority.grant(request, purpose="recover")
+        result = self.authority.consume(request, grant, fresh.prove(grant, self.ca))
+        self.assertEqual(fresh.accept(result, self.ca)["incarnation_id"], self.incarnation)
+
+    def test_rebuild_between_grant_and_consumption_does_not_enroll_old_key(self):
+        grant = self.authority.grant(self.request)
+        proof = self.host.prove(grant, self.ca)
+        self.incarnation = str(uuid.uuid4())
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.authority.consume(self.request, grant, proof)
+
+    def test_import_preserves_an_existing_public_provider_module(self):
+        public = "secpal_provider_capability_contract"
+        original = ModuleType(public)
+        other_name = "host_enrollment_namespace_probe"
+        candidate = importlib.util.spec_from_file_location(
+            other_name, ROOT / "scripts/host_enrollment.py")
+        module = importlib.util.module_from_spec(candidate)
+        with patch.dict(sys.modules, {public: original, other_name: module}):
+            candidate.loader.exec_module(module)
+            self.assertIs(sys.modules[public], original)
+            self.assertIsNot(module.provider, original)
 
     def test_preloaded_module_does_not_replace_the_fixed_provider_contract(self):
         name = enrollment._PROVIDER_NAME

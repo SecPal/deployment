@@ -32,7 +32,7 @@ import uuid
 
 # Reuse #169's exact runtime types and admission. Compile the fixed sibling
 # source instead of executing an adjacent, unadmitted bytecode cache.
-_PROVIDER_NAME = "secpal_provider_capability_contract"
+_PROVIDER_NAME = "_secpal_enrollment_provider_contract"
 _path = Path(__file__).with_name("provider-capability-contract.py")
 _module = ModuleType(_PROVIDER_NAME)
 _module.__file__ = str(_path)
@@ -53,7 +53,7 @@ REQUEST_FIELDS = {
 GRANT_FIELDS = {
     "version", "grant_id", "deployment_id", "resource", "role", "host_id",
     "machine", "public_key_sha256", "request_sha256", "generation", "purpose",
-    "issued_at", "expires_at", "authority_sha256",
+    "issued_at", "expires_at", "authority_sha256", "incarnation_id",
 }
 
 
@@ -408,7 +408,7 @@ def _signed_grant(grant, ca, directory):
     _closed(p, GRANT_FIELDS, "grant-payload")
     if type(p["version"]) is not int or p["version"] != 1:
         raise EnrollmentError("grant-version")
-    for name in ["grant_id", "deployment_id", "host_id"]:
+    for name in ["grant_id", "deployment_id", "host_id", "incarnation_id"]:
         _uuid(p[name])
     _resource(p["resource"])
     _role(p["role"])
@@ -443,7 +443,7 @@ def _identity(grant, certificate):
     p = grant["payload"]
     return {"state": "ENROLLED", **{name: p[name] for name in [
         "host_id", "deployment_id", "resource", "role", "generation",
-        "public_key_sha256", "grant_id"]},
+        "public_key_sha256", "grant_id", "incarnation_id"]},
         "certificate_sha256": hashlib.sha256(certificate.encode()).hexdigest()}
 
 
@@ -637,6 +637,7 @@ class TrustedHost:
     machine: dict
     request_digest: str
     observed_at: int
+    incarnation_id: str
 
 
 def admit_database_transport(host, sslmode, encrypted, *, port=5432):
@@ -818,7 +819,7 @@ class EnrollmentAuthority:
             "SELECT * FROM secpal_enrollment.enrollments WHERE resource=%s ORDER BY generation DESC LIMIT 1",
             (resource_slot(self.resource),)).fetchone()
 
-    def _generation(self, db, request, purpose):
+    def _generation(self, db, request, purpose, incarnation_id):
         previous = self._previous(db)
         previous_record = None if previous is None else self._record(db, previous)
         if purpose == "enroll":
@@ -833,10 +834,11 @@ class EnrollmentAuthority:
         # A known key cannot migrate to another resource/machine/host identity.
         for row in db.execute("SELECT * FROM secpal_enrollment.enrollments WHERE fingerprint=%s OR host_id=%s",
                               (request["public_key_sha256"], request["host_id"])):
-            self._record(db, row)
+            old_record = self._record(db, row)
             old = json.loads(row["request"])
-            if any(old[key] != request[key] for key in [
-                    "host_id", "deployment_id", "resource", "machine", "role", "public_key_sha256"]):
+            if (old_record["identity"]["incarnation_id"] != incarnation_id
+                    or any(old[key] != request[key] for key in [
+                        "host_id", "deployment_id", "resource", "machine", "role", "public_key_sha256"])):
                 raise EnrollmentError("copied-enrollment-key")
         return 1 if previous is None else previous["generation"] + 1
 
@@ -846,7 +848,7 @@ class EnrollmentAuthority:
         if type(ttl) is not int or not 1 <= ttl <= MAX_GRANT_SECONDS:
             raise EnrollmentError("grant-lifetime")
         with self._transaction(write=True) as db:
-            generation = self._generation(db, request, purpose)
+            generation = self._generation(db, request, purpose, observation.incarnation_id)
             admit_management(document, observation, self.deployment_id,
                              self.resource, self.role, now(),
                              inspection_target=self.inspection_target)
@@ -857,6 +859,7 @@ class EnrollmentAuthority:
                        "machine": request["machine"],
                        "public_key_sha256": request["public_key_sha256"],
                        "request_sha256": digest(request), "generation": generation,
+                       "incarnation_id": observation.incarnation_id,
                        "purpose": purpose, "issued_at": issued_at, "expires_at": issued_at + ttl,
                        "authority_sha256": self.ca_fingerprint}
             signature = _sign(self.key, b"SecPal Enrollment Grant v1\n" + canonical(payload),
@@ -912,6 +915,8 @@ class EnrollmentAuthority:
         _verify(public, _proof_message(grant), proof, self.directory)
         document, observation = self._observe(
             request, possession={"grant_sha256": digest(grant), "proof": proof})
+        if payload["incarnation_id"] != observation.incarnation_id:
+            raise EnrollmentError("host-incarnation-binding")
         with self._transaction(write=True) as db:
             row = db.execute("SELECT * FROM secpal_enrollment.grants WHERE grant_id=%s",
                              (payload["grant_id"],)).fetchone()
@@ -919,7 +924,7 @@ class EnrollmentAuthority:
                 raise EnrollmentError("unissued-grant")
             if row["consumed"]:
                 raise EnrollmentError("replayed-grant")
-            if self._generation(db, request, payload["purpose"]) != payload["generation"]:
+            if self._generation(db, request, payload["purpose"], observation.incarnation_id) != payload["generation"]:
                 raise EnrollmentError("grant-generation")
             admit_management(document, observation, self.deployment_id,
                              self.resource, self.role, now(),
@@ -1021,6 +1026,10 @@ def admit_management(document, observation, deployment_id, resource, role, at,
                     and observation.request.target != inspection_target)):
             raise EnrollmentError("provider-inspection-precondition")
     _machine(observation.machine)
+    _uuid(observation.incarnation_id)
+    if ("incarnation_id" in document
+            and document["incarnation_id"] != observation.incarnation_id):
+        raise EnrollmentError("host-incarnation-binding")
     if (observation.machine != document["machine"]
             or observation.request_digest != digest(document)
             or type(observation.observed_at) is not int
@@ -1077,7 +1086,7 @@ class EnrollmentVerifier:
             raise EnrollmentError("challenge-format")
         _closed(identity, {"state", "host_id", "deployment_id", "resource", "role",
                            "generation", "public_key_sha256", "grant_id",
-                           "certificate_sha256"}, "identity-format")
+                           "certificate_sha256", "incarnation_id"}, "identity-format")
         if identity["state"] != "ENROLLED":
             raise EnrollmentError("not-enrolled")
         _uuid(identity["host_id"])

@@ -34,7 +34,8 @@ The separately held `EnrollmentAuthority` takes:
 - An Enrollment CA certificate and its private signing key, outside host state.
 - One expected deployment, exact #169 `ResourceTarget` and topology role.
 - `observe(document)`: independently authenticated provider INSPECT read-back
-  plus authenticated management observation of the exact document and machine.
+  plus authenticated management observation of the exact document and machine,
+  and the current trusted installation `incarnation_id`.
 - `ready(observation)`: the existing trusted readiness admission.
 - `connect()`: a bounded Psycopg 3 connection to dedicated PostgreSQL 18 state.
 - Optional `recovery(request, previous_identity)`: explicit, independent
@@ -52,11 +53,22 @@ never echo an untrusted request as an observation. IP addresses,
 unsigned metadata and a caller-constructed dictionary cannot substitute for the
 trusted provider/management boundary.
 
+The trusted observation must include a UUID identifying the current installation
+incarnation from existing independently held provisioning Desired/Observed State.
+It remains stable across ordinary reboot/restart and changes for full OS rebuild
+or replacement. It is not a host assertion, disk file, SSH key, source IP or
+transient #169 inspection version. The grant and signed registration bind it;
+current authentication and redemption require the same independently observed
+incarnation. Recovery after rebuild requires a fresh key and Host ID even when
+all machine/SSH files were copied. A management adapter without this independent
+rebuild/replacement fact cannot authorize enrollment or current authentication.
+This SDK does not implement another provisioning-state store.
+
 ## Grant, possession and commit
 
 `authority.grant(request)` issues a signed grant with a maximum 300-second
 lifetime. It binds deployment, exact provider resource, role, Host ID, machine
-facts, fresh public key, request hash, grant ID, generation and Enrollment CA.
+facts, installation incarnation, fresh public key, request hash, grant ID, generation and Enrollment CA.
 It contains no deployment data, credentials or business/backup encryption keys.
 
 `host.prove(grant, ca_certificate)` verifies the grant and signs its
