@@ -21,6 +21,7 @@ import time
 import unittest
 from unittest.mock import patch
 import uuid
+from types import ModuleType
 
 import psycopg
 
@@ -658,7 +659,9 @@ class EnrollmentTests(unittest.TestCase):
         self.assertEqual(self.host.accept(credential, self.ca)["generation"], 1)
 
     def test_public_csr_and_certificate_cannot_carry_private_pem_bundles(self):
-        private = "\n-----BEGIN PRIVATE KEY-----\nRG9Ob3RFeHBvcnQ=\n-----END PRIVATE KEY-----\n"
+        # Fresh synthetic authority material stays inside this disposable host
+        # fixture; no key/header fixture is embedded in the repository.
+        private = self.key.read_text()
         with self.assertRaises(enrollment.EnrollmentError):
             self.authority.grant({**self.request, "csr": self.request["csr"] + private})
         _, credential = self.complete()
@@ -692,6 +695,31 @@ class EnrollmentTests(unittest.TestCase):
         self.assertEqual(self.host.accept(latest, self.ca)["generation"], 3)
         with self.assertRaises(enrollment.EnrollmentError):
             self.host.accept(lost, self.ca)
+
+    def test_preloaded_module_does_not_replace_the_fixed_provider_contract(self):
+        name = enrollment._PROVIDER_NAME
+        fake = ModuleType(name)
+        other_name = "host_enrollment_import_probe"
+        candidate = importlib.util.spec_from_file_location(
+            other_name, ROOT / "scripts/host_enrollment.py")
+        module = importlib.util.module_from_spec(candidate)
+        with patch.dict(sys.modules, {name: fake, other_name: module}):
+            candidate.loader.exec_module(module)
+            self.assertIsNot(module.provider, fake)
+            self.assertTrue(callable(module.provider.admit_request))
+
+    def test_fixture_selects_installed_pg18_despite_another_path_major(self):
+        fake = self.root / "older-pg"
+        fake.mkdir(mode=0o700)
+        executable = fake / "initdb"
+        executable.write_text('#!/bin/sh\nprintf "initdb (PostgreSQL) 17.9\\n"\n')
+        executable.chmod(0o700)
+        with patch.dict(os.environ, {"PATH": str(fake) + os.pathsep + os.environ["PATH"]}):
+            selected = postgres_binaries()
+        self.assertNotEqual(selected, fake)
+        result = subprocess.run([selected / "initdb", "--version"],
+                                check=True, capture_output=True, text=True)
+        self.assertIn("PostgreSQL) 18.", result.stdout)
 
     def test_blue_green_resources_have_distinct_host_identities(self):
         _, blue_credential = self.complete()
@@ -743,21 +771,28 @@ class EnrollmentTests(unittest.TestCase):
             identity, challenge, self.host.prove_identity(identity, challenge)), identity)
 
 
+def postgres_binaries():
+    choices = [Path("/usr/pgsql-18/bin"), Path("/usr/lib/postgresql/18/bin"),
+               Path("/usr/lib64/pgsql"), Path("/usr/bin")]
+    found = shutil.which("initdb")
+    if found:
+        choices.append(Path(found).parent)
+    if os.geteuid() == 0:
+        raise RuntimeError("an unprivileged test user is required")
+    for binaries in dict.fromkeys(choices):
+        if not (binaries / "initdb").is_file():
+            continue
+        version = subprocess.run([binaries / "initdb", "--version"],
+                                 check=True, capture_output=True, text=True, timeout=10).stdout
+        if "PostgreSQL) 18." in version:
+            return binaries
+    raise RuntimeError("native PG18 binaries are required")
+
+
 @contextmanager
 def postgres_fixture():
     """Disposable native PG18, private Unix socket, no network listener."""
-    choices = [Path("/usr/pgsql-18/bin"), Path("/usr/lib64/pgsql"),
-               Path("/usr/lib/postgresql/18/bin")]
-    found = shutil.which("initdb")
-    if found:
-        choices.insert(0, Path(found).parent)
-    binaries = next((p for p in choices if (p / "initdb").is_file()), None)
-    if binaries is None or os.geteuid() == 0:
-        raise RuntimeError("native PG18 binaries and an unprivileged test user are required")
-    version = subprocess.run([binaries / "initdb", "--version"],
-                             check=True, capture_output=True, text=True).stdout
-    if "PostgreSQL) 18." not in version:
-        raise RuntimeError("refusing a non-PG18 fixture")
+    binaries = postgres_binaries()
     root = Path(tempfile.mkdtemp(prefix="secpal-enrollment-pg-"))
     data, socket = root / "data", root / "socket"
     socket.mkdir(mode=0o700)

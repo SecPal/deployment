@@ -33,13 +33,13 @@ import uuid
 # Reuse #169's exact runtime types and admission. Compile the fixed sibling
 # source instead of executing an adjacent, unadmitted bytecode cache.
 _PROVIDER_NAME = "secpal_provider_capability_contract"
-if _PROVIDER_NAME not in sys.modules:
-    _path = Path(__file__).with_name("provider-capability-contract.py")
-    _module = ModuleType(_PROVIDER_NAME)
-    _module.__file__ = str(_path)
-    sys.modules[_PROVIDER_NAME] = _module
-    exec(compile(_path.read_bytes(), str(_path), "exec"), _module.__dict__)
-provider = sys.modules[_PROVIDER_NAME]
+_path = Path(__file__).with_name("provider-capability-contract.py")
+_module = ModuleType(_PROVIDER_NAME)
+_module.__file__ = str(_path)
+sys.modules[_PROVIDER_NAME] = _module
+exec(compile(_path.read_bytes(), str(_path), "exec"), _module.__dict__)
+provider = _module
+
 
 MAX_DOCUMENT = 65536
 MAX_GRANT_SECONDS = 300
