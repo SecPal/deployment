@@ -32,7 +32,9 @@ are rejected before persistence.
 The separately held `EnrollmentAuthority` takes:
 
 - An Enrollment CA certificate and its private signing key, outside host state.
-- One expected deployment, exact #169 `ResourceTarget` and topology role.
+- One expected deployment, exact #169 `ResourceTarget` and topology role. Public #169
+  dataclasses loaded by another consumer are normalized through the fixed
+  contract constructors before admission; no module alias becomes an authority.
 - `observe(document)`: independently authenticated provider INSPECT read-back
   plus authenticated management observation of the exact document and machine,
   and the current trusted installation `incarnation_id`.

@@ -33,6 +33,50 @@ spec.loader.exec_module(enrollment)
 provider = enrollment.provider
 
 
+
+class ProviderCompatibilityTests(unittest.TestCase):
+    def test_independently_imported_public_contract_values_are_admitted(self):
+        name = "public_provider_contract_compatibility_probe"
+        candidate = importlib.util.spec_from_file_location(
+            name, ROOT / "scripts/provider-capability-contract.py")
+        public = importlib.util.module_from_spec(candidate)
+        with patch.dict(sys.modules, {name: public}):
+            candidate.loader.exec_module(public)
+        target = public.ResourceTarget("synthetic-provider", "project/region",
+                                       "node-1", "resource-1", "version-1")
+        deployment = str(uuid.uuid4())
+        enrollment._scope(deployment, target, "single-host")
+        stable = enrollment.host_resource(target)
+        self.assertIs(type(stable), provider.ResourceTarget)
+        machine = {"machine_id": "a"*32, "ssh_host_key": "SHA256:" + "A"*43}
+        document = {"deployment_id": deployment, "resource": dataclasses.asdict(stable),
+                    "role": "single-host", "machine": machine}
+        authority = public.ExecutionAuthority(
+            "synthetic-inspection", "synthetic-adapter", "c"*40, target,
+            frozenset({public.Operation.INSPECT}), "b"*64, "synthetic-test-only")
+        request = public.CapabilityRequest(
+            "request-1", authority.adapter_id, authority.source_revision,
+            public.Operation.INSPECT, target, authority.parameters_sha256)
+        result = public.CapabilityResult(
+            request.request_id, request.adapter_id, request.source_revision,
+            request.operation, target, request.parameters_sha256,
+            public.Outcome.OBSERVED, public.CleanupOutcome.NOT_APPLICABLE,
+            target.provider_resource_id, target.expected_version)
+        observation = enrollment.TrustedHost(
+            request, authority, result, machine, enrollment.digest(document),
+            enrollment.now(), str(uuid.uuid4()))
+        enrollment.admit_management(document, observation, deployment, stable,
+                                    "single-host", enrollment.now(), inspection_target=target)
+        for bad in [
+            dataclasses.replace(observation, authority=dataclasses.replace(
+                authority, operations=frozenset({public.Operation.DELETE}))),
+            dataclasses.replace(observation, result=dataclasses.replace(
+                result, provider_resource_id="other-resource")),
+        ]:
+            with self.assertRaises(enrollment.EnrollmentError):
+                enrollment.admit_management(document, bad, deployment, stable,
+                                            "single-host", enrollment.now())
+
 class EnrollmentTests(unittest.TestCase):
     def setUp(self):
         self.dsn = os.environ.get("SECPAL_ENROLLMENT_TEST_DSN")

@@ -131,10 +131,18 @@ def _resource(value):
     return target
 
 
+def _provider_target(value):
+    # Public #169 dataclasses may have been loaded under another module name.
+    # Re-admit their data through the fixed owner's constructors, not class identity.
+    try:
+        return _resource(asdict(value))
+    except TypeError:
+        raise EnrollmentError("resource-format") from None
+
+
 def host_resource(target):
     """Stable #169 resource identity; versions remain inspection preconditions."""
-    if type(target) is not provider.ResourceTarget:
-        raise EnrollmentError("resource-format")
+    target = _provider_target(target)
     return provider.ResourceTarget(target.provider, target.scope, target.requested_key,
                                    target.provider_resource_id)
 
@@ -154,9 +162,7 @@ def _role(value):
 
 def _scope(deployment, resource, role):
     _uuid(deployment)
-    if type(resource) is not provider.ResourceTarget:
-        raise EnrollmentError("resource-format")
-    _resource(asdict(resource))
+    _provider_target(resource)
     _role(role)
 
 
@@ -1032,6 +1038,25 @@ class EnrollmentAuthority:
         return verifier.authenticate(identity, challenge, proof)
 
 
+def _provider_input(value, model):
+    """Normalize public contract data; #169 still owns every admission rule."""
+    try:
+        data = asdict(value)
+        data["target"] = _resource(data["target"])
+        if model is provider.ExecutionAuthority:
+            if type(data["operations"]) is not frozenset:
+                raise EnrollmentError("provider-binding")
+            data["operations"] = frozenset(provider.Operation(x) for x in data["operations"])
+        else:
+            data["operation"] = provider.Operation(data["operation"])
+        if model is provider.CapabilityResult:
+            data["outcome"] = provider.Outcome(data["outcome"])
+            data["cleanup"] = provider.CleanupOutcome(data["cleanup"])
+        return model(**data)
+    except (TypeError, ValueError, KeyError):
+        raise EnrollmentError("provider-binding") from None
+
+
 def admit_management(document, observation, deployment_id, resource, role, at,
                      *, inspection_target=None):
     """Pure correlation admission; #169 owns provider request/result invariants."""
@@ -1041,19 +1066,21 @@ def admit_management(document, observation, deployment_id, resource, role, at,
     if type(observation) is not TrustedHost:
         raise EnrollmentError("authenticated-observation-required")
     try:
-        provider.admit_request(observation.request, observation.authority,
-                               frozenset({provider.Operation.INSPECT}))
-        provider.admit_result(observation.request, observation.result)
-        if (observation.request.operation is not provider.Operation.INSPECT
-                or host_resource(observation.request.target) != resource
-                or observation.result.outcome is not provider.Outcome.OBSERVED):
+        request = _provider_input(observation.request, provider.CapabilityRequest)
+        authority = _provider_input(observation.authority, provider.ExecutionAuthority)
+        result = _provider_input(observation.result, provider.CapabilityResult)
+        provider.admit_request(request, authority, frozenset({provider.Operation.INSPECT}))
+        provider.admit_result(request, result)
+        if (request.operation is not provider.Operation.INSPECT
+                or host_resource(request.target) != resource
+                or result.outcome is not provider.Outcome.OBSERVED):
             raise EnrollmentError("provider-binding")
     except provider.ContractError:
         raise EnrollmentError("provider-binding") from None
     if inspection_target is not None:
-        if (type(inspection_target) is not provider.ResourceTarget
-                or (inspection_target.expected_version is not None
-                    and observation.request.target != inspection_target)):
+        inspection_target = _provider_target(inspection_target)
+        if (inspection_target.expected_version is not None
+                and request.target != inspection_target):
             raise EnrollmentError("provider-inspection-precondition")
     _machine(observation.machine)
     _uuid(observation.incarnation_id)
