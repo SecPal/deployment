@@ -48,6 +48,13 @@ The SDK adds no network listener, provider credential, daemon or privilege.
 5. An acknowledged commit precedes secret release. Current host possession is
    rechecked before publishing only the selected purpose's credentials.
 
+Rotation uses the same session/possession mechanism through
+`challenge_rotation(..., candidate=ref)`. It additionally requires the
+independent `authorize_rotation` callback; ordinary authorization cannot enable
+it. The session binds the exact candidate, and candidate APP_KEY delivery
+includes the accepted key for decryption. Normal Activation cannot retrieve a
+candidate.
+
 A copied session/challenge is not a bearer credential. It cannot replace host
 possession or authorize another purpose. A failed or ambiguous commit releases
 nothing. A failed materialization consumes the session and requires fresh
@@ -77,7 +84,9 @@ authority; it is never stored in the database or returned to a host. An external
 private SHA-256 freshness pin rejects stale restored state and database-only
 tampering. It belongs outside the database backup/restore domain. A failed
 commit with an unmatched pin stays closed; there is no automatic repair.
-The encrypted state is bounded to 4 MiB; this reference backend is not a
+A native table constraint bounds ciphertext at storage, and the SELECT excludes
+oversized data before Psycopg materializes it. Plaintext state is bounded to
+4 MiB; this reference backend is not a
 Managed customer-capacity claim.
 
 `ProtectedCredentials` writes one private, authority-owned directory per
@@ -105,7 +114,8 @@ rotation and recovery; it does not delete existing deliveries.
 
 Every authority has a stable UUID, monotonically allocated generation IDs,
 class, creation time, fingerprint, lifecycle status and explicit retention
-owners. Retired generation IDs are never reused. Initial bootstrap creates
+owners. Existing deployment-wide business classes have one stable authority;
+rotation must identify that authority rather than create an unlinked successor. Retired generation IDs are never reused. Initial bootstrap creates
 Root KEK, tenant KEK, backup encryption key, Laravel APP_KEY and native PostgreSQL
 signing authority before first use. Tenant KEK is wrapped under Root KEK using
 RFC 3394; root rewrap changes only wrapped key material, never customer
@@ -116,18 +126,29 @@ exact `db.secpal.internal` identity.
 Native PG18 login issuance consumes existing #81 NOLOGIN privilege groups.
 It creates distinct host-bound runtime/migration SCRAM principals with no
 superuser, role/database creation, replication or bypass-RLS authority.
-Membership inherits only its declared group and grants no ADMIN/SET authority.
+Runtime membership inherits only its declared group with no ADMIN/SET
+authority. Migration preserves the accepted #81 SET path to its NOLOGIN owner
+role for DDL, without granting ADMIN authority.
 New logins remain disabled until the existing reviewed start/acceptance adapter
 activates them. Native statement, parameter and error-query logging is disabled
 before credential SQL, which carries a libpq-generated SCRAM verifier rather
 than a plaintext password. Unqualified pgaudit fails closed. No production DB
 is modified by repository tests.
 
-A candidate cannot be retrieved by Activation. Rotation requires explicit
+A candidate cannot be retrieved by normal Activation. Rotation requires explicit
 validation, start/reload, readiness, acceptance, old-credential revocation and
 rollback callbacks. None defaults to success. Failed validation/readiness
-retains the previous current generation and invokes rollback. Current changes
-only after acceptance; a failed old-credential revocation is reported
+retains the previous current generation and invokes rollback. An existing private filesystem lock serializes rotations. Before external
+callbacks, the candidate durably records rotation-pending and its operation ID
+and previous generation. Process termination leaves that obligation visible and
+blocks new release or an automatic retry. The same trusted administrative
+`rollback_rotation` callback must restore and independently verify the prior
+service state before clearing intent; no boolean or default success is accepted.
+A lost commit acknowledgment never invokes a speculative rollback across a
+possibly committed Current transition. Pin/state read-back establishes the
+outcome or fails closed.
+
+Current changes only after acceptance; a failed old-credential revocation is reported
 incomplete, never reported as rolled back or successful. Its old generation
 remains revocation-pending across restart and blocks new release until explicit
 revocation completion; a new custody snapshot cannot bypass that obligation.
@@ -135,8 +156,12 @@ Historical keys remain
 retained, and any material change requires refreshed independent custody before
 another Activation. Normal host replacement does not rotate business keys.
 
+The APP_KEY predecessor limit is checked before any external rotation callback,
+not just on a later delivery.
+
 Existing Backup/RecoverySet owners supply their stable IDs to `retain`.
-Retirement rejects current, retained or still-wrapping generations and requires
+Retirement rejects current, retention-owned, rotation/revocation-pending or
+still-wrapping generations and requires
 separate explicit authorization after retention obligations end. It does not
 implement Barman, Object Backup or a second RecoverySet registry. APP_KEY
 delivery includes the existing bounded previous-key set; it never silently

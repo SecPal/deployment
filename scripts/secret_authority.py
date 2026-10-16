@@ -36,6 +36,8 @@ import host_enrollment as enrollment
 MAX_STATE = 4 * 1024 * 1024
 MAX_VALUE = 16384
 MAX_SESSION_SECONDS = 300
+_POSTGRES = json.loads((Path(__file__).resolve().parents[1] / "config/production/postgresql-contract.json").read_text())
+_STATE_CONTRACT = json.loads((Path(__file__).resolve().parents[1] / "config/production/state-contract.json").read_text())
 CLASSES = frozenset({
     "root-kek", "tenant-kek", "backup-key", "app-key", "postgres-ca",
     "postgres-runtime", "postgres-migration", "postgres-transport",
@@ -139,6 +141,30 @@ def _aad(deployment, purpose):
     return ("SecPal Secret Authority v1\n" + deployment + "\n" + purpose).encode()
 
 
+def _database_bundle(value):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    try:
+        bundle = json.loads(value)
+        reserved = {"postgres", *_POSTGRES["roles"].values()}
+        if (type(bundle) is not dict or set(bundle) != {"username", "password", "ca"} or
+                any(type(v) is not str for v in bundle.values()) or
+                re.fullmatch(r"[a-z][a-z0-9_]{0,62}", bundle["username"]) is None or
+                bundle["username"] in reserved or
+                re.fullmatch(r"[A-Za-z0-9._~!#$%&*+/=?^-]{24,128}", bundle["password"]) is None):
+            raise ValueError
+        raw = bundle["ca"].encode("ascii")
+        certificates = x509.load_pem_x509_certificates(raw)
+        if (not certificates or b"".join(cert.public_bytes(serialization.Encoding.PEM)
+                                        for cert in certificates) != raw or
+                any(not cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+                    for cert in certificates)):
+            raise ValueError
+        return bundle
+    except (ValueError, TypeError, UnicodeError, x509.ExtensionNotFound):
+        raise SecretError("database-credential-format") from None
+
+
 def _record(state, ref):
     ref = _ref(ref)
     try:
@@ -152,7 +178,7 @@ def _record(state, ref):
 def _metadata(state, ref):
     authority, record = _record(state, ref)
     return {**_ref(ref), "class": authority["class"], **{
-        key: record[key] for key in ("fingerprint", "created_at", "status", "retained_by", "host_id", "purposes")}}
+        key: record[key] for key in ("fingerprint", "created_at", "status", "retained_by", "host_id", "purposes", "principal", "rotation")}}
 
 
 def _value(state, ref):
@@ -182,10 +208,15 @@ def _material_changed(state):
     state["custody"] = None
 
 
-def _admit_custody(state):
+def _admit_custody(state, *, rotation=None):
     if any(row["status"] == "revocation-pending" for authority in state["authorities"].values()
            for row in authority["generations"].values()):
         raise SecretError("old-credential-revocation-incomplete")
+    if any(row["status"] == "rotation-pending" and
+           rotation != {"authority_id": aid, "generation": int(generation)}
+           for aid, authority in state["authorities"].items()
+           for generation, row in authority["generations"].items()):
+        raise SecretError("rotation-outcome-unverified")
     if (type(state["custody"]) is not dict or
             state["custody"].get("material_revision") != state["material_revision"]):
         raise SecretError("independent-custody-unproven")
@@ -217,6 +248,7 @@ class PostgresStore:
         self._aad = _aad(deployment_id, "live-state")
         try:
             enrollment._directory(self.directory)
+            enrollment._directory(self.directory / "rotation")
         except enrollment.EnrollmentError:
             raise SecretError("authority-directory") from None
 
@@ -228,6 +260,7 @@ class PostgresStore:
             directory.mkdir(mode=0o700)
         except (OSError, enrollment.EnrollmentError):
             raise SecretError("authority-already-exists") from None
+        (directory / "rotation").mkdir(mode=0o700)
         store = cls(directory, database, deployment_id, unseal=unseal)
         state = {
             "version": 1, "deployment_id": deployment_id, "authorities": {},
@@ -240,9 +273,10 @@ class PostgresStore:
             blob = _seal(key, state, store._aad)
             with enrollment._lock(directory), enrollment.authority_transaction(database) as db:
                 db.execute("CREATE SCHEMA secpal_secrets")
-                db.execute("""CREATE TABLE secpal_secrets.state(
+                db.execute(f"""CREATE TABLE secpal_secrets.state(
                     singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
-                    ciphertext bytea NOT NULL)""")
+                    ciphertext bytea NOT NULL CHECK(octet_length(ciphertext)
+                        BETWEEN 29 AND {MAX_STATE + 28}))""")
                 db.execute("REVOKE ALL ON SCHEMA secpal_secrets FROM PUBLIC")
                 db.execute("REVOKE ALL ON secpal_secrets.state FROM PUBLIC")
                 db.execute("INSERT INTO secpal_secrets.state VALUES(true,%s)", (blob,))
@@ -262,9 +296,13 @@ class PostgresStore:
         try:
             with enrollment._lock(self.directory), enrollment.authority_transaction(self.database) as db:
                 row = db.execute(
-                    "SELECT ciphertext FROM secpal_secrets.state WHERE singleton=true").fetchone()
+                    f"SELECT CASE WHEN octet_length(ciphertext) BETWEEN 29 AND {MAX_STATE + 28} "
+                    "THEN ciphertext END AS ciphertext FROM secpal_secrets.state "
+                    "WHERE singleton=true").fetchone()
                 if row is None:
                     raise SecretError("authority-state-missing")
+                if row["ciphertext"] is None:
+                    raise SecretError("authority-state-size")
                 blob = bytes(row["ciphertext"])
                 pin = enrollment._json_file(self.directory / "database-sha256.json")
                 if pin != _sha(blob):
@@ -350,6 +388,17 @@ class SecretAdministration:
                 raise SecretError("runtime-purpose-binding")
         elif host_id is not None or purposes:
             raise SecretError("business-authority-scope")
+        principal = None
+        if kind in {"postgres-runtime", "postgres-migration"}:
+            principal = _database_bundle(value)["username"]
+            if any(row.get("principal") == principal
+                   for authority in state["authorities"].values()
+                   for row in authority["generations"].values()):
+                raise SecretError("database-principal-already-owned")
+        if kind in business:
+            existing = [aid for aid, record in state["authorities"].items() if record["class"] == kind]
+            if existing and authority_id not in existing:
+                raise SecretError("existing-business-authority-required")
         aid = str(uuid.uuid4()) if authority_id is None else authority_id
         _uuid(aid)
         authorities = state["authorities"]
@@ -364,7 +413,7 @@ class SecretAdministration:
         authority["next_generation"] += 1
         row = {"value": base64.b64encode(value).decode(), "fingerprint": _sha(value),
                "created_at": now(), "status": "candidate", "retained_by": [],
-               "host_id": host_id, "purposes": list(purposes)}
+               "host_id": host_id, "purposes": list(purposes), "principal": principal, "rotation": None}
         if kind == "tenant-kek":
             root, _ = _record(state, wrapping)
             if root["class"] != "root-kek":
@@ -500,7 +549,7 @@ class SecretAdministration:
             raise SecretError("database-trust-format") from None
         migration = purpose == "migrate"
         kind = "postgres-migration" if migration else "postgres-runtime"
-        group = "secpal_migration" if migration else "secpal_runtime"
+        group = _POSTGRES["roles"]["migration" if migration else "runtime"]
         username = "secpal_" + host_id.replace("-", "")[:24] + "_" + secrets.token_hex(4)
         password = secrets.token_urlsafe(32)
         purposes = ["migrate"] if migration else [
@@ -542,14 +591,15 @@ class SecretAdministration:
                 ).format(sql.Identifier(username), sql.Literal(verifier.decode())))
                 db.execute(sql.SQL("GRANT {} TO {} WITH INHERIT TRUE").format(
                     sql.Identifier(group), sql.Identifier(username)))
-                db.execute(sql.SQL("GRANT {} TO {} WITH SET FALSE").format(
-                    sql.Identifier(group), sql.Identifier(username)))
+                db.execute(sql.SQL("GRANT {} TO {} WITH SET {}").format(
+                    sql.Identifier(group), sql.Identifier(username),
+                    sql.SQL("TRUE" if migration else "FALSE")))
                 member = db.execute(
                     "SELECT m.admin_option,m.inherit_option,m.set_option "
                     "FROM pg_auth_members m JOIN pg_roles r ON m.roleid=r.oid "
                     "JOIN pg_roles u ON m.member=u.oid WHERE r.rolname=%s AND u.rolname=%s",
                     (group, username)).fetchone()
-                if member != {"admin_option": False, "inherit_option": True, "set_option": False}:
+                if member != {"admin_option": False, "inherit_option": True, "set_option": migration}:
                     raise SecretError("database-membership-contract")
         except enrollment.EnrollmentError:
             raise SecretError("database-issuance-incomplete") from None
@@ -574,9 +624,9 @@ class SecretAdministration:
                     (isinstance(public, rsa.RSAPublicKey) and public.key_size >= 2048)):
                 raise ValueError
             san = request.extensions.get_extension_for_class(x509.SubjectAlternativeName)
-            if (list(san.value) != [x509.DNSName("db.secpal.internal")] or
+            if (list(san.value) != [x509.DNSName(_POSTGRES["transport"]["server_name"])] or
                     request.subject != x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,
-                                                                    "db.secpal.internal")])):
+                                                                    _POSTGRES["transport"]["server_name"])])):
                 raise ValueError
             if any(extension.oid != x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME
                    for extension in request.extensions):
@@ -632,7 +682,8 @@ class SecretAdministration:
     def retire(self, ref, *, authorize):
         with self.store.transaction(write=True) as state:
             authority, record = _record(state, ref)
-            if authority["current"] == ref["generation"] or record["retained_by"]:
+            if (authority["current"] == ref["generation"] or record["retained_by"] or
+                    record["status"] in {"revocation-pending", "rotation-pending"}):
                 raise SecretError("generation-still-required")
             for other in state["authorities"].values():
                 for row in other["generations"].values():
@@ -642,51 +693,102 @@ class SecretAdministration:
             del authority["generations"][str(ref["generation"])]
             _material_changed(state)
 
-    def rotate(self, ref, *, validate, start, ready, accept, revoke, rollback):
-        """The existing required lifecycle; adapters own actual service operations.
 
-        Candidates remain unusable until independent validation/readiness and
-        custody. Current changes only after acceptance; failed rollback is an
-        explicit failure, never a false success or silent retry.
-        """
+    @contextmanager
+    def _rotation_lock(self):
+        try:
+            with enrollment._lock(self.store.directory / "rotation"):
+                yield
+        except enrollment.EnrollmentError:
+            raise SecretError("rotation-lock") from None
+
+    def rotate(self, ref, *, validate, start, ready, accept, revoke, rollback):
+        """Serialize external work and persist intent before crossing its boundary."""
+        with self._rotation_lock():
+            return self._rotate(ref, validate=validate, start=start, ready=ready,
+                                accept=accept, revoke=revoke, rollback=rollback)
+
+    def _rotate(self, ref, *, validate, start, ready, accept, revoke, rollback):
         ref = _ref(ref)
-        with self.store.transaction() as state:
+        with self.store.transaction(write=True) as state:
             authority, record = _record(state, ref)
             _admit_custody(state)
             if record["status"] != "candidate":
                 raise SecretError("rotation-not-candidate")
             previous = ({"authority_id": ref["authority_id"], "generation": authority["current"]}
                         if authority["current"] is not None else None)
-            metadata = deepcopy(_metadata(state, ref))
+            if authority["class"] == "app-key":
+                predecessors = sum(row["status"] in {"current", "retained"}
+                                   for row in authority["generations"].values())
+                if predecessors > _STATE_CONTRACT["secret_policy"]["max_previous_keys"]:
+                    raise SecretError("application-previous-key-retention")
+            operation = str(uuid.uuid4())
+            record["status"] = "rotation-pending"
+            record["rotation"] = {"operation_id": operation, "previous": previous, "started_at": now()}
+        # An unacknowledged intent commit never reaches service-changing callbacks.
         try:
             for callback in (validate, start, ready, accept):
                 _call(callback, ref, previous)
+        except Exception:
+            # This is only the pre-publication boundary. Rollback must restore AND
+            # verify the prior state before returning None; failure leaves intent.
+            self._rollback_rotation(ref, rollback=rollback)
+            raise SecretError("rotation-not-accepted") from None
+        # No rollback may cross this ambiguous commit boundary. Independent
+        # pin/state read-back establishes the outcome or fails closed.
+        try:
             with self.store.transaction(write=True) as state:
                 authority, record = _record(state, ref)
-                _admit_custody(state)
+                _admit_custody(state, rotation=ref)
                 expected = previous["generation"] if previous else None
-                if authority["current"] != expected or record["status"] != "candidate":
+                if (authority["current"] != expected or record["status"] != "rotation-pending"
+                        or record["rotation"]["operation_id"] != operation):
                     raise SecretError("rotation-concurrent-change")
                 if previous:
                     _, old = _record(state, previous)
                     old["status"] = "revocation-pending"
                 record["status"] = "current"
+                record["rotation"] = None
                 authority["current"] = ref["generation"]
                 _material_changed(state)
-        except Exception:
-            _call(rollback, ref, previous)
-            raise SecretError("rotation-not-accepted") from None
-        # A failure here is not rolled back as if the current transition had
-        # never committed. Caller must finish the bounded revocation explicitly.
+        except SecretError:
+            raise SecretError("rotation-outcome-unverified") from None
         if previous:
-            self.finish_revocation(previous, revoke=revoke)
+            self._finish_revocation(previous, revoke=revoke)
         else:
             _call(revoke, None)
-        return metadata
+        return self.metadata(ref)
 
+    def rollback_rotation(self, ref, *, rollback):
+        """Same administrative rollback authority, after actual previous-state read-back."""
+        with self._rotation_lock():
+            self._rollback_rotation(_ref(ref), rollback=rollback)
+
+    def _rollback_rotation(self, ref, *, rollback):
+        with self.store.transaction() as state:
+            authority, record = _record(state, ref)
+            if record["status"] != "rotation-pending" or record["rotation"] is None:
+                raise SecretError("rotation-not-pending")
+            intent = deepcopy(record["rotation"])
+            previous = intent["previous"]
+            expected = previous["generation"] if previous else None
+            if authority["current"] != expected:
+                raise SecretError("rollback-outcome-unverified")
+        _call(rollback, ref, previous)
+        with self.store.transaction(write=True) as state:
+            authority, record = _record(state, ref)
+            if (authority["current"] != expected or record["status"] != "rotation-pending"
+                    or record["rotation"] != intent):
+                raise SecretError("rollback-outcome-unverified")
+            record["status"] = "candidate"
+            record["rotation"] = None
 
     def finish_revocation(self, previous, *, revoke):
         """Complete only this durable crypto-generation obligation; no automatic retry."""
+        with self._rotation_lock():
+            self._finish_revocation(previous, revoke=revoke)
+
+    def _finish_revocation(self, previous, *, revoke):
         with self.store.transaction() as state:
             _, old = _record(state, previous)
             if old["status"] != "revocation-pending":
@@ -766,15 +868,7 @@ def _delivery_values(state, refs):
         if kind in values:
             raise SecretError("duplicate-secret-class")
         if kind in {"postgres-runtime", "postgres-migration"}:
-            try:
-                bundle = json.loads(value)
-            except ValueError:
-                raise SecretError("database-credential-format") from None
-            if (type(bundle) is not dict or set(bundle) != {"username", "password", "ca"} or
-                    re.fullmatch(r"secpal_[a-z0-9_]{1,55}", bundle["username"]) is None or
-                    re.fullmatch(r"[A-Za-z0-9._~!#$%&*+/=?^-]{24,128}", bundle["password"]) is None or
-                    not bundle["ca"].startswith("-----BEGIN CERTIFICATE-----\n")):
-                raise SecretError("database-credential-format")
+            bundle = _database_bundle(value)
             for name, field in [("postgres-username", "username"), ("postgres-password", "password"),
                                 ("postgres-ca.crt", "ca")]:
                 values[name] = bundle[field].encode()
@@ -784,8 +878,8 @@ def _delivery_values(state, refs):
             old = [base64.b64decode(row["value"], validate=True)
                    for generation, row in sorted(authority["generations"].items(),
                                                   key=lambda pair: int(pair[0]), reverse=True)
-                   if int(generation) != ref["generation"] and row["status"] == "retained"]
-            if len(old) > 3:
+                   if int(generation) != ref["generation"] and row["status"] in {"current", "retained"}]
+            if len(old) > _STATE_CONTRACT["secret_policy"]["max_previous_keys"]:
                 raise SecretError("application-previous-key-retention")
             values["app-previous-keys"] = b"\n".join(old)
     return values
@@ -793,39 +887,54 @@ def _delivery_values(state, refs):
 
 class DeploymentActivation:
     """No CA signing key, enrollment DB writes or caller-selected authority."""
-    def __init__(self, store, *, verifier, authorize):
+    def __init__(self, store, *, verifier, authorize, authorize_rotation=None):
         if not isinstance(verifier, enrollment.EnrollmentVerifier) or not callable(authorize):
             raise SecretError("enrollment-verifier-required")
         if verifier.deployment_id != store.deployment_id:
             raise SecretError("deployment-binding")
         self.store, self.verifier, self.authorize = store, verifier, authorize
+        self.authorize_rotation = authorize_rotation
 
-    def _policy(self, state, identity, purpose, refs):
+    def _policy(self, state, identity, purpose, refs, *, rotation=None):
         if purpose not in PURPOSE_CLASSES or not refs or len(refs) > 16:
             raise SecretError("purpose-not-authorized")
         if identity.get("deployment_id") != self.store.deployment_id:
             raise SecretError("deployment-binding")
+        if rotation is not None and rotation not in refs:
+            raise SecretError("rotation-candidate-binding")
         metadata = [_metadata(state, r) for r in refs]
         kinds = [m["class"] for m in metadata]
         if len(set(kinds)) != len(kinds) or not set(kinds) <= PURPOSE_CLASSES[purpose]:
             raise SecretError("secret-class-not-authorized")
         for ref in refs:
             authority, row = _record(state, ref)
-            if row["status"] != "current" or authority["current"] != ref["generation"]:
+            if ref == rotation:
+                if row["status"] not in {"candidate", "rotation-pending"}:
+                    raise SecretError("rotation-not-candidate")
+            elif row["status"] != "current" or authority["current"] != ref["generation"]:
                 raise SecretError("generation-not-current")
             if row["host_id"] is not None and (row["host_id"] != identity.get("host_id")
                                                 or purpose not in row["purposes"]):
                 raise SecretError("host-workload-binding")
         _call(self.authorize, deepcopy(identity), purpose, deepcopy(metadata))
+        if rotation is not None:
+            _call(self.authorize_rotation, deepcopy(identity), purpose, deepcopy(metadata))
         return metadata
 
     def challenge(self, identity, purpose, refs, *, ttl=60):
+        return self._challenge(identity, purpose, refs, ttl=ttl)
+
+    def challenge_rotation(self, identity, purpose, refs, *, candidate, ttl=60):
+        """Same single-use boundary, with explicit independent rotation admission."""
+        return self._challenge(identity, purpose, refs, ttl=ttl, rotation=_ref(candidate))
+
+    def _challenge(self, identity, purpose, refs, *, ttl, rotation=None):
         if type(ttl) is not int or not 1 <= ttl <= MAX_SESSION_SECONDS:
             raise SecretError("activation-lifetime")
         refs = [_ref(r) for r in refs]
         with self.store.transaction(write=True) as state:
-            _admit_custody(state)
-            self._policy(state, identity, purpose, refs)
+            _admit_custody(state, rotation=rotation)
+            self._policy(state, identity, purpose, refs, rotation=rotation)
             instant = now()
             # Expired IDs are unusable even when pruned; never accept an unknown ID.
             state["sessions"] = {k: v for k, v in state["sessions"].items()
@@ -835,7 +944,7 @@ class DeploymentActivation:
             state["sessions"][sid] = {
                 "identity": deepcopy(identity), "purpose": purpose, "refs": refs,
                 "challenge": base64.b64encode(challenge).decode(),
-                "expires_at": expires, "consumed": False,
+                "expires_at": expires, "consumed": False, "rotation": rotation,
             }
         return {"session_id": sid, "challenge": challenge, "expires_at": expires}
 
@@ -858,8 +967,9 @@ class DeploymentActivation:
             current = state["sessions"].get(session_id)
             if current != session or current["consumed"] or current["expires_at"] <= now():
                 raise SecretError("activation-expired-or-consumed")
-            _admit_custody(state)
-            metadata = self._policy(state, actual, session["purpose"], session["refs"])
+            _admit_custody(state, rotation=session["rotation"])
+            metadata = self._policy(state, actual, session["purpose"], session["refs"],
+                                    rotation=session["rotation"])
             values = _delivery_values(state, session["refs"])
             current["consumed"] = True
         # Commit acknowledgement precedes release. A delivery failure does not

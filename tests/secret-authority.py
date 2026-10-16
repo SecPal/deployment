@@ -248,11 +248,11 @@ class SecretAuthorityTests(unittest.TestCase):
         wrong_host = str(uuid.uuid4())
         value = secret._encode({"username": "secpal_test_runtime", "password": "A" * 40,
                                  "ca": self.f.ca.read_text()})
-        wrong = self.admin.candidate("postgres-runtime", value, host_id=wrong_host,
+        wrong = self.admin.candidate("postgres-runtime", value.replace(b"secpal_test_runtime", b"secpal_wrong_runtime"), host_id=wrong_host,
                                      purposes=["api"])
         good = self.admin.candidate("postgres-runtime", value,
                                     host_id=self.identity["host_id"], purposes=["api"])
-        migrate = self.admin.candidate("postgres-migration", value,
+        migrate = self.admin.candidate("postgres-migration", value.replace(b"secpal_test_runtime", b"secpal_test_migration"),
                                        host_id=self.identity["host_id"], purposes=["migrate"])
         for ref in [wrong, good, migrate]:
             self.admin.checkpoint(self.custody, recovery_key=self.custody.key)
@@ -277,7 +277,9 @@ class SecretAuthorityTests(unittest.TestCase):
         calls = []
         callbacks = {name: (lambda *args, label=name: calls.append(label))
                      for name in ["validate", "start", "ready", "accept", "revoke", "rollback"]}
-        self.admin.rotate(candidate, **callbacks)
+        result = self.admin.rotate(candidate, **callbacks)
+        self.assertEqual(result["status"], "current")
+        self.assertIsNone(result["rotation"])
         self.assertEqual(calls, ["validate", "start", "ready", "accept", "revoke"])
         self.assertEqual(self.admin.metadata(self.app)["status"], "retained")
         self.assertEqual(self.admin.metadata(candidate)["status"], "current")
@@ -403,6 +405,8 @@ class SecretAuthorityTests(unittest.TestCase):
         with self.f.connect() as db:
             db.execute("CREATE ROLE secpal_runtime NOLOGIN")
             db.execute("CREATE ROLE secpal_migration NOLOGIN")
+            db.execute("CREATE ROLE secpal_owner NOLOGIN")
+            db.execute("GRANT secpal_owner TO secpal_migration WITH ADMIN FALSE, INHERIT FALSE, SET TRUE")
         refs = []
         try:
             for purpose in ["api", "migrate"]:
@@ -426,7 +430,19 @@ class SecretAuthorityTests(unittest.TestCase):
                         "JOIN pg_roles r ON m.roleid=r.oid JOIN pg_roles u ON m.member=u.oid WHERE u.rolname=%s",
                         (bundle["username"],)).fetchall()
                     self.assertEqual(memberships, [(["secpal_runtime", "secpal_migration"][index],
-                                                   False, True, False)])
+                                                   False, True, bool(index))])
+            for index, bundle in enumerate(bundles):
+                from psycopg import sql
+                with psycopg.connect(**self.f.dba_database, autocommit=True) as scoped:
+                    scoped.execute(sql.SQL("SET SESSION AUTHORIZATION {}").format(
+                        sql.Identifier(bundle["username"])))
+                    if index == 0:
+                        with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                            scoped.execute("SET ROLE secpal_owner")
+                    else:
+                        scoped.execute("SET ROLE secpal_owner")
+                        self.assertEqual(scoped.execute("SELECT current_user").fetchone()[0],
+                                         "secpal_owner")
             log_root = Path(self.f.dba_database["host"]).parent
             for log in log_root.glob("*.log"):
                 data = log.read_bytes()
@@ -440,6 +456,7 @@ class SecretAuthorityTests(unittest.TestCase):
                     db.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(bundle["username"])))
                 db.execute("DROP ROLE secpal_runtime")
                 db.execute("DROP ROLE secpal_migration")
+                db.execute("DROP ROLE secpal_owner")
 
     def test_unsigned_or_wrong_name_database_csr_is_rejected(self):
         from cryptography import x509
@@ -499,6 +516,171 @@ class SecretAuthorityTests(unittest.TestCase):
         self.assertEqual(self.admin.metadata(self.app)["retained_by"], [first, second])
         self.admin.release_retention(self.app, first, authorize=lambda metadata, owner: None)
         self.assertEqual(self.admin.metadata(self.app)["retained_by"], [second])
+
+    def test_imported_database_material_cannot_deliver_signing_keys_or_stable_roles(self):
+        for username, ca in [
+            ("secpal_runtime", self.f.ca.read_text()),
+            ("secpal_safe_runtime", self.f.ca.read_text() + self.f.key.read_text()),
+        ]:
+            with self.subTest(username=username):
+                value = secret._encode({"username": username, "password": "A" * 40, "ca": ca})
+                with self.assertRaises(secret.SecretError):
+                    self.admin.candidate("postgres-runtime", value,
+                                         host_id=self.identity["host_id"], purposes=["api"])
+
+    def test_rotation_can_stage_candidate_only_with_explicit_rotation_authorization(self):
+        candidate = self.admin.candidate("app-key", b"base64:" + __import__("base64").b64encode(os.urandom(32)),
+                                         authority_id=self.app["authority_id"])
+        self.admin.checkpoint(self.custody, recovery_key=self.custody.key)
+        with self.assertRaises(secret.SecretError):
+            self.challenge([candidate])
+        with self.assertRaises(secret.SecretError):
+            self.activation.challenge_rotation(self.identity, "api", [candidate],
+                                               candidate=candidate)
+        self.activation.authorize_rotation = lambda identity, purpose, metadata: None
+        challenge = self.activation.challenge_rotation(self.identity, "api", [candidate],
+                                                        candidate=candidate)
+        result = self.redeem(challenge)
+        path = Path(result["directory"])
+        with self.store.transaction() as state:
+            previous = secret._value(state, self.app)
+        self.assertTrue(__import__("hmac").compare_digest(
+            (path / "app-previous-keys").read_bytes(), previous),
+            "candidate cannot decrypt state written by the accepted current key")
+        self.assertEqual(self.admin.metadata(candidate)["status"], "candidate")
+        self.assertEqual(self.admin.metadata(self.app)["status"], "current")
+        with self.assertRaises(secret.SecretError):
+            self.redeem(challenge)
+
+    def test_concurrent_rotation_cannot_rollback_a_different_accepted_rotation(self):
+        import threading
+        import time
+        candidate = self.admin.candidate("app-key", b"base64:" + __import__("base64").b64encode(os.urandom(32)),
+                                         authority_id=self.app["authority_id"])
+        self.admin.checkpoint(self.custody, recovery_key=self.custody.key)
+        entered, release = threading.Event(), threading.Event()
+        starts, rollbacks = [], []
+        def start(*args):
+            starts.append(threading.current_thread().name)
+            entered.set()
+            release.wait(3)
+        def rotate():
+            try:
+                self.admin.rotate(candidate, validate=lambda *a: None, start=start,
+                                  ready=lambda *a: None, accept=lambda *a: None,
+                                  revoke=lambda *a: None, rollback=lambda *a: rollbacks.append(True))
+                return "accepted"
+            except secret.SecretError:
+                return "rejected"
+        with concurrent.futures.ThreadPoolExecutor(2) as pool:
+            first = pool.submit(rotate)
+            self.assertTrue(entered.wait(2))
+            second = pool.submit(rotate)
+            time.sleep(0.1)
+            release.set()
+            self.assertEqual(sorted([first.result(), second.result()]), ["accepted", "rejected"])
+        self.assertEqual(len(starts), 1, "concurrent operation crossed service boundary")
+        self.assertEqual(rollbacks, [], "loser rolled back accepted service state")
+
+    def test_lost_rotation_commit_ack_does_not_roll_back_committed_current(self):
+        candidate = self.admin.candidate("app-key", b"base64:" + __import__("base64").b64encode(os.urandom(32)),
+                                         authority_id=self.app["authority_id"])
+        self.admin.checkpoint(self.custody, recovery_key=self.custody.key)
+        commit = psycopg.Connection.commit
+        injected, rollbacks = [], []
+        def lost(db):
+            if db.info.get_parameters().get("options") == "-c role=secpal_enrollment_runtime":
+                return commit(db)
+            row = db.execute("SELECT ciphertext FROM secpal_secrets.state").fetchone()
+            blob = bytes(row["ciphertext"] if isinstance(row, dict) else row[0])
+            state = secret._open(self.key, blob, self.store._aad)
+            current = state["authorities"][candidate["authority_id"]]["current"]
+            commit(db)
+            if current == candidate["generation"] and not injected:
+                injected.append(True)
+                raise psycopg.OperationalError("synthetic rotation acknowledgement loss")
+        with patch.object(psycopg.Connection, "commit", lost):
+            with self.assertRaises(secret.SecretError):
+                self.admin.rotate(candidate, validate=lambda *a: None, start=lambda *a: None,
+                                  ready=lambda *a: None, accept=lambda *a: None,
+                                  revoke=lambda *a: None, rollback=lambda *a: rollbacks.append(True))
+        self.assertTrue(injected)
+        self.assertEqual(rollbacks, [], "unverified rollback crossed an ambiguous commit boundary")
+        self.assertEqual(self.admin.metadata(candidate)["status"], "current")
+        self.assertEqual(self.admin.metadata(self.app)["status"], "revocation-pending")
+
+    def test_pending_revocation_cannot_be_deleted_to_bypass_release_guard(self):
+        candidate = self.admin.candidate("app-key", b"base64:" + __import__("base64").b64encode(os.urandom(32)),
+                                         authority_id=self.app["authority_id"])
+        self.admin.checkpoint(self.custody, recovery_key=self.custody.key)
+        def fail(*args):raise RuntimeError("synthetic unavailable revoker")
+        with self.assertRaises(secret.SecretError):
+            self.admin.rotate(candidate, validate=lambda *a: None, start=lambda *a: None,
+                              ready=lambda *a: None, accept=lambda *a: None,
+                              revoke=fail, rollback=lambda *a: None)
+        with self.assertRaises(secret.SecretError):
+            self.admin.retire(self.app, authorize=lambda metadata: None)
+        self.assertEqual(self.admin.metadata(self.app)["status"], "revocation-pending")
+
+    def test_business_rotation_cannot_create_a_second_unlinked_authority(self):
+        value = b"base64:" + __import__("base64").b64encode(os.urandom(32))
+        for aid in [None, str(uuid.uuid4())]:
+            with self.assertRaises(secret.SecretError):
+                self.admin.candidate("app-key", value, authority_id=aid)
+        self.assertEqual(self.admin.metadata(self.app)["status"], "current")
+
+    def test_process_termination_retains_rotation_obligation_until_verified_rollback(self):
+        class PowerLoss(BaseException):pass
+        candidate = self.admin.candidate("app-key", b"base64:" + __import__("base64").b64encode(os.urandom(32)),
+                                         authority_id=self.app["authority_id"])
+        self.admin.checkpoint(self.custody, recovery_key=self.custody.key)
+        def terminate(*args):raise PowerLoss()
+        with self.assertRaises(PowerLoss):
+            self.admin.rotate(candidate, validate=lambda *a: None, start=terminate,
+                              ready=lambda *a: None, accept=lambda *a: None,
+                              revoke=lambda *a: None, rollback=lambda *a: None)
+        self.assertEqual(self.admin.metadata(candidate)["status"], "rotation-pending")
+        self.assertEqual(self.admin.metadata(self.app)["status"], "current")
+        with self.assertRaises(secret.SecretError):
+            self.challenge()
+        with self.assertRaises(secret.SecretError):
+            self.admin.rollback_rotation(candidate, rollback=None)
+        restarted = secret.SecretAdministration(secret.PostgresStore(
+            self.store.directory, self.f.dba_database, self.f.deployment, unseal=lambda: self.key))
+        restarted.rollback_rotation(candidate, rollback=lambda ref, previous: None)
+        self.assertEqual(self.admin.metadata(candidate)["status"], "candidate")
+        self.assertIsNone(self.admin.metadata(candidate)["rotation"])
+        self.redeem(self.challenge())
+
+    def test_application_retention_cap_rejects_before_external_side_effects(self):
+        current = self.app
+        for _ in range(3):
+            ref = self.admin.candidate("app-key", b"base64:" + __import__("base64").b64encode(os.urandom(32)),
+                                       authority_id=current["authority_id"])
+            self.admin.checkpoint(self.custody, recovery_key=self.custody.key)
+            self.admin.rotate(ref, validate=lambda *a: None, start=lambda *a: None,
+                              ready=lambda *a: None, accept=lambda *a: None,
+                              revoke=lambda *a: None, rollback=lambda *a: None)
+            current = ref
+        ref = self.admin.candidate("app-key", b"base64:" + __import__("base64").b64encode(os.urandom(32)),
+                                   authority_id=current["authority_id"])
+        self.admin.checkpoint(self.custody, recovery_key=self.custody.key)
+        calls = []
+        with self.assertRaises(secret.SecretError):
+            self.admin.rotate(ref, validate=lambda *a: calls.append("validate"),
+                              start=lambda *a: calls.append("start"),
+                              ready=lambda *a: calls.append("ready"),
+                              accept=lambda *a: calls.append("accept"),
+                              revoke=lambda *a: calls.append("revoke"),
+                              rollback=lambda *a: calls.append("rollback"))
+        self.assertEqual(calls, [])
+        self.assertEqual(self.admin.metadata(current)["status"], "current")
+
+    def test_database_role_cannot_store_oversized_ciphertext(self):
+        with self.f.connect() as db:
+            with self.assertRaises(psycopg.errors.CheckViolation):
+                db.execute("UPDATE secpal_secrets.state SET ciphertext=%s",
+                           (b"x" * (secret.MAX_STATE + 29),))
 
 
 if __name__ == "__main__":
