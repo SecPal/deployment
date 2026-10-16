@@ -118,6 +118,33 @@ class ProductionContractRegressionTests(unittest.TestCase):
                 invalid["resources"][key] = 0
                 self.assert_contract_violation(lambda: self.validate_synthetic_inventory(invalid))
 
+    def test_postgresql_filesystem_cannot_exceed_aggregate_host_capacity(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        inventory["resources"].update(logical_cpus=2, memory_bytes=4 * 1024**3,
+                                      storage_total_bytes=40 * 1024**3, total_inodes=800_000)
+        facts = copy.deepcopy(self.host_facts)
+        facts["resources"].update({key: inventory["resources"][key] for key in
+                                  ("logical_cpus", "memory_bytes", "storage_total_bytes", "total_inodes")})
+        headroom = dict(filesystem_total_bytes=40 * 1024**3,
+                        free_bytes=30 * 1024**3, free_percent=75,
+                        filesystem_total_inodes=800_000,
+                        free_inodes=600_000, free_inode_percent=75)
+        for item in facts["resources"]["storage"].values():
+            item.update(headroom)
+        facts["native_postgresql"]["headroom"].update(headroom)
+        self.validator.validate_host_facts(inventory, facts)
+        for total, value, percentage, percent in (
+            ("filesystem_total_bytes", 100 * 1024**3, "free_percent", 30),
+            ("filesystem_total_inodes", 1_000_000, "free_inode_percent", 60),
+        ):
+            with self.subTest(total=total):
+                contradictory = copy.deepcopy(facts)
+                contradictory["native_postgresql"]["headroom"].update({total: value, percentage: percent})
+                self.assert_contract_violation(
+                    lambda: self.validator.validate_host_facts(inventory, contradictory),
+                    "PostgreSQL filesystem exceeds host total",
+                )
+
     def test_caller_authored_native_label_cannot_authenticate_host_facts(self) -> None:
         candidate = copy.deepcopy(self.host_facts)
         candidate["evidence_class"] = "rocky-native"

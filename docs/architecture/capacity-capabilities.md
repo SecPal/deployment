@@ -101,7 +101,7 @@ it, the trusted controller, rather than target output:
 
 - samples target-cgroup CPU usage and memory peak;
 - reads target-cgroup OOM event counters;
-- counts completed/failed iterations and deadline misses from process status
+- records minimum/maximum completed-iteration duration and counts completed/failed iterations and deadline misses from process status
   and controller monotonic deadlines;
 - runs a CPU-bound sibling cgroup requesting 30% of the effective CPU ceiling
   and proves that the requested CPU time was actually delivered throughout the
@@ -211,14 +211,12 @@ qualification artifact, and the checked-in probe manifest. A tested target can
 execute operations but cannot omit these trusted inputs, author authoritative
 observations, refresh their observation time, or publish its own PASS.
 
-These identities are deliberately independent:
-
-```text
-tested target SHA
-!= trusted controller SHA
-!= workload probe SHA-256
-!= storage probe SHA-256
-```
+Target source, trusted controller source and the independently revisioned
+workload/storage probes are separate authority bindings. Two roles may use the
+same accepted Git commit; equal SHA values do not authenticate an execution.
+The caller must independently establish trusted control, its observations and
+expected bindings. Target-authored observations never become trusted merely
+because their source SHA matches.
 
 A provider-backed subject records a bounded provider name, the current catalog
 product ID, catalog observation time, a digest of the catalog record, and a

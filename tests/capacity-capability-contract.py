@@ -179,6 +179,7 @@ def source_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
             "workload": {
                 "observer": "trusted-controller",
                 "controller_observed_duration_seconds": workload["duration_seconds"],
+                "minimum_iteration_duration_seconds": 600,
                 "maximum_iteration_duration_seconds": 600,
                 "controller_observed_completed_iterations": workload[
                     "completed_iterations"
@@ -296,6 +297,39 @@ class CapacityCapabilityContractTests(unittest.TestCase):
                 result = self.run_validator(evidence)
                 self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("provider_product", self_host_evidence()["subject"])
+
+    def test_each_workload_iteration_has_its_reviewed_duration(self) -> None:
+        for update in (
+            {"maximum_iteration_duration_seconds": 0},
+            {"minimum_iteration_duration_seconds": 599},
+            {"minimum_iteration_duration_seconds": 601, "maximum_iteration_duration_seconds": 600},
+            {"minimum_iteration_duration_seconds": 600, "maximum_iteration_duration_seconds": 631},
+            {"controller_observed_completed_iterations": 2},
+        ):
+            evidence = provider_evidence()
+            source = source_evidence(evidence)
+            source["collection"]["workload"].update(update)
+            if "controller_observed_completed_iterations" in update:
+                evidence["observations"]["workload"]["completed_iterations"] = 2
+                source["observations"]["workload"]["completed_iterations"] = 2
+                source["collection"]["storage"]["controller_observed_cycles_completed"] = 10
+            with self.subTest(update=update):
+                self.assert_not_qualified(self.run_validator(evidence, source=source))
+        evidence = provider_evidence()
+        source = source_evidence(evidence)
+        del source["collection"]["workload"]["minimum_iteration_duration_seconds"]
+        self.assert_not_qualified(self.run_validator(evidence, source=source))
+
+    def test_same_accepted_revision_does_not_conflate_execution_authority(self) -> None:
+        evidence = provider_evidence()
+        evidence["qualification"]["trusted_control_sha"] = SHA_A
+        result = self.run_validator(evidence, expected_control_sha=SHA_A)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_not_qualified(self.run_validator(evidence), "control SHA")
+
+    def test_integer_conversion_limit_is_a_bounded_parse_rejection(self) -> None:
+        payload = b'{"number":' + b"9" * 4301 + b"}"
+        self.assert_not_qualified(self.run_validator(evidence_payload=payload), "malformed JSON")
 
     def test_closed_provider_neutral_vocabularies(self) -> None:
         for profile in ("S", "L", "XL", "compute-dedicated-4"):

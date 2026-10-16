@@ -761,7 +761,8 @@
                 "cpu_reservation_observed_seconds",
                 "memory_reservation_bytes",
                 "memory_reservation_held_seconds",
-                "target_results_authoritative"
+                "target_results_authoritative",
+                "minimum_iteration_duration_seconds"
               ],
               "properties": {
                 "observer": {
@@ -821,6 +822,11 @@
                 },
                 "target_results_authoritative": {
                   "const": false
+                },
+                "minimum_iteration_duration_seconds": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 86400
                 }
               }
             },

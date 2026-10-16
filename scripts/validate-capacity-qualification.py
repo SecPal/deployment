@@ -64,7 +64,9 @@ def load_bounded_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
         raise QualificationError(f"{label} is not strict UTF-8") from error
     try:
         document = json.loads(text, object_pairs_hook=reject_duplicate_keys)
-    except json.JSONDecodeError as error:
+    except QualificationError:
+        raise
+    except (ValueError, RecursionError) as error:
         raise QualificationError(f"{label} contains malformed JSON") from error
     if not isinstance(document, dict):
         raise QualificationError(f"{label} must be one JSON object")
@@ -369,8 +371,12 @@ def admit(
         raise QualificationError("trusted workload observation contains a deadline miss")
     if (
         workload["duration_seconds"] < workload_contract["minimum_duration_seconds"]
-        or collected_workload["maximum_iteration_duration_seconds"]
-        > workload_contract["deadline_seconds"]
+        or not workload_contract["minimum_duration_seconds"]
+        <= collected_workload["minimum_iteration_duration_seconds"]
+        <= collected_workload["maximum_iteration_duration_seconds"]
+        <= workload_contract["deadline_seconds"]
+        or workload["completed_iterations"]
+        * collected_workload["minimum_iteration_duration_seconds"] > workload["duration_seconds"]
     ):
         raise QualificationError("trusted workload did not satisfy its reviewed duration")
     required_cpu_reservation = (
