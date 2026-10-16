@@ -25,7 +25,9 @@ fails closed and never silently regenerates a key.
 
 `LocalHost.request()` returns only a signed CSR, public-key fingerprint, fresh
 Host ID, deployment/resource/role binding, timestamps and local machine/SSH
-host-key correlation facts. Those facts alone are not provider authority.
+host-key correlation facts. Those facts alone are not provider authority. Public CSR/certificate inputs must
+be single canonical native PEM objects; trailing bundles or private-key blocks
+are rejected before persistence.
 
 The separately held `EnrollmentAuthority` takes:
 
@@ -41,7 +43,8 @@ The separately held `EnrollmentAuthority` takes:
 Admission callbacks return `None` on success and raise on rejection; boolean
 claims are rejected. They are trusted in-process interfaces, never wire fields.
 The #169 contract owns provider request/result admission. Its resource versions are transient
-inspection preconditions, not permanent host fingerprints. On grant consumption
+inspection preconditions, not permanent host fingerprints. An explicitly supplied
+version is enforced for that inspection; refreshing it does not rekey the host. On grant consumption
 the observation binds the exact grant and possession signature; authentication
 binds the fresh challenge and signature. The trusted adapter must obtain this
 exchange from the expected host through its authenticated management path,
@@ -72,7 +75,9 @@ enrollment state. ENROLLED is asserted only after complete verification.
 
 A pre-commit issuance failure rolls back. A committed but lost response does
 not make the grant reusable: obtain a fresh, explicitly authorized recovery
-grant. Recovery uses the same protocol, advances the generation and invalidates
+grant. Authorized recovery can catch up over lost intermediate responses while
+rejecting old or equal generations. Recovery uses the same protocol, advances
+the generation and invalidates
 the previous credential in current-state verification. Rebuild, replacement,
 lost/compromised key or changed machine identity needs fresh local identity and
 explicit recovery authority. Ordinary reboot retains the original identity.

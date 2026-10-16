@@ -657,6 +657,42 @@ class EnrollmentTests(unittest.TestCase):
         credential = self.authority.consume(self.request, grant, proof)
         self.assertEqual(self.host.accept(credential, self.ca)["generation"], 1)
 
+    def test_public_csr_and_certificate_cannot_carry_private_pem_bundles(self):
+        private = "\n-----BEGIN PRIVATE KEY-----\nRG9Ob3RFeHBvcnQ=\n-----END PRIVATE KEY-----\n"
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.authority.grant({**self.request, "csr": self.request["csr"] + private})
+        _, credential = self.complete()
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.host.accept({**credential, "certificate": credential["certificate"] + private}, self.ca)
+        self.assertFalse((self.root / "host/enrollment.json").exists())
+
+    def test_explicit_inspection_version_is_preserved_without_rekeying(self):
+        self.target = dataclasses.replace(self.target, expected_version="new-inspection-version")
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.authority.grant(self.request)
+        current = enrollment.EnrollmentAuthority(
+            self.root / "authority", self.ca, self.key, self.deployment,
+            self.target, "single-host", observe=self.observe,
+            ready=lambda observed: None, connect=self.runtime_connect)
+        grant = current.grant(self.request)
+        credential = current.consume(self.request, grant, self.host.prove(grant, self.ca))
+        identity = self.host.accept(credential, self.ca)
+        challenge = os.urandom(32)
+        self.assertEqual(self.authority.authenticate(
+            identity, challenge, self.host.prove_identity(identity, challenge)), identity)
+
+    def test_recovery_can_catch_up_after_a_lost_recovery_response(self):
+        _, first = self.complete()
+        self.host.accept(first, self.ca)
+        self.authority.recovery = lambda request, identity: None
+        self.request = self.host.request()
+        _, lost = self.complete(purpose="recover")
+        self.request = self.host.request()
+        _, latest = self.complete(purpose="recover")
+        self.assertEqual(self.host.accept(latest, self.ca)["generation"], 3)
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.host.accept(lost, self.ca)
+
     def test_blue_green_resources_have_distinct_host_identities(self):
         _, blue_credential = self.complete()
         blue = self.host.accept(blue_credential, self.ca)

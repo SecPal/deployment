@@ -335,6 +335,10 @@ def _public(pem, kind):
         data = pem.encode("ascii")
     except UnicodeError:
         raise EnrollmentError("public-key-format") from None
+    normalized = openssl("normalize-public-object", [kind, "-outform", "PEM"],
+                         input_bytes=data)
+    if normalized != data:
+        raise EnrollmentError("public-object-framing")
     if kind == "req":
         openssl("verify-csr", ["req", "-verify", "-noout"], input_bytes=data)
     public = openssl("read-public-key", [kind, "-pubkey", "-noout"],
@@ -370,7 +374,9 @@ def _verify(public, message, signature, directory):
 def _ca(certificate):
     _file(certificate, private=False)
     data = certificate.read_bytes()
-    if data.count(b"-----BEGIN CERTIFICATE-----") != 1:
+    normalized = openssl("normalize-authority-certificate",
+                         ["x509", "-in", certificate, "-outform", "PEM"])
+    if data.count(b"-----BEGIN CERTIFICATE-----") != 1 or normalized != data:
         raise EnrollmentError("authority-certificate")
     der = openssl("read-authority", ["x509", "-in", certificate, "-outform", "DER"])
     public = openssl("read-authority", ["x509", "-in", certificate, "-pubkey", "-noout"])
@@ -603,7 +609,7 @@ class LocalHost:
             if path.exists() or path.is_symlink():
                 previous = _json_file(path)
                 if (payload["purpose"] != "recover"
-                        or result["generation"] != previous["identity"]["generation"] + 1):
+                        or result["generation"] <= previous["identity"]["generation"]):
                     raise EnrollmentError("duplicate-enrollment")
             _publish(path, {"identity": result, "credential": credential})
             return result
@@ -770,6 +776,7 @@ class EnrollmentAuthority:
         if own != ca_public:
             raise EnrollmentError("authority-key-binding")
         _directory(self.directory)
+        self.inspection_target = resource
         self.deployment_id, self.resource, self.role = deployment_id, host_resource(resource), role
         self.observe, self.ready, self.recovery = observe, ready, recovery
         self.connect = connect
@@ -801,7 +808,8 @@ class EnrollmentAuthority:
         _request(request)
         document = request if possession is None else {**request, "possession": possession}
         observation = _observe_control(self.observe, document, self.deployment_id,
-                                       self.resource, self.role)
+                                       self.resource, self.role,
+                                       inspection_target=self.inspection_target)
         _ready(self.ready, observation)
         return document, observation
 
@@ -840,7 +848,8 @@ class EnrollmentAuthority:
         with self._transaction(write=True) as db:
             generation = self._generation(db, request, purpose)
             admit_management(document, observation, self.deployment_id,
-                             self.resource, self.role, now())
+                             self.resource, self.role, now(),
+                             inspection_target=self.inspection_target)
             issued_at = now()
             payload = {"version": 1, "grant_id": str(uuid.uuid4()),
                        "deployment_id": self.deployment_id, "resource": asdict(self.resource),
@@ -913,14 +922,16 @@ class EnrollmentAuthority:
             if self._generation(db, request, payload["purpose"]) != payload["generation"]:
                 raise EnrollmentError("grant-generation")
             admit_management(document, observation, self.deployment_id,
-                             self.resource, self.role, now())
+                             self.resource, self.role, now(),
+                             inspection_target=self.inspection_target)
             if not payload["issued_at"] <= now() < payload["expires_at"]:
                 raise EnrollmentError("grant-expired")
             certificate = self._certificate(request, grant)
             if now() >= payload["expires_at"]:
                 raise EnrollmentError("grant-expired")
             admit_management(document, observation, self.deployment_id,
-                             self.resource, self.role, now())
+                             self.resource, self.role, now(),
+                             inspection_target=self.inspection_target)
             identity = _identity(grant, certificate)
             db.execute("INSERT INTO secpal_enrollment.enrollments VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", (
                 payload["grant_id"], resource_slot(self.resource), payload["generation"],
@@ -985,7 +996,8 @@ class EnrollmentAuthority:
         return verifier.authenticate(identity, challenge, proof)
 
 
-def admit_management(document, observation, deployment_id, resource, role, at):
+def admit_management(document, observation, deployment_id, resource, role, at,
+                     *, inspection_target=None):
     """Pure correlation admission; #169 owns provider request/result invariants."""
     if (document["deployment_id"] != deployment_id
             or document["resource"] != asdict(resource) or document["role"] != role):
@@ -1002,6 +1014,11 @@ def admit_management(document, observation, deployment_id, resource, role, at):
             raise EnrollmentError("provider-binding")
     except provider.ContractError:
         raise EnrollmentError("provider-binding") from None
+    if inspection_target is not None:
+        if (type(inspection_target) is not provider.ResourceTarget
+                or (inspection_target.expected_version is not None
+                    and observation.request.target != inspection_target)):
+            raise EnrollmentError("provider-inspection-precondition")
     _machine(observation.machine)
     if (observation.machine != document["machine"]
             or observation.request_digest != digest(document)
@@ -1010,14 +1027,16 @@ def admit_management(document, observation, deployment_id, resource, role, at):
         raise EnrollmentError("management-binding")
 
 
-def _observe_control(callback, document, deployment_id, resource, role):
+def _observe_control(callback, document, deployment_id, resource, role,
+                     *, inspection_target=None):
     if not callable(callback):
         raise EnrollmentError("authenticated-observation-required")
     try:
         observation = callback(document)
     except Exception:
         raise EnrollmentError("observe-provider-management") from None
-    admit_management(document, observation, deployment_id, resource, role, now())
+    admit_management(document, observation, deployment_id, resource, role, now(),
+                     inspection_target=inspection_target)
     return observation
 
 
@@ -1037,6 +1056,7 @@ class EnrollmentVerifier:
         _directory(self.directory)
         self.certificate = Path(certificate)
         _ca(self.certificate)
+        self.inspection_target = resource
         self.deployment_id, self.resource, self.role = deployment_id, host_resource(resource), role
         self.observe, self.current = observe, current
 
@@ -1073,5 +1093,6 @@ class EnrollmentVerifier:
         _verify(public, message, proof, self.directory)
         document = {**identity, "machine": current["machine"],
                     "challenge": base64.b64encode(challenge).decode(), "proof": proof}
-        _observe_control(self.observe, document, self.deployment_id, self.resource, self.role)
+        _observe_control(self.observe, document, self.deployment_id, self.resource, self.role,
+                                       inspection_target=self.inspection_target)
         return identity
