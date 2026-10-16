@@ -441,6 +441,31 @@ class EnrollmentTests(unittest.TestCase):
         with self.assertRaises(enrollment.EnrollmentError):
             authority.grant(other.request())
 
+    def test_readiness_revoked_during_issuance_does_not_consume_grant(self):
+        grant = self.authority.grant(self.request)
+        proof = self.host.prove(grant, self.ca)
+        issue = self.authority._certificate
+        admitted = True
+
+        def ready(observation):
+            if not admitted:
+                raise enrollment.EnrollmentError("host-not-ready")
+
+        def revoke(request, envelope):
+            nonlocal admitted
+            certificate = issue(request, envelope)
+            admitted = False
+            return certificate
+
+        with patch.object(self.authority, "ready", side_effect=ready):
+            with patch.object(self.authority, "_certificate", side_effect=revoke):
+                with self.assertRaises(enrollment.EnrollmentError):
+                    self.authority.consume(self.request, grant, proof)
+        with self.assertRaises(enrollment.EnrollmentError):
+            self.authority.current_identity()
+        credential = self.authority.consume(self.request, grant, proof)
+        self.assertEqual(self.host.accept(credential, self.ca)["generation"], 1)
+
     def test_expiration_during_certificate_issuance_does_not_commit(self):
         grant = self.authority.grant(self.request, ttl=30)
         proof = self.host.prove(grant, self.ca)

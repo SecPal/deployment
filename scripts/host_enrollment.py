@@ -932,6 +932,7 @@ class EnrollmentAuthority:
             admit_management(document, observation, self.deployment_id,
                              self.resource, self.role, now(),
                              inspection_target=self.inspection_target)
+            _ready(self.ready, observation)
             identity = _identity(grant, certificate)
             db.execute("INSERT INTO secpal_enrollment.enrollments VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", (
                 payload["grant_id"], resource_slot(self.resource), payload["generation"],
