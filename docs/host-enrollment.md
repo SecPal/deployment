@@ -76,7 +76,9 @@ grant. Recovery uses the same protocol, advances the generation and invalidates
 the previous credential in current-state verification. Rebuild, replacement,
 lost/compromised key or changed machine identity needs fresh local identity and
 explicit recovery authority. Ordinary reboot retains the original identity.
-No weaker recovery endpoint or permanent bootstrap secret exists.
+No weaker recovery endpoint or permanent bootstrap secret exists. Local state
+locks have a bounded wait; management freshness is checked again after waiting
+and certificate issuance before authority state can commit.
 
 ## PostgreSQL state and authority separation
 

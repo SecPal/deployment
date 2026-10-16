@@ -598,6 +598,65 @@ class EnrollmentTests(unittest.TestCase):
             self.authority.current_identity()
         self.assertFalse(pin.exists())
 
+    def test_signed_grant_id_cannot_alias_a_different_ledger_key(self):
+        grant, _ = self.complete()
+        alias = str(uuid.uuid4())
+        with self.runtime_connect() as db:
+            db.execute("INSERT INTO secpal_enrollment.grants VALUES(%s,%s,true)",
+                       (alias, enrollment.canonical(grant).decode()))
+            from psycopg.rows import dict_row
+            db.row_factory = dict_row
+            row = db.execute("SELECT * FROM secpal_enrollment.enrollments").fetchone()
+            with self.assertRaises(enrollment.EnrollmentError):
+                self.authority._record(db, {**row, "grant_id": alias})
+
+    def test_local_state_lock_wait_is_bounded(self):
+        code = (
+            "import sys;sys.path.insert(0,sys.argv[1]);import host_enrollment as e; "
+            "host=e.LocalHost(sys.argv[2]);"
+            "\ntry: host.request()"
+            "\nexcept e.EnrollmentError as error: print(str(error))")
+        with enrollment._lock(self.root / "host"):
+            result = subprocess.run(
+                [sys.executable, "-c", code, str(ROOT / "scripts"), str(self.root / "host")],
+                capture_output=True, text=True, timeout=8)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "state-lock-timeout")
+
+    def test_waiting_cannot_extend_management_observation_freshness(self):
+        generation = self.authority._generation
+        clock = patch.object(enrollment, "now", return_value=int(time.time()) + 61)
+        def delayed(*args):
+            value = generation(*args)
+            clock.start()
+            return value
+        try:
+            with patch.object(self.authority, "_generation", side_effect=delayed):
+                with self.assertRaises(enrollment.EnrollmentError):
+                    self.authority.grant(self.request)
+        finally:
+            clock.stop()
+        with self.connect() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM secpal_enrollment.grants").fetchone()[0], 0)
+
+    def test_issuance_cannot_outlive_management_observation_freshness(self):
+        grant = self.authority.grant(self.request)
+        proof = self.host.prove(grant, self.ca)
+        issue = self.authority._certificate
+        clock = patch.object(enrollment, "now", return_value=int(time.time()) + 61)
+        def delayed(*args):
+            certificate = issue(*args)
+            clock.start()
+            return certificate
+        try:
+            with patch.object(self.authority, "_certificate", side_effect=delayed):
+                with self.assertRaises(enrollment.EnrollmentError):
+                    self.authority.consume(self.request, grant, proof)
+        finally:
+            clock.stop()
+        credential = self.authority.consume(self.request, grant, proof)
+        self.assertEqual(self.host.accept(credential, self.ca)["generation"], 1)
+
     def test_blue_green_resources_have_distinct_host_identities(self):
         _, blue_credential = self.complete()
         blue = self.host.accept(blue_credential, self.ca)

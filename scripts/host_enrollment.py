@@ -267,7 +267,15 @@ def _lock(directory):
             if (info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600
                     or info.st_nlink != 1 or not stat.S_ISREG(info.st_mode)):
                 raise EnrollmentError("state-lock")
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise EnrollmentError("state-lock-timeout") from None
+                    time.sleep(0.01)
             yield
         finally:
             os.close(fd)
@@ -795,7 +803,7 @@ class EnrollmentAuthority:
         observation = _observe_control(self.observe, document, self.deployment_id,
                                        self.resource, self.role)
         _ready(self.ready, observation)
-        return observation
+        return document, observation
 
     def _previous(self, db):
         return db.execute(
@@ -826,11 +834,13 @@ class EnrollmentAuthority:
 
     def grant(self, request, *, purpose="enroll", ttl=MAX_GRANT_SECONDS):
         request = json.loads(canonical(request))
-        self._observe(request)
+        document, observation = self._observe(request)
         if type(ttl) is not int or not 1 <= ttl <= MAX_GRANT_SECONDS:
             raise EnrollmentError("grant-lifetime")
         with self._transaction(write=True) as db:
             generation = self._generation(db, request, purpose)
+            admit_management(document, observation, self.deployment_id,
+                             self.resource, self.role, now())
             issued_at = now()
             payload = {"version": 1, "grant_id": str(uuid.uuid4()),
                        "deployment_id": self.deployment_id, "resource": asdict(self.resource),
@@ -891,7 +901,8 @@ class EnrollmentAuthority:
             raise EnrollmentError("grant-request-binding")
         public = _request(request)
         _verify(public, _proof_message(grant), proof, self.directory)
-        self._observe(request, possession={"grant_sha256": digest(grant), "proof": proof})
+        document, observation = self._observe(
+            request, possession={"grant_sha256": digest(grant), "proof": proof})
         with self._transaction(write=True) as db:
             row = db.execute("SELECT * FROM secpal_enrollment.grants WHERE grant_id=%s",
                              (payload["grant_id"],)).fetchone()
@@ -901,11 +912,15 @@ class EnrollmentAuthority:
                 raise EnrollmentError("replayed-grant")
             if self._generation(db, request, payload["purpose"]) != payload["generation"]:
                 raise EnrollmentError("grant-generation")
+            admit_management(document, observation, self.deployment_id,
+                             self.resource, self.role, now())
             if not payload["issued_at"] <= now() < payload["expires_at"]:
                 raise EnrollmentError("grant-expired")
             certificate = self._certificate(request, grant)
             if now() >= payload["expires_at"]:
                 raise EnrollmentError("grant-expired")
+            admit_management(document, observation, self.deployment_id,
+                             self.resource, self.role, now())
             identity = _identity(grant, certificate)
             db.execute("INSERT INTO secpal_enrollment.enrollments VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", (
                 payload["grant_id"], resource_slot(self.resource), payload["generation"],
@@ -931,7 +946,8 @@ class EnrollmentAuthority:
                       "credential": {"grant": grant, "certificate": row["certificate"]}}
             admit_registration(record, self.certificate, self.directory)
             payload = grant["payload"]
-            if (digest(request) != payload["request_sha256"]
+            if (row["grant_id"] != payload["grant_id"]
+                    or digest(request) != payload["request_sha256"]
                     or any(request[k] != payload[k] for k in [
                         "deployment_id", "resource", "role", "host_id",
                         "machine", "public_key_sha256"])
