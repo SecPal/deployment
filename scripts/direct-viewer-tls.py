@@ -141,16 +141,64 @@ def names(spec):
     return (spec.routing.frontend_host,spec.routing.api_host)
 
 
-def package_authority():
+def systemd_package_admission():
+    """Consume PID 1's completed prerequisite for this live service activation.
+
+    No caller environment, cached receipt or writable admission file is trusted.
+    Descendant deploy hooks stay in the same cgroup even with a closed environment.
+    """
+    units=('secpal-viewer-health.service','secpal-viewer-renew.service')
+    groups=Path('/proc/self/cgroup').read_text().splitlines()
+    unit=next((name for name in units
+               if '0::/system.slice/'+name in groups),None)
+    if unit is None:
+        return False
+    object_path='/org/freedesktop/systemd1/unit/'+unit.replace('-','_2d').replace('.','_2e')
+    def property_(interface,name,signature):
+        value=json.loads(run('observe-systemd-package-prerequisite',[
+            '/usr/bin/busctl','--system','--json=short','--timeout=5','get-property',
+            'org.freedesktop.systemd1',object_path,'org.freedesktop.systemd1.'+interface,name]))
+        if type(value) is not dict or set(value)!={'type','data'} or value['type']!=signature:
+            raise ValueError('admit-systemd-package-prerequisite')
+        return value['data']
+    invocation=property_('Unit','InvocationID','ay')
+    rows=property_('Service','ExecStartPre','a(sasbttttuii)')
+    entered=property_('Unit','InactiveExitTimestampMonotonic','t')
+    started=property_('Service','ExecMainStartTimestampMonotonic','t')
+    state=property_('Unit','ActiveState','s')
+    current=property_('Unit','InvocationID','ay')
+    command=['/usr/bin/python3','-I','-S',str(HELPER),'--verify-packages']
+    if (type(invocation) is not list or len(invocation)!=16 or not any(invocation)
+            or any(type(byte) is not int or not 0<=byte<=255 for byte in invocation)
+            or invocation!=current or state!='activating'
+            or type(rows) is not list or len(rows)!=1 or type(rows[0]) is not list
+            or len(rows[0])!=10 or rows[0][:3]!=['/usr/bin/python3',command,False]
+            or rows[0][2] is not False
+            or any(type(value) is not int or value<=0 for value in [entered,started,*rows[0][3:8]])
+            or any(type(value) is not int for value in rows[0][8:]) or rows[0][8:]!=[1,0]
+            or not rows[0][4]<=rows[0][6]<=started or rows[0][6]<entered):
+        raise ValueError('admit-systemd-package-prerequisite')
+    return True
+
+
+def package_authority(*, host_view=False):
     # Consume #308's exact observer and semantic owner; no copied identities,
     # enabled EPEL repository, global signing key, or installation operation.
+    if host_view:
+        # '+' on the fixed ExecStartPre preserves PID 1's host mount view.
+        # Never grade sandbox mount masks as installed RPM metadata.
+        host=Path('/proc/1/ns/mnt').stat()
+        own=Path('/proc/self/ns/mnt').stat()
+        if (host.st_dev,host.st_ino)!=(own.st_dev,own.st_ino):
+            raise ValueError('admit-package-host-filesystem-view')
     trusted(BUNDLE)
     spec=importlib.util.spec_from_file_location('accepted_certbot_packages',SOURCE/'scripts/qualify-certbot-packages.py')
     module=importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     policy_document=json.loads((SOURCE/'config/production/certbot-package-policy.json').read_bytes())
     try:
-        module.observe_installed(BUNDLE,platform.machine(),policy_document)
+        if host_view or not systemd_package_admission():
+            module.observe_installed(BUNDLE,platform.machine(),policy_document)
     except module.QualificationError as error:
         raise ValueError('certbot-supply-'+error.operation+'-'+error.reason) from error
     import sysconfig
@@ -522,9 +570,13 @@ def status():
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     actions=parser.add_mutually_exclusive_group(required=True)
-    for action in ('obtain','renew','deploy','prepare-initial','accept-initial','recover','health','policy-check','policy-install','policy-withdraw'):
+    for action in ('obtain','renew','deploy','prepare-initial','accept-initial','recover','health','policy-check','policy-install','policy-withdraw','verify-packages'):
         actions.add_argument('--'+action,action='store_true')
     args=parser.parse_args()
+    if args.verify_packages:
+        package_authority(host_view=True)
+        print('PASS: installed-certbot-package-admission')
+        return 0
     if args.policy_withdraw:
         with serialized(RUNTIME/'renew.lock'), serialized(RUNTIME/'publish.lock'):
             policy_withdraw()

@@ -11,6 +11,9 @@ Type=oneshot
 User=root
 Group=root
 SELinuxContext=system_u:system_r:unconfined_service_t:s0
+# Verify signed package payloads in PID 1's host filesystem view before the
+# sandboxed controller consumes the successful current ExecStartPre via D-Bus.
+ExecStartPre=+/usr/bin/python3 -I -S /usr/local/libexec/secpal/viewer-tls-source/scripts/direct-viewer-tls.py --verify-packages
 ExecStart=/usr/bin/python3 -I -S /usr/local/libexec/secpal/viewer-tls-source/scripts/direct-viewer-tls.py --health
 TimeoutStartSec=5min
 UMask=0077
