@@ -9,6 +9,9 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- Provider-neutral capacity qualification, separated from functional host
+  conformance and inventory-selected operating reserves.
+
 - A bounded, negative-only AVC-correlation diagnostic projection that preserves
   closed rejection facts for independent post-cleanup verification without
   retaining audit records, command output, journals, or host state.

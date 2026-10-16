@@ -102,7 +102,7 @@ address. The current SecPal target-source and host-qualification contract does
 not consume or admit that service, so UDP port 123 remains rejected by the
 guest policy; this leaf does not create a time-service dependency.
 
-## Closed profile and image handoff
+## Closed provider-run selector and image handoff
 
 The closed selector contains exactly two reviewed Rocky profiles. Both fix
 Google, `secpal-dev`, `europe-west3`, `europe-west3-a`, one guest, and one
@@ -113,6 +113,11 @@ Google, `secpal-dev`, `europe-west3`, `europe-west3-a`, one guest, and one
 - `gcp-rocky-10-2-x86-64` binds `c3-standard-4`, native `x86_64`, the
   `x86-64-v3` baseline, and the official
   `rocky-linux-cloud/rocky-linux-10` discovery family.
+
+These provider-run selectors are not capacity profiles or universal hardware
+minimums. The [capacity contract](architecture/capacity-capabilities.md) keeps
+measured workload qualification separate from platform conformance; historical
+cloud evidence does not retroactively qualify its optional planning profile.
 
 Both families are discovery inputs only. Callers select a reviewed profile
 identity, never a profile path, image family, machine type, architecture, or
