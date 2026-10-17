@@ -111,6 +111,8 @@ decode_script 'prepare_script' /usr/local/sbin/secpal-prepare-rocky-host
 decode_script 'readiness_publisher' /usr/local/sbin/secpal-publish-rocky-qualification-readiness
 decode_script 'runtime_user_systemd' /usr/local/sbin/runtime_user_systemd.py
 decode_script 'runtime_user_systemd' /opt/secpal-control/scripts/ci-cloud/runtime_user_systemd.py
+decode_script workload_manifest /opt/secpal-control/workload-manifest.json
+decode_script workload_runner /usr/local/sbin/secpal-run-rocky-workload-qualification
 decode_script 'target_runner' /usr/local/sbin/secpal-run-rocky-target-qualification
 decode_script 'target_failure_classifier' /usr/local/sbin/secpal-classify-rocky-target-failure
 decode_script 'target_replay_verifier' /usr/local/sbin/secpal-verify-rocky-target-replay

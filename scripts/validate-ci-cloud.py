@@ -554,6 +554,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         r"^\s+(\w+)\s*=\s*(?:file\(|var\.(?:postgresql_candidate_json|product_backend_policy_json)\s*$|local\.postgresql_probe_manifest\s*$)",
         read(root, "infra/ci-cloud/gcp-rocky/metadata.tf"), re.MULTILINE,
     ))
+    source_names.update(re.findall(
+        r"^\s+(workload_manifest)\s*=\s*jsonencode\(\{",
+        read(root, "infra/ci-cloud/gcp-rocky/metadata.tf"), re.MULTILINE,
+    ))
     installer_names = {
         quoted or bare for quoted, bare in re.findall(
             r"^\s*decode_script (?:'([a-z0-9_]+)'|([a-z0-9_]+)) ",

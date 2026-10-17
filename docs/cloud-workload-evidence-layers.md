@@ -7,12 +7,50 @@ SPDX-License-Identifier: MIT
 
 ## Operational status
 
-These maintained #119/#121 components are exercised by repository tests and their
-CLI interfaces. No active GitHub workflow currently orchestrates them end to end.
-Issue #123 owns connection to current Rocky runtime qualification. Neither a schema
-instance nor repository tests claim real-host or cloud acceptance.
-Rocky host qualification remains independently executable through its existing
-workflow and evidence contract.
+The `rocky-host` qualification in
+`.github/workflows/rocky-cloud-qualification.yml` connects the maintained
+workload pipeline (#119/#121/#122) after independent host admission. Trusted bootstrap
+pins the workload source manifest. Trusted control streams the exact public
+components over the existing authenticated SSH transport; the guest verifies
+the entire closed set against those bootstrap-owned SHA-256 values before
+installing the existing fixture installer and collector. This keeps the
+existing metadata size/expansion limits intact. The bounded guest runner
+creates a fresh UID/GID 20000 fixture identity with no provider credentials,
+checks the current boot/control/run binding, and checks out exactly the existing
+frozen target `402c22b0a1d69a5a3dba74ffb68cf016caba606b`. The host harness digest
+remains `436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac`.
+It does not silently test current main instead. Changing that reviewed pair
+requires a separate accepted source change.
+
+The runner collects baseline facts, calls the target's prepare phase without
+administrator authority, invokes trusted Quadlet normalization/activation, and
+collects live facts. Cleanup, cleanup normalization and post-cleanup observation
+are attempted even after failure or interruption. The existing fixture installer
+owns bounded administrator publication; target code never receives arbitrary
+sudo or cleanup authority. Existing unrelated control resources must survive
+workload cleanup. The entire ephemeral guest and its controls are subsequently
+removed by the existing exact provider cleanup.
+
+`admit-rocky-workload.py` only unpacks bounded, control/target/run-bound transport
+and invokes the existing assembler and independent validator on trusted control.
+Those owners enforce purity before module loading and around admission.
+Target code cannot supply a grading result. Failed phase/collection statuses
+remain failures. Only schema-validated evidence is published; qualification also
+requires successful collection and admission. Target output is drained through
+the existing closed diagnostic consumer rather than published as raw logs.
+
+Repository tests establish this orchestration contract, not actual provider
+execution. #123 remains open until its real create/host/workload/destroy evidence
+is accepted. The two reviewed GCP profiles represent two architectures on one
+provider; they cannot establish multi-provider portability. GCP remains deferred
+under #299/#292. A fresh exact-profile, control/target and budget-bound execution
+authorization is required before dispatch. No source merge authorizes that run.
+
+The workload's PostgreSQL 18 is an integration-only disposable fixture, not
+host-native production PostgreSQL. Its Caddy gateway is a test fixture.
+Standalone Rocky host qualification retains its separate evidence contract.
+A workload PASS alone cannot establish host admission, provider cleanup,
+production acceptance or multi-provider coverage.
 
 ## Component interfaces
 

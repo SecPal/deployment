@@ -28,10 +28,15 @@ locals {
     for source_path in local.postgresql_probe_paths : source_path => filesha256("${path.module}/../../../${source_path}")
   })
   rocky_bootstrap_sources = merge({
-    postgresql_candidate                = var.postgresql_candidate_json
-    prepare_script                      = file("${path.module}/../../../scripts/ci-cloud/prepare-rocky-host.sh")
-    readiness_publisher                 = file("${path.module}/../../../scripts/ci-cloud/publish-rocky-qualification-readiness.py")
-    runtime_user_systemd                = file("${path.module}/../../../scripts/ci-cloud/runtime_user_systemd.py")
+    postgresql_candidate = var.postgresql_candidate_json
+    prepare_script       = file("${path.module}/../../../scripts/ci-cloud/prepare-rocky-host.sh")
+    readiness_publisher  = file("${path.module}/../../../scripts/ci-cloud/publish-rocky-qualification-readiness.py")
+    runtime_user_systemd = file("${path.module}/../../../scripts/ci-cloud/runtime_user_systemd.py")
+    workload_manifest = jsonencode({
+      for name in ["run-rocky-workload-qualification.py", "collect-workload-evidence.py", "quadlet-fixture-installer.py", "quadlet-fixture-client.py", "bounded-target-diagnostic.py", "workload-purity.py", "workload-admission.py"] :
+      name => filesha256("${path.module}/../../../scripts/ci-cloud/${name}")
+    })
+    workload_runner                     = file("${path.module}/../../../scripts/ci-cloud/workload-source-loader.py")
     target_runner                       = file("${path.module}/../../../scripts/ci-cloud/run-rocky-target-qualification.sh")
     target_failure_classifier           = file("${path.module}/../../../scripts/ci-cloud/classify-rocky-target-qualification-failure.py")
     target_replay_verifier              = file("${path.module}/../../../scripts/ci-cloud/verify-rocky-target-qualification-replay.py")

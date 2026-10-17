@@ -11,6 +11,7 @@ import importlib.util
 import json
 from pathlib import Path
 import random
+import runpy
 import re
 import shutil
 import subprocess
@@ -179,7 +180,7 @@ locals {
         expected = set(re.findall(r'\$\{(\w+)_base64gzip\}', old))
         destinations = dict(re.findall(r"decode_script '\$\{(\w+)_base64gzip\}' /opt/secpal-control/([^\s]+)", old))
         control_components = {name for name, path in destinations.items() if path in postgresql.CONTROL_PROBE_PATHS}
-        expected = (expected - control_components) | {'postgresql_probe_manifest', 'postgresql_selinux'}
+        expected = (expected - control_components) | {'postgresql_probe_manifest', 'postgresql_selinux', 'workload_runner', 'workload_manifest'}
         for architecture in ('amd64', 'arm64'):
             with self.subTest(architecture=architecture):
                 rendered = self.render(architecture)
@@ -187,6 +188,12 @@ locals {
                 self.assertTrue(rendered['report']['admitted'])
                 self.assertEqual(expected, set(rendered['sources']))
                 self.assertTrue(control_components.isdisjoint(rendered['sources']))
+                workload = json.loads(rendered['sources']['workload_manifest'])
+                loader = runpy.run_path(str(ROOT / 'scripts/ci-cloud/workload-source-loader.py'))
+                self.assertEqual(set(loader['SOURCES']), set(workload))
+                for name, digest in workload.items():
+                    self.assertEqual(digest, hashlib.sha256(
+                        (ROOT / 'scripts/ci-cloud' / name).read_bytes()).hexdigest())
                 manifest = json.loads(rendered['sources']['postgresql_probe_manifest'])
                 self.assertEqual(set(manifest), set(postgresql.PROBE_PATHS))
                 for path in postgresql.PROBE_PATHS:
@@ -346,7 +353,7 @@ locals {
 
     def test_maximum_control_expansion_and_overflow(self):
         decoded = self.render()['report']['decoded_bytes']
-        needle = 'prepare_script                      = file("${path.module}/../../../scripts/ci-cloud/prepare-rocky-host.sh")'
+        needle = 'prepare_script       = file("${path.module}/../../../scripts/ci-cloud/prepare-rocky-host.sh")'
         self.assertIn(needle, self.canonical)
         for overflow in (0, 1):
             source = self.canonical.replace(needle,
