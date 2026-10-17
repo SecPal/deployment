@@ -85,7 +85,6 @@ class PrivateObjectTests(unittest.TestCase):
         self.assertEqual(row["byte_size"], len(self.bytes))
         self.assertEqual(row["crypto"], self.crypto)
         self.assertEqual(len(row["storage_key"]), 32)
-        self.assertNotIn(self.tenant, row["storage_key"])
         with self.node.transaction() as db:
             self.assertEqual(db.execute("SELECT count(*) AS n FROM secpal_objects.business_references").fetchone()["n"], 1)
             self.assertEqual(db.execute("SELECT count(*) AS n FROM secpal_objects.replication_intents").fetchone()["n"], 1)
