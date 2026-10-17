@@ -125,7 +125,7 @@ jobs:
           sudo env DEBIAN_FRONTEND=noninteractive \
             apt-get install --yes --no-install-recommends nftables iproute2
           python3 tests/host-firewall-contract.py
-          sudo -n -- python3 tests/host-firewall-native.py
+          python3 tests/host-firewall-native.py
 
       - name: Exercise native PostgreSQL 18 enrollment transactions
         env:
