@@ -66,7 +66,15 @@ class KernelTests(unittest.TestCase):
                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True)
         if cls.peer.stdout.readline().strip() != "ready":
-            raise RuntimeError("create-peer-namespace")
+            diagnostic=cls.peer.stderr.read(4096)
+            code=cls.peer.wait(timeout=5)
+            if "unshare failed" in diagnostic or "Operation not permitted" in diagnostic:
+                reason="peer-network-namespace-denied"
+            elif "Permission denied" in diagnostic:
+                reason="peer-interpreter-execution-denied"
+            else:
+                reason="peer-process-startup-failed"
+            raise RuntimeError(reason + "; exit=" + str(code))
         command(["/usr/sbin/ip", "link", "set", "lo", "up"])
         command(["/usr/sbin/ip", "link", "add", "fw104", "type", "veth", "peer", "name", "peer104"])
         command(["/usr/sbin/ip", "link", "set", "peer104", "netns", str(cls.peer.pid)])
@@ -253,8 +261,12 @@ def main():
         raise SystemExit(result.returncode)
     if os.geteuid()!=0 or os.readlink("/proc/self/ns/net")==args.parent_network:
         raise RuntimeError("refusing non-isolated network namespace")
+    capabilities=int(next(line.split()[1] for line in
+        Path("/proc/self/status").read_text().splitlines() if line.startswith("CapEff:")),16)
     print("Native:",command(["/usr/sbin/nft","--version"]).stdout.strip(),
-          "kernel:",os.uname().release,flush=True)
+          "kernel:",os.uname().release,
+          "CAP_NET_ADMIN:",bool(capabilities & (1 << 12)),
+          "CAP_SYS_ADMIN:",bool(capabilities & (1 << 21)),flush=True)
     unittest.main(argv=[sys.argv[0]],verbosity=2)
 
 
