@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import importlib.util
@@ -36,6 +37,7 @@ class WorkloadPurityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.purity = load(SCRIPTS / "workload-purity.py", "purity_test")
+        cls.purity.check_files(SCRIPTS)
         cls.assembler = load(SCRIPTS / "assemble-evidence.py", "purity_assembler")
         cls.validator = load(SCRIPTS / "validate-evidence.py", "purity_validator")
         cls.workload_fixture = load(
@@ -61,6 +63,10 @@ class WorkloadPurityTests(unittest.TestCase):
                       (ROOT / "scripts" / "validate-ci-cloud.py").read_text())
         self.assertIn("python3 tests/ci-cloud-workload-purity.py",
                       (ROOT / "scripts" / "preflight.sh").read_text())
+        lines = (ROOT / "scripts" / "preflight.sh").read_text().splitlines()
+        gate = lines.index("python3 scripts/ci-cloud/workload-purity.py")
+        self.assertTrue(all(gate < i for i, line in enumerate(lines)
+                            if line.startswith("python3 tests/")))
 
     def test_current_main_decision_characterization(self) -> None:
         base = self.workload_fixture.valid_observations()
@@ -107,6 +113,12 @@ class WorkloadPurityTests(unittest.TestCase):
     def test_static_capability_mutations(self) -> None:
         admission = self.admission_source
         collector = self.collector_source
+        health_assignment = next(ast.get_source_segment(collector, node)
+                                 for node in ast.parse(collector).body
+                                 if isinstance(node, ast.Assign)
+                                 and any(isinstance(target, ast.Name)
+                                         and target.id == "HEALTH_INTERVAL_USEC"
+                                         for target in node.targets))
         cases = (
             (None, admission.replace("import re\n", "import re\nimport os\n", 1),
              "PURITY_UNDECLARED_IMPORT"),
@@ -157,6 +169,27 @@ class WorkloadPurityTests(unittest.TestCase):
                 "def workload_admission_failures(observations: object) -> list[str]:\n"
                 "    del ROLE_CONTRACTS['api']\n", 1),
              "PURITY_CONTRACT_REBIND"),
+            (collector.replace(health_assignment, "HEALTH_INTERVAL_USEC = os.environ", 1),
+             None, "PURITY_IMPORT_SIDE_EFFECT"),
+            (collector.replace(health_assignment, "HEALTH_INTERVAL_USEC = os", 1),
+             None, "PURITY_IMPORT_SIDE_EFFECT"),
+            (collector.replace("    prefix_length: int\n",
+                               "    prefix_length: int\n    def get(self):\n        return open('/tmp/purity-method')\n", 1)
+             .replace("def parsed_manager_environment(output: str) -> dict[str, str] | None:\n",
+                      "def parsed_manager_environment(output: str) -> dict[str, str] | None:\n"
+                      "    NetworkAddress('127.0.0.1', 32).get()\n", 1),
+             None, "PURITY_IMPORT_SIDE_EFFECT"),
+            (collector.replace(
+                "def parsed_manager_environment(output: str) -> dict[str, str] | None:\n",
+                "def parsed_manager_environment(output: str) -> dict[str, str] | None:\n"
+                "    nonlocal missing_binding\n", 1), None,
+             "PURITY_SOURCE_INVALID"),
+            (collector.replace("    prefix_length: int\n",
+                               "    prefix_length: int\n    get: object = open\n", 1)
+             .replace("def parsed_manager_environment(output: str) -> dict[str, str] | None:\n",
+                      "def parsed_manager_environment(output: str) -> dict[str, str] | None:\n"
+                      "    NetworkAddress('127.0.0.1', 32).get('/tmp/purity-field')\n", 1),
+             None, "PURITY_IMPORT_SIDE_EFFECT"),
             (collector + "\nre = subprocess\n", None,
              "PURITY_IMPORT_SIDE_EFFECT"),
             (collector + "\nnormalized_mounts = subprocess.run\n", None,
@@ -192,13 +225,23 @@ class WorkloadPurityTests(unittest.TestCase):
                 ("keyword-default", f"def injected(*, value=open({str(marker)!r}, 'w')):\n    return value"),
                 ("method-default", f"class Injected(NamedTuple):\n    value: int\n    def method(self, *, value=open({str(marker)!r}, 'w')):\n        return value"),
                 ("annotation", f"def injected(value: open({str(marker)!r}, 'w')):\n    return value"),
+                ("decorator", f"def decorate(function):\n    open({str(marker)!r}, 'w').close()\n    return function\n@decorate\ndef injected():\n    pass"),
+                ("constructor", f"def constructor(*args):\n    open({str(marker)!r}, 'w').close()\n    return ()\ntuple = constructor"),
+                ("definition", f"def MappingProxyType(value):\n    open({str(marker)!r}, 'w').close()\n    return value"),
+                ("named-expression", f"def constructor(*args):\n    open({str(marker)!r}, 'w').close()\n    return ()\n(tuple := constructor)"),
             ):
                 with self.subTest(name=name):
-                    (fixture / "collect-workload-evidence.py").write_text(
-                        (self.collector_source.replace("from __future__ import annotations\n", "")
-                         if name == "annotation" else self.collector_source)
-                        + "\n" + injected + "\n"
-                    )
+                    source = self.collector_source
+                    if name == "annotation":
+                        source = source.replace("from __future__ import annotations\n", "")
+                    if name in {"constructor", "named-expression"}:
+                        source = source.replace("GENERATOR_ROOTS = tuple(",
+                                                injected + "\nGENERATOR_ROOTS = tuple(", 1)
+                    elif name == "definition":
+                        source = source.replace("CI_UID = 20000", injected + "\nCI_UID = 20000", 1)
+                    else:
+                        source += "\n" + injected + "\n"
+                    (fixture / "collect-workload-evidence.py").write_text(source)
                     (fixture / "workload-admission.py").write_text(self.admission_source)
                     with self.assertRaises(self.purity.PurityViolation):
                         self.purity.load_checked_admission(fixture)
@@ -212,8 +255,9 @@ class WorkloadPurityTests(unittest.TestCase):
                             self.assembler.load_workload_admission()
                     self.assertFalse(marker.exists())
 
-    def assembled_with(self, decision, *, invalid=False):
-        observations = self.workload_fixture.valid_observations()
+    def assembled_with(self, decision, *, invalid=False, observations=None):
+        if observations is None:
+            observations = self.workload_fixture.valid_observations()
         if invalid:
             observations["baseline"].pop("complete")
         workflow = self.host_fixture.valid_document()["workflow"]
@@ -237,7 +281,15 @@ class WorkloadPurityTests(unittest.TestCase):
     def test_real_assembler_guard_rejects_runtime_capabilities(self) -> None:
         with tempfile.TemporaryDirectory(prefix="secpal-purity-") as directory:
             marker = Path(directory) / "marker"
+            def swallowed(_):
+                try:
+                    marker.read_text()
+                except ValueError:
+                    pass
+                return []
+
             attempts = (
+                ("swallowed", swallowed, "PURITY_RUNTIME_FILESYSTEM"),
                 ("process", lambda _: subprocess.run(["true"], check=True),
                  "PURITY_RUNTIME_PROCESS"),
                 ("file-read", lambda _: marker.read_text(),
@@ -256,6 +308,31 @@ class WorkloadPurityTests(unittest.TestCase):
             marker.write_text("controller orchestration remains outside the guard")
             self.assertEqual("controller orchestration remains outside the guard",
                              marker.read_text())
+
+    def test_admission_cannot_mutate_collected_facts(self) -> None:
+        def mutate(evidence):
+            evidence["live"]["containers"].append({})
+            return []
+
+        observations = self.workload_fixture.valid_observations()
+        before = copy.deepcopy(observations)
+        document = self.assembled_with(mutate, observations=observations)
+        self.assertEqual(before, observations)
+        self.assertIn("PURITY_RUNTIME_EVIDENCE_MUTATION",
+                      document["workload"]["failed_admission_invariants"])
+        document = self.assembled_with(lambda _: [])
+        before = copy.deepcopy(document)
+        original = self.validator.load_trusted_module
+
+        def loader(path, name):
+            if path == self.validator.WORKLOAD_ADMISSION_PATH:
+                return types.SimpleNamespace(workload_admission_failures=mutate)
+            return original(path, name)
+
+        with patch.object(self.validator, "load_trusted_module", side_effect=loader):
+            failures = self.validator.recompute_admission(document)
+        self.assertEqual(before, document)
+        self.assertIn("PURITY_RUNTIME_EVIDENCE_MUTATION", failures)
 
     def test_nested_contract_assignment_cannot_change_decision(self) -> None:
         admission = self.assembler.load_workload_admission()
@@ -282,7 +359,15 @@ class WorkloadPurityTests(unittest.TestCase):
         original = self.validator.load_trusted_module
         with tempfile.TemporaryDirectory(prefix="secpal-purity-") as directory:
             marker = Path(directory) / "marker"
+            def swallowed(_):
+                try:
+                    marker.read_text()
+                except ValueError:
+                    pass
+                return []
+
             attempts = (
+                (swallowed, "PURITY_RUNTIME_FILESYSTEM"),
                 (lambda _: subprocess.run(["true"], check=True),
                  "PURITY_RUNTIME_PROCESS"),
                 (lambda _: marker.write_text("bad"),

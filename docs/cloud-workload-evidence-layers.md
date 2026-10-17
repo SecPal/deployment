@@ -60,8 +60,11 @@ cover the declared pure functions and their reachable local helpers. Python's
 comprehensions. The controller also scopes a Python audit hook to the actual
 workload admission call; process, filesystem, network, and other audited system
 capabilities produce named workload failures. Evidence reading and summary
-writing occur outside that guarded call. Static mutations and adversarial
-controller tests run in repository preflight. The current #121 admission
+writing occur outside that guarded call. Admission receives a private copy of
+parsed facts; changing that copy is rejected without altering collected evidence.
+Audited violations remain recorded even when admission catches their exception.
+The static check runs before preflight imports workload modules. Static mutations
+and adversarial controller tests run in repository preflight. The current #121 admission
 decisions and workload invariants remain the authority for valid and invalid
 evidence; no provider run is part of this purity check.
 

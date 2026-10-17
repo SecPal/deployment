@@ -43,6 +43,8 @@ fi
 git diff --check
 git diff --cached --check
 
+python3 scripts/ci-cloud/workload-purity.py
+
 mapfile -d '' shell_files < <(find scripts tests -type f -name '*.sh' -print0 | sort -z)
 if [ "${#shell_files[@]}" -eq 0 ]; then
   printf 'ERROR: no shell validation files found.\n' >&2

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import contextvars
+from copy import deepcopy
 import importlib.util
 import symtable
 import sys
@@ -240,7 +241,10 @@ def _pure_body(node: ast.FunctionDef, globals_used: set[str],
 
 def _analyze_reachable(source: str, tree: ast.Module, roots: frozenset[str],
                        collector: bool) -> None:
-    table = symtable.symtable(source, COLLECTOR if collector else ADMISSION, "exec")
+    try:
+        table = symtable.symtable(source, COLLECTOR if collector else ADMISSION, "exec")
+    except SyntaxError:
+        reject("PURITY_SOURCE_INVALID")
     functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
     if roots - functions.keys():
         reject("PURITY_REACHABLE_IMPURE_CALLEE")
@@ -270,6 +274,14 @@ def _analyze_reachable(source: str, tree: ast.Module, roots: frozenset[str],
         pending.extend((globals_used & functions.keys()) - visited)
 
 
+def _literal_default(node: ast.AST) -> bool:
+    try:
+        ast.literal_eval(node)
+    except (ValueError, TypeError, SyntaxError):
+        return False
+    return True
+
+
 def _module_initialization(tree: ast.Module, collector: bool) -> None:
     """Reject new executable module-level routes before candidate code runs."""
     if not any(isinstance(node, ast.ImportFrom) and node.module == "__future__"
@@ -289,18 +301,24 @@ def _module_initialization(tree: ast.Module, collector: bool) -> None:
             imported_names.update(item.name for item in node.names)
     for node in tree.body:
         if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef)):
-            exprs = (node.decorator_list + node.args.defaults
+            if isinstance(node, ast.FunctionDef) and (
+                    node.decorator_list or node.name in imported_names | PURE_BUILTINS | {"RoleContract"}):
+                reject("PURITY_IMPORT_SIDE_EFFECT")
+            exprs = (node.args.defaults
                      + [value for value in node.args.kw_defaults if value is not None]
                      if isinstance(node, ast.FunctionDef) else [])
         elif isinstance(node, ast.ClassDef):
-            if not (len(node.bases) == 1 and isinstance(node.bases[0], ast.Name)
+            # Only the collection-only result type keeps its existing methods;
+            # it is not an allowed pure global or module-level constructor.
+            if not (node.name not in imported_names | PURE_BUILTINS
+                    and len(node.bases) == 1 and isinstance(node.bases[0], ast.Name)
                     and node.bases[0].id == "NamedTuple" and not node.decorator_list
                     and not node.keywords
                     and all((isinstance(member, ast.AnnAssign)
-                             and (member.value is None or not any(
-                                 isinstance(child, (ast.Call, ast.Attribute))
-                                 for child in ast.walk(member.value))))
+                             and (member.value is None or _literal_default(member.value)))
                             or (isinstance(member, ast.FunctionDef)
+                                and node.name == "NormalizationOutcome"
+                                and member.name in {"__bool__", "document"}
                                 and not member.decorator_list and not member.args.defaults
                                 and not any(value is not None for value in member.args.kw_defaults))
                             for member in node.body)):
@@ -317,7 +335,8 @@ def _module_initialization(tree: ast.Module, collector: bool) -> None:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for target in targets:
                     if not isinstance(target, ast.Name) or target.id in (
-                            imported_names | defined_names | {"__builtins__", "__loader__",
+                            imported_names | defined_names | PURE_BUILTINS | allowed_calls
+                            | {"__builtins__", "__loader__",
                                                               "__spec__", "__package__"}):
                         reject("PURITY_IMPORT_SIDE_EFFECT")
             exprs = [node]
@@ -325,7 +344,22 @@ def _module_initialization(tree: ast.Module, collector: bool) -> None:
             reject("PURITY_IMPORT_SIDE_EFFECT")
         for expr in exprs:
             for child in ast.walk(expr):
-                if isinstance(child, ast.Call):
+                if isinstance(child, ast.NamedExpr):
+                    reject("PURITY_IMPORT_SIDE_EFFECT")
+                elif isinstance(child, ast.Attribute):
+                    literal_items = child.attr == "items" and isinstance(child.value, ast.Dict)
+                    path_constructor = (
+                        not collector and child.attr == "with_name"
+                        and isinstance(child.value, ast.Call)
+                        and isinstance(child.value.func, ast.Name)
+                        and child.value.func.id == "Path"
+                    )
+                    if not (literal_items or path_constructor):
+                        reject("PURITY_IMPORT_SIDE_EFFECT")
+                elif (isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+                      and child.id in imported_names and child.id not in allowed_calls):
+                    reject("PURITY_IMPORT_SIDE_EFFECT")
+                elif isinstance(child, ast.Call):
                     target = child.func
                     if isinstance(target, ast.Name):
                         if target.id not in allowed_calls:
@@ -415,25 +449,32 @@ def check_files(directory: Path) -> None:
         reject("PURITY_SOURCE_INVALID")
 
 
-_active = contextvars.ContextVar("workload_admission_guard", default=False)
+_active = contextvars.ContextVar("workload_admission_guard", default=None)
 _hook_installed = False
 
 
 def _audit(event: str, _args: tuple[object, ...]) -> None:
-    if not _active.get():
+    violations = _active.get()
+    if violations is None:
         return
     if event.startswith(("subprocess.", "os.system", "os.spawn", "os.posix_spawn",
                          "os.exec", "os.fork", "os.kill")):
-        reject("PURITY_RUNTIME_PROCESS")
-    if event.startswith(("socket.", "ssl.")):
-        reject("PURITY_RUNTIME_NETWORK")
-    if event == "open" or event.startswith(("os.listdir", "os.scandir", "os.remove",
+        identity = "PURITY_RUNTIME_PROCESS"
+    elif event.startswith(("socket.", "ssl.")):
+        identity = "PURITY_RUNTIME_NETWORK"
+    elif event == "open" or event.startswith(("os.listdir", "os.scandir", "os.remove",
                                              "os.rename", "os.mkdir", "os.rmdir",
                                              "os.stat", "os.chmod", "os.chown",
                                              "os.chdir", "os.link", "os.symlink",
                                              "os.truncate", "os.utime", "os.chroot")):
-        reject("PURITY_RUNTIME_FILESYSTEM")
-    reject("PURITY_RUNTIME_CAPABILITY")
+        identity = "PURITY_RUNTIME_FILESYSTEM"
+    else:
+        identity = "PURITY_RUNTIME_CAPABILITY"
+    # Admission may catch ValueError (or even a broad exception); the controller
+    # still observes the attempted capability and cannot publish a clean result.
+    if identity not in violations:
+        violations.append(identity)
+    reject(identity)
 
 
 def guarded_decision(admission_module: object, evidence: object) -> list[str]:
@@ -441,13 +482,20 @@ def guarded_decision(admission_module: object, evidence: object) -> list[str]:
     if not _hook_installed:
         sys.addaudithook(_audit)
         _hook_installed = True
-    token = _active.set(True)
+    # Inputs are bounded JSON observations from the controller. Isolate mutable
+    # facts without changing the accepted #121 dict/list interface or decisions.
+    candidate = deepcopy(evidence)
+    violations: list[str] = []
+    token = _active.set(violations)
     try:
-        return admission_module.workload_admission_failures(evidence)
+        failures = admission_module.workload_admission_failures(candidate)
+        if candidate != evidence:
+            violations.append("PURITY_RUNTIME_EVIDENCE_MUTATION")
     except PurityViolation as error:
-        return [error.identity]
+        failures = [error.identity]
     finally:
         _active.reset(token)
+    return violations or failures
 
 
 def load_checked_admission(directory: Path):
