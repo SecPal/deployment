@@ -470,6 +470,39 @@ def read_candidate(state_directory: Path) -> dict[str, Any]:
     return candidate
 
 
+def admit_successor(accepted: dict[str, Any] | None, candidate: dict[str, Any]) -> None:
+    """Shared monotonic publication admission for accepted-prefix consumers."""
+    validate_candidate(candidate)
+    if accepted is not None:
+        validate_candidate(accepted)
+        candidate_version = _validate_provenance(
+            candidate["source_sync_token"],
+            candidate["source_create_date"],
+            candidate["retrieved_at"],
+        )
+        accepted_version = _validate_provenance(
+            accepted["source_sync_token"],
+            accepted["source_create_date"],
+            accepted["retrieved_at"],
+        )
+        if candidate_version < accepted_version:
+            raise ContractError("candidate would roll back the provider publication")
+        if candidate_version == accepted_version and (
+            candidate["source_url"],
+            candidate["service"],
+            candidate["ipv4_prefixes"],
+            candidate["ipv6_prefixes"],
+        ) != (
+            accepted["source_url"],
+            accepted["service"],
+            accepted["ipv4_prefixes"],
+            accepted["ipv6_prefixes"],
+        ):
+            raise ContractError(
+                "same provider publication has conflicting normalized content"
+            )
+
+
 def accept_candidate(state_directory: Path, acknowledged_digest: str) -> None:
     """Atomically promote only the candidate explicitly acknowledged by digest."""
     if not isinstance(acknowledged_digest, str) or len(acknowledged_digest) != 64:
@@ -480,33 +513,7 @@ def accept_candidate(state_directory: Path, acknowledged_digest: str) -> None:
         candidate = _read_document(directory, CANDIDATE_FILE, required=True)
         assert candidate is not None
         accepted = _read_document(directory, LKG_FILE, required=False)
-        if accepted is not None:
-            candidate_version = _validate_provenance(
-                candidate["source_sync_token"],
-                candidate["source_create_date"],
-                candidate["retrieved_at"],
-            )
-            accepted_version = _validate_provenance(
-                accepted["source_sync_token"],
-                accepted["source_create_date"],
-                accepted["retrieved_at"],
-            )
-            if candidate_version < accepted_version:
-                raise ContractError("candidate would roll back the provider publication")
-            if candidate_version == accepted_version and (
-                candidate["source_url"],
-                candidate["service"],
-                candidate["ipv4_prefixes"],
-                candidate["ipv6_prefixes"],
-            ) != (
-                accepted["source_url"],
-                accepted["service"],
-                accepted["ipv4_prefixes"],
-                accepted["ipv6_prefixes"],
-            ):
-                raise ContractError(
-                    "same provider publication has conflicting normalized content"
-                )
+        admit_successor(accepted, candidate)
         if candidate["candidate_sha256"] != acknowledged_digest:
             raise ContractError("acknowledgement does not match the current candidate")
         _atomic_write(directory, LKG_FILE, _canonical_bytes(candidate))
