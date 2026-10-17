@@ -210,3 +210,16 @@ CI runs it in the existing AMD64/ARM64 job with Psycopg 3.3.6 and PyCA
 cryptography 50.0.2. Operational custody, native service/rotation adapters and
 external recovery fencing need independent evidence before claiming full production acceptance for issue #100. Existing #80/#81/#171/#241 and completed #248
 evidence remains valid within its original inputs and scope.
+
+The private authority directory also contains a mode-0700 `publication` lock
+directory, created at initialization. It fences the entire acknowledged
+Activation consume and credential-file publication against verified rollback
+and publication of a new current generation. Administrative rotation takes
+`rotation -> publication -> store` locks in that order; synchronous candidate
+Activation during validation only takes `publication -> store`. A rollback
+cannot finish before an already-started publication has completed, and an
+Activation starting after rollback rechecks the persisted operation binding.
+Missing operation IDs in older unaccepted session state are rejected as binding
+mismatches. Existing authority directories from an unaccepted implementation
+require explicit administrator-owned preparation of this private lock directory;
+ordinary runtime never repairs authority state.

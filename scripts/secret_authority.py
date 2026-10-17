@@ -249,6 +249,7 @@ class PostgresStore:
         try:
             enrollment._directory(self.directory)
             enrollment._directory(self.directory / "rotation")
+            enrollment._directory(self.directory / "publication")
         except enrollment.EnrollmentError:
             raise SecretError("authority-directory") from None
 
@@ -261,6 +262,7 @@ class PostgresStore:
         except (OSError, enrollment.EnrollmentError):
             raise SecretError("authority-already-exists") from None
         (directory / "rotation").mkdir(mode=0o700)
+        (directory / "publication").mkdir(mode=0o700)
         store = cls(directory, database, deployment_id, unseal=unseal)
         state = {
             "version": 1, "deployment_id": deployment_id, "authorities": {},
@@ -364,6 +366,21 @@ def restore_authority(directory, database, deployment_id, encrypted, recovery_ke
     state = recover_authority(encrypted, recovery_key, deployment_id, required=required)
     return PostgresStore.initialize(directory, database, deployment_id,
                                     unseal=unseal, recovered=state)
+
+
+@contextmanager
+def _publication_lock(store):
+    """Fence committed Activation delivery against rollback/current publication.
+
+    The existing bounded native lock is separate from the administrative rotation
+    lock: validate() may synchronously activate while rotate() owns that lock.
+    Lock order is rotation -> publication -> store, never the reverse.
+    """
+    try:
+        with enrollment._lock(store.directory / "publication"):
+            yield
+    except enrollment.EnrollmentError:
+        raise SecretError("credential-publication-lock") from None
 
 
 class SecretAdministration:
@@ -736,23 +753,24 @@ class SecretAdministration:
             raise SecretError("rotation-not-accepted") from None
         # No rollback may cross this ambiguous commit boundary. Independent
         # pin/state read-back establishes the outcome or fails closed.
-        try:
-            with self.store.transaction(write=True) as state:
-                authority, record = _record(state, ref)
-                _admit_custody(state, rotation=ref)
-                expected = previous["generation"] if previous else None
-                if (authority["current"] != expected or record["status"] != "rotation-pending"
-                        or record["rotation"]["operation_id"] != operation):
-                    raise SecretError("rotation-concurrent-change")
-                if previous:
-                    _, old = _record(state, previous)
-                    old["status"] = "revocation-pending"
-                record["status"] = "current"
-                record["rotation"] = None
-                authority["current"] = ref["generation"]
-                _material_changed(state)
-        except SecretError:
-            raise SecretError("rotation-outcome-unverified") from None
+        with _publication_lock(self.store):
+            try:
+                with self.store.transaction(write=True) as state:
+                    authority, record = _record(state, ref)
+                    _admit_custody(state, rotation=ref)
+                    expected = previous["generation"] if previous else None
+                    if (authority["current"] != expected or record["status"] != "rotation-pending"
+                            or record["rotation"]["operation_id"] != operation):
+                        raise SecretError("rotation-concurrent-change")
+                    if previous:
+                        _, old = _record(state, previous)
+                        old["status"] = "revocation-pending"
+                    record["status"] = "current"
+                    record["rotation"] = None
+                    authority["current"] = ref["generation"]
+                    _material_changed(state)
+            except SecretError:
+                raise SecretError("rotation-outcome-unverified") from None
         if previous:
             self._finish_revocation(previous, revoke=revoke)
         else:
@@ -765,6 +783,10 @@ class SecretAdministration:
             self._rollback_rotation(_ref(ref), rollback=rollback)
 
     def _rollback_rotation(self, ref, *, rollback):
+        with _publication_lock(self.store):
+            self._rollback_rotation_locked(ref, rollback=rollback)
+
+    def _rollback_rotation_locked(self, ref, *, rollback):
         with self.store.transaction() as state:
             authority, record = _record(state, ref)
             if record["status"] != "rotation-pending" or record["rotation"] is None:
@@ -951,6 +973,10 @@ class DeploymentActivation:
         return {"session_id": sid, "challenge": challenge, "expires_at": expires}
 
     def activate(self, session_id, identity, proof, *, delivery):
+        with _publication_lock(self.store):
+            return self._activate(session_id, identity, proof, delivery=delivery)
+
+    def _activate(self, session_id, identity, proof, *, delivery):
         _uuid(session_id)
         with self.store.transaction() as state:
             session = deepcopy(state["sessions"].get(session_id))
@@ -974,7 +1000,7 @@ class DeploymentActivation:
                                     rotation=session["rotation"])
             if session["rotation"] is not None:
                 _, candidate = _record(state, session["rotation"])
-                if candidate["rotation"]["operation_id"] != session["operation_id"]:
+                if candidate["rotation"]["operation_id"] != session.get("operation_id"):
                     raise SecretError("rotation-operation-binding")
             values = _delivery_values(state, session["refs"])
             current["consumed"] = True

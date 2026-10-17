@@ -713,6 +713,12 @@ class SecretAuthorityTests(unittest.TestCase):
                               rollback=lambda *a: None)
         outcomes = []
         def retry(*args):
+            legacy = self.activation.challenge_rotation(
+                self.identity, "api", [candidate], candidate=candidate)
+            with self.store.transaction(write=True) as state:
+                del state["sessions"][legacy["session_id"]]["operation_id"]
+            with self.assertRaisesRegex(secret.SecretError, "rotation-operation-binding"):
+                self.redeem(legacy)
             try:
                 self.redeem(held[0])
                 outcomes.append("accepted-stale-session")
@@ -722,6 +728,56 @@ class SecretAuthorityTests(unittest.TestCase):
                           ready=lambda *a: None, accept=lambda *a: None,
                           revoke=lambda *a: None, rollback=lambda *a: None)
         self.assertEqual(outcomes, ["rejected"])
+        self.assertEqual(list(self.delivery.root.iterdir()), [])
+
+    def test_pending_publication_finishes_before_verified_rollback(self):
+        import threading
+        import time
+        class PowerLoss(BaseException):pass
+        candidate = self.admin.candidate("app-key", b"base64:" + __import__("base64").b64encode(os.urandom(32)),
+                                         authority_id=self.app["authority_id"])
+        self.admin.checkpoint(self.custody, recovery_key=self.custody.key)
+        self.activation.authorize_rotation = lambda *args: None
+        held = []
+        def prepare(*args):
+            held.append(self.activation.challenge_rotation(
+                self.identity, "api", [candidate], candidate=candidate))
+            raise PowerLoss()
+        with self.assertRaises(PowerLoss):
+            self.admin.rotate(candidate, validate=prepare, start=lambda *a: None,
+                              ready=lambda *a: None, accept=lambda *a: None,
+                              revoke=lambda *a: None, rollback=lambda *a: None)
+        entered, release, rolling_back = threading.Event(), threading.Event(), threading.Event()
+        order = []
+        publish = self.delivery.publish
+        def delayed(*args):
+            entered.set()
+            self.assertTrue(release.wait(3))
+            result = publish(*args)
+            order.append("published")
+            return result
+        def rollback(*args):
+            order.append("rollback")
+            # Real owned filesystem cleanup is verified before rollback returns.
+            import shutil
+            for directory in self.delivery.root.iterdir():
+                shutil.rmtree(directory)
+            self.assertEqual(list(self.delivery.root.iterdir()), [])
+        def run_rollback():
+            rolling_back.set()
+            self.admin.rollback_rotation(candidate, rollback=rollback)
+        with patch.object(self.delivery, "publish", side_effect=delayed):
+            with concurrent.futures.ThreadPoolExecutor(2) as pool:
+                delivery = pool.submit(self.redeem, held[0])
+                self.assertTrue(entered.wait(2))
+                rollback_result = pool.submit(run_rollback)
+                self.assertTrue(rolling_back.wait(2))
+                time.sleep(0.15)
+                release.set()
+                delivery.result()
+                rollback_result.result()
+        self.assertEqual(order, ["published", "rollback"],
+                         "credential publication crossed verified rollback")
         self.assertEqual(list(self.delivery.root.iterdir()), [])
 
 
