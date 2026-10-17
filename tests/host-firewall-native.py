@@ -247,7 +247,7 @@ def main():
     args=parser.parse_args()
     (ROOT / ".context").mkdir(exist_ok=True)
     if args.parent_network is None:
-        result=subprocess.run(["unshare","--user","--map-root-user","--net",
+        result=subprocess.run(["unshare","--user","--map-auto","--map-root-user","--net",
             sys.executable,str(Path(__file__).resolve()),
             "--parent-network",os.readlink("/proc/self/ns/net")],timeout=120)
         raise SystemExit(result.returncode)
