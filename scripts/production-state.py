@@ -21,6 +21,7 @@ import re
 import shutil
 import signal
 import stat
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -31,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = ROOT / "config" / "production" / "state-contract.json"
 APP_KEY_PATTERN = re.compile(rb"base64:[A-Za-z0-9+/]{43}=\n?\Z")
 PASSWORD_PATTERN = re.compile(rb"[A-Za-z0-9._~!#$%&*+\-/=?^]{24,128}\n?\Z")
-EXPECTED_OBJECTS_DIGEST = "41b846f699d09344fefb12746ae8cf720307edaec579b4f476fad97490b610b2"
+EXPECTED_OBJECTS_DIGEST = "ac470a606d2511806cb243eab9da638b7feb6c899523beb0272630a094848e98"
 EXPECTED_TOP_LEVEL = {
     "$comment",
     "schema_version",
@@ -72,9 +73,8 @@ EXPECTED_OBJECTS = {
     "app_previous_keys",
     "tenant_kek",
     "postgresql_credentials",
-    "valkey_credentials",
+    "postgresql_transport_material",
     "external_service_credentials",
-    "valkey_state",
     "acme_state",
     "crowdsec_state",
     "logs",
@@ -87,22 +87,14 @@ EXPECTED_OBJECTS = {
     "registry_credentials",
 }
 ACTIVE_STATE_OBJECTS = (
-    "postgresql_data",
     "private_application_storage",
     "public_application_storage",
-    "valkey_state",
     "logs",
     "configuration",
     "deployment_state",
 )
 RESERVED_STATE_OBJECTS = ("acme_state", "crowdsec_state")
 EXPECTED_STATE_LAYOUT = {
-    "postgresql_data": (
-        "/srv/secpal/postgresql",
-        "mapped-container-uid-999",
-        "mapped-container-gid-999",
-        "0700",
-    ),
     "private_application_storage": (
         "/srv/secpal/private-storage",
         "mapped-container-uid-10001",
@@ -114,12 +106,6 @@ EXPECTED_STATE_LAYOUT = {
         "mapped-container-uid-10001",
         "mapped-container-gid-10001",
         "0750",
-    ),
-    "valkey_state": (
-        "/srv/secpal/valkey",
-        "mapped-container-uid-10002",
-        "mapped-container-gid-10002",
-        "0700",
     ),
     "logs": ("/srv/secpal/logs", "service-account-uid", "service-account-gid", "0750"),
     "configuration": ("/srv/secpal/config", "root", "service-account-gid", "0750"),
@@ -136,27 +122,81 @@ EXPECTED_RESERVED_LAYOUT = {
 }
 EXPECTED_SECRET_DELIVERY = {
     "api": {
+        "consumers": [
+            "api",
+            "migrate",
+            "scheduler",
+            "worker-general",
+            "worker-hash-chain"
+        ],
+        "container_uid": 10001,
+        "container_gid": 10001,
         "directory": "/run/secpal/secrets/api",
+        "directory_mode": "0710",
+        "files": {
+            "app-key": {
+                "mode": "0400",
+                "type": "app-key"
+            },
+            "app-previous-keys": {
+                "mode": "0400",
+                "type": "app-previous-keys"
+            },
+            "tenant-kek": {
+                "mode": "0600",
+                "type": "tenant-kek"
+            }
+        }
+    },
+    "runtime": {
+        "directory": "/run/secpal/secrets/runtime",
         "container_uid": 10001,
         "container_gid": 10001,
         "directory_mode": "0710",
-        "consumers": ["api", "migrate", "scheduler", "worker-general", "worker-hash-chain"],
+        "consumers": [
+            "api",
+            "scheduler",
+            "worker-general",
+            "worker-hash-chain"
+        ],
         "files": {
-            "app-key": {"mode": "0400", "type": "app-key"},
-            "app-previous-keys": {"mode": "0400", "type": "app-previous-keys"},
-            "tenant-kek": {"mode": "0600", "type": "tenant-kek"},
-            "postgres-password": {"mode": "0400", "type": "password"},
-            "valkey-password": {"mode": "0400", "type": "password"},
-        },
+            "postgres-username": {
+                "mode": "0400",
+                "type": "postgres-username"
+            },
+            "postgres-password": {
+                "mode": "0400",
+                "type": "password"
+            },
+            "postgres-ca.crt": {
+                "mode": "0400",
+                "type": "postgres-ca"
+            }
+        }
     },
-    "valkey": {
-        "directory": "/run/secpal/secrets/valkey",
-        "container_uid": 10002,
-        "container_gid": 10002,
+    "migration": {
+        "directory": "/run/secpal/secrets/migration",
+        "container_uid": 10001,
+        "container_gid": 10001,
         "directory_mode": "0710",
-        "consumers": ["valkey"],
-        "files": {"password": {"mode": "0400", "type": "password"}},
-    },
+        "consumers": [
+            "migrate"
+        ],
+        "files": {
+            "postgres-username": {
+                "mode": "0400",
+                "type": "postgres-username"
+            },
+            "postgres-password": {
+                "mode": "0400",
+                "type": "password"
+            },
+            "postgres-ca.crt": {
+                "mode": "0400",
+                "type": "postgres-ca"
+            }
+        }
+    }
 }
 
 
@@ -227,7 +267,7 @@ def load_contract(path: Path = DEFAULT_CONTRACT) -> dict[str, Any]:
             or start + mapping["count"] - 1 > 4294967294
         ):
             fail("rootless mapping host ranges are unsupported")
-    for identity in (101, 999, 10001, 10002):
+    for identity in (101, 10001):
         map_rootless_id(identity, mapping, "uid")
         map_rootless_id(identity, mapping, "gid")
     log_policy = contract.get("log_policy")
@@ -434,8 +474,25 @@ def _state_directories(contract: dict[str, Any], include_reserved: bool = False)
         yield name, row["location"], _mode(row["mode"])
 
 
+def _reject_retired_storage(root: Path | None = None) -> None:
+    # These paths belong to the retired product-container layout. Never turn
+    # their presence into permission to destroy data or initialize a replacement.
+    for absolute in ("/srv", "/srv/secpal"):
+        parent = Path(absolute) if root is None else _fixture_path(root, absolute)
+        if parent.is_symlink():
+            fail("retired storage ancestry is redirected")
+        if not parent.exists():
+            return
+        _assert_safe_component(parent, True)
+    for absolute in ("/srv/secpal/postgresql", "/srv/secpal/valkey"):
+        path = Path(absolute) if root is None else _fixture_path(root, absolute)
+        if path.exists() or path.is_symlink():
+            fail('retired container storage requires an explicit data disposition')
+
+
 def initialize_fixture(contract: dict[str, Any], root: Path) -> None:
     root = _validate_fixture_root(root)
+    _reject_retired_storage(root)
     for _name, absolute, mode in _state_directories(contract):
         path = _fixture_path(root, absolute)
         _validate_fixture_chain(root, path.parent, create=True)
@@ -476,6 +533,17 @@ def _validate_secret(path: Path, secret_type: str, mode: int, max_previous: int)
         valid = len(value) == 32
     elif secret_type == "password":
         valid = PASSWORD_PATTERN.fullmatch(value) is not None
+    elif secret_type == "postgres-username":
+        reserved = {b"postgres", b"secpal_owner", b"secpal_runtime", b"secpal_migration",
+                    b"secpal_backup", b"secpal_replication"}
+        valid = (re.fullmatch(rb"[a-z][a-z0-9_]{0,62}\n?", value) is not None
+                 and value.rstrip(b"\n") not in reserved)
+    elif secret_type == "postgres-ca":
+        try:
+            ssl.PEM_cert_to_DER_cert(value.decode('ascii'))
+            valid = True
+        except (ValueError, UnicodeError):
+            valid = False
     else:
         fail("secret type is unsupported")
     if not valid:
@@ -486,6 +554,7 @@ def validate_fixture(
     contract: dict[str, Any], root: Path, *, require_secrets: bool = False
 ) -> None:
     root = _validate_fixture_root(root)
+    _reject_retired_storage(root)
     for _name, absolute, mode in _state_directories(contract):
         path = _fixture_path(root, absolute)
         _validate_fixture_chain(root, path.parent, create=False)
@@ -530,9 +599,10 @@ def _validate_secret_deliveries(
     root = Path(contract["secret_policy"]["delivery_root"])
     _assert_safe_component(root, True, 0o710)
     _assert_no_extended_acl(root)
-    retired_server_delivery = root / "postgres"
-    if retired_server_delivery.exists() or retired_server_delivery.is_symlink():
-        fail("retired PostgreSQL server secret delivery remains")
+    for retired_name in {"postgres", "valkey"}:
+        retired = root / retired_name
+        if retired.exists() or retired.is_symlink():
+            fail("retired server secret delivery remains")
     expected_root_uid = 65534 if namespace_view else 0
     expected_root_gid = 0 if namespace_view else contract["rootless_mapping"]["service_gid"]
     _assert_owner(root, expected_root_uid, expected_root_gid)
@@ -565,9 +635,11 @@ def _validate_secret_deliveries(
                     )
     if require_secrets and not namespace_view:
         api = Path(contract["secret_delivery"]["api"]["directory"])
-        valkey = Path(contract["secret_delivery"]["valkey"]["directory"])
-        if (api / "valkey-password").read_bytes() != (valkey / "password").read_bytes():
-            fail("Valkey consumer credential copies do not match")
+        runtime = Path(contract["secret_delivery"]["runtime"]["directory"])
+        migration = Path(contract["secret_delivery"]["migration"]["directory"])
+        if ((runtime / "postgres-username").read_bytes().strip()
+                == (migration / "postgres-username").read_bytes().strip()):
+            fail("runtime and migration database identities are not separate")
         active_raw = (api / "app-key").read_bytes()
         active_key = active_raw[:-1] if active_raw.endswith(b"\n") else active_raw
         previous_raw = (api / "app-previous-keys").read_bytes()
@@ -584,6 +656,7 @@ def validate_production(
     require_secrets: bool,
     require_marker: bool = True,
 ) -> None:
+    _reject_retired_storage()
     for name, absolute, mode in _state_directories(contract):
         path = Path(absolute)
         _assert_safe_component(path, True, mode)
@@ -649,6 +722,7 @@ def initialize_production(
         "first_install_requires_explicit_ack"
     ]:
         fail("production initialization requires explicit first-install acknowledgement")
+    _reject_retired_storage()
     marker = Path(contract["state_policy"]["initialization_marker"])
     if marker.exists() or marker.is_symlink():
         if initial_secret_source is not None:
@@ -818,10 +892,10 @@ def publish_initial_secret_tree(
                 os.fsync(directory_descriptor)
             finally:
                 os.close(directory_descriptor)
-        if (staging / "api/valkey-password").read_bytes() != (
-            staging / "valkey/password"
-        ).read_bytes():
-            fail("Valkey consumer credential copies do not match")
+        if (staging / "runtime/postgres-username").read_bytes().strip() == (
+            staging / "migration/postgres-username"
+        ).read_bytes().strip():
+            fail("runtime and migration database identities are not separate")
         active_raw = (staging / "api/app-key").read_bytes()
         active = active_raw[:-1] if active_raw.endswith(b"\n") else active_raw
         previous_raw = (staging / "api/app-previous-keys").read_bytes()
@@ -850,12 +924,8 @@ def prove_fixture_lifecycle(contract: dict[str, Any], root: Path) -> list[str]:
     """Model the exact native lifecycle without invoking a live production runtime."""
     initialize_fixture(contract, root)
     private = _fixture_path(root, contract["objects"]["private_application_storage"]["location"])
-    postgres = _fixture_path(root, contract["objects"]["postgresql_data"]["location"])
-    valkey = _fixture_path(root, contract["objects"]["valkey_state"]["location"])
     markers = {
         private / ".fixture-private": b"private-metadata\n",
-        postgres / ".fixture-postgres": b"postgres-state\n",
-        valkey / ".fixture-valkey": b"valkey-aof\n",
     }
     before: dict[Path, tuple[int, int, int, bytes]] = {}
     for path, value in markers.items():

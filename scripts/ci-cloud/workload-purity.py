@@ -229,7 +229,7 @@ def _pure_body(node: ast.FunctionDef, globals_used: set[str],
             elif _root_name(target) in modules and _module_path(target) not in MODULE_ATTRIBUTES:
                 reject("PURITY_UNDECLARED_MODULE_ATTRIBUTE")
         elif isinstance(child, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Delete)):
-            targets = child.targets if isinstance(child, ast.Assign) else [child.target]
+            targets = child.targets if isinstance(child, (ast.Assign, ast.Delete)) else [child.target]
             for target in targets:
                 if _root_name(target) in globals_used:
                     reject("PURITY_CONTRACT_REBIND")
@@ -272,6 +272,10 @@ def _analyze_reachable(source: str, tree: ast.Module, roots: frozenset[str],
 
 def _module_initialization(tree: ast.Module, collector: bool) -> None:
     """Reject new executable module-level routes before candidate code runs."""
+    if not any(isinstance(node, ast.ImportFrom) and node.module == "__future__"
+               and any(item.name == "annotations" for item in node.names)
+               for node in tree.body):
+        reject("PURITY_IMPORT_SIDE_EFFECT")
     allowed_calls = {"MappingProxyType", "Path", "RoleContract", "frozenset",
                      "set", "tuple"} if collector else {"Path", "load_contract"}
     allowed_attrs = {"items"} if collector else {"with_name"}
@@ -285,7 +289,9 @@ def _module_initialization(tree: ast.Module, collector: bool) -> None:
             imported_names.update(item.name for item in node.names)
     for node in tree.body:
         if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef)):
-            exprs = node.decorator_list + node.args.defaults if isinstance(node, ast.FunctionDef) else []
+            exprs = (node.decorator_list + node.args.defaults
+                     + [value for value in node.args.kw_defaults if value is not None]
+                     if isinstance(node, ast.FunctionDef) else [])
         elif isinstance(node, ast.ClassDef):
             if not (len(node.bases) == 1 and isinstance(node.bases[0], ast.Name)
                     and node.bases[0].id == "NamedTuple" and not node.decorator_list
@@ -295,7 +301,8 @@ def _module_initialization(tree: ast.Module, collector: bool) -> None:
                                  isinstance(child, (ast.Call, ast.Attribute))
                                  for child in ast.walk(member.value))))
                             or (isinstance(member, ast.FunctionDef)
-                                and not member.decorator_list and not member.args.defaults)
+                                and not member.decorator_list and not member.args.defaults
+                                and not any(value is not None for value in member.args.kw_defaults))
                             for member in node.body)):
                 reject("PURITY_IMPORT_SIDE_EFFECT")
             exprs = []

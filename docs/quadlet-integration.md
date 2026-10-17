@@ -164,13 +164,14 @@ The runner emits bounded non-secret container statistics, systemd memory
 current/peak and CPU observations, unpacked image sizes, disposable volume
 sizes collected inside the rootless user namespace, and fixture disk use as
 evidence. An unavailable volume observation is reported explicitly rather than
-as a false zero. Those observations do not change the D.1 production resource
+as a false zero. Those observations do not change the current production-host resource
 floors.
 
-## Exact-target Debian 13 fixture
+## Exact-target cloud workload interface
 
-The manual cloud-conformance protocol invokes only two workload operations in
-target code. `workload-prepare-start` derives the fixture identifier and port
+The retained #119/#121 workload interface provides two closed operations in
+target code. Its integration with current Rocky cloud qualification remains
+owned by #123; this interface alone does not claim an end-to-end cloud PASS. `workload-prepare-start` derives the fixture identifier and port
 from the already admitted commit, installs a checksum-pinned GitHub CLI in the
 private fixture, repeats both product attestation gates, stages immutable
 `localhost/secpal-ci-…@sha256:…` identities, renders the closed unit set, and
@@ -203,17 +204,32 @@ resources and submits the fixed root-owned removal request. Rejection of that
 request is a cleanup failure. The published product images are deliberately
 not removed.
 
-This disposable provider evidence is separate from the Ubuntu browser matrix
-and from D.1 production-host admission. A cloud artifact is evidence only
-after the independent collector and closed schema both admit it; provisioning
-a Debian host or publishing Quadlets is not itself a passing claim.
+Disposable workload evidence is separate from the Ubuntu browser matrix and
+from independent Rocky production-host qualification. A workload artifact is
+evidence only after independent collection and closed-schema admission.
+Publishing Quadlets alone is not a passing claim. The retired Debian
+provisioning workflow and its operator protocol remain in Git history.
 
 ## Running the integration
 
+Select the exact Node.js 26 release in the repository's `.nvmrc` and install
+the locked browser dependencies before running integration. With nvm:
+
+```bash
+nvm install
+nvm use
+npm ci
+npx playwright install chromium
+```
+
+The root manifest, lockfile, Repository Quality workflow, and both Local
+Integration architectures use this same Node selection. Repository preflight
+checks that they agree and rejects older Node baselines.
+
 The runtime requires a non-root user, Podman `>=5.4.2,<6`, `crun`, `catatonit`,
 Netavark, Aardvark, `pasta`, subordinate-ID helpers, an active systemd user
-manager, Debian's native Quadlet user generator at
-`/usr/lib/systemd/user-generators/podman-user-generator`, and the D.1
+manager, the distribution-provided Quadlet user generator at
+`/usr/lib/systemd/user-generators/podman-user-generator`, and the reviewed
 root-owned Quadlet search-path policy. GitHub CLI 2.97.0, Node.js, npm,
 Playwright Chromium, Python 3, `curl`, and GNU `du` are also required.
 Podman prereleases sort below their corresponding stable release. The runtime
@@ -285,8 +301,5 @@ Ubuntu-hosted execution proves integration behavior only. It does not prove
 the separate D.1 Debian 13 production-host admission contract, which remains
 covered by the production inventory and synthetic host-fact validators.
 
-The required check changes from `Local Integration / Compose Contract` to the
-`Local Integration / Quadlet Contract (amd64)` and `Local Integration / Quadlet
-Contract (arm64)` matrix checks. Branch protection must make that an explicit
-atomic governance cutover when this change is merged; the repository does not
-silently mutate branch protection.
+The current runtime checks are `Quadlet Contract (amd64)` and
+`Quadlet Contract (arm64)`, enforced through native GitHub protection.

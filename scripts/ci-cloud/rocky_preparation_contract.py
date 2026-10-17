@@ -20,6 +20,7 @@ from typing import Any
 
 RESPONSIBILITY = "normalization,admission,assembly"
 INVARIANT_OWNERS = {
+    "certbot-package-exception": "rocky_preparation_contract.admit_certbot_exception",
     "authenticated-native-packages": "rocky_preparation_contract.admit_package",
     "fixture-arm64-child": "rocky_preparation_contract.admit_fixture_identity",
     "fixture-amd64-child": "rocky_preparation_contract.admit_fixture_identity",
@@ -338,7 +339,18 @@ def canonical_nevra(
 def normalize_package(
     package_key: str, raw: dict[str, Any], host_architecture: str
 ) -> dict[str, Any]:
-    if package_key not in PACKAGES or not isinstance(raw, dict):
+    if package_key not in PACKAGES:
+        reject(
+            "normalization", "normalize-package-evidence", "subject-invalid", package_key
+        )
+    return normalize_installed_package(package_key, raw, host_architecture)
+
+
+def normalize_installed_package(
+    package_key: str, raw: dict[str, Any], host_architecture: str
+) -> dict[str, Any]:
+    """Shared signed-RPM representation; each consumer owns its closed inventory."""
+    if not isinstance(package_key, str) or RPM_NAME.fullmatch(package_key) is None or not isinstance(raw, dict):
         reject(
             "normalization", "normalize-package-evidence", "subject-invalid", package_key
         )
@@ -450,6 +462,14 @@ def admit_package(
         "signer_fingerprint": ROCKY_FINGERPRINT,
         "payload_digest": fact["payload_digest"],
     }
+
+
+def admit_certbot_exception(
+    provenance: dict[str, Any], architecture: str, policy: dict[str, Any]
+) -> dict[str, Any] | None:
+    """TLS-only owner; ordinary Rocky packages/repositories/signers are unchanged."""
+    from certbot_package_admission import admit
+    return admit(provenance, architecture, policy)
 
 
 def normalize_native_package_observations(raw: dict[str, Any]) -> dict[str, Any]:

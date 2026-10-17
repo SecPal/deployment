@@ -154,8 +154,8 @@ def main() -> int:
         ("missing-schema-version", lambda d: d.pop("schema_version"), None),
         ("future-schema-version", lambda d: d.update({"schema_version": 2}), None),
         (
-            "relative-postgresql-path",
-            lambda d: set_nested(d, ("paths", "postgresql_data", "path"), "data/postgres"),
+            "relative-public-storage-path",
+            lambda d: set_nested(d, ("paths", "public_application_storage", "path"), "data/public"),
             None,
         ),
         (
@@ -170,16 +170,16 @@ def main() -> int:
             lambda d: set_nested(
                 d,
                 ("paths", "private_application_storage", "path"),
-                d["paths"]["postgresql_data"]["path"],
+                d["paths"]["public_application_storage"]["path"],
             ),
             None,
         ),
         (
-            "service-home-conflicts-with-postgresql",
+            "service-home-conflicts-with-private-storage",
             lambda d: set_nested(
                 d,
                 ("service_account", "home"),
-                d["paths"]["postgresql_data"]["path"],
+                d["paths"]["private_application_storage"]["path"],
             ),
             None,
         ),
@@ -625,7 +625,7 @@ def main() -> int:
             raise AssertionError("duplicate inventory key failure was not deterministic")
 
         nested_inventory = copy.deepcopy(example)
-        nested_path = f'{nested_inventory["paths"]["postgresql_data"]["path"]}/private'
+        nested_path = f'{nested_inventory["paths"]["public_application_storage"]["path"]}/private'
         set_nested(
             nested_inventory,
             ("paths", "private_application_storage", "path"),

@@ -128,8 +128,9 @@ and one from `/etc/subgid`. Starts and counts are strict integers; arithmetic
 overflow, a range in the supported host-identity space, malformed facts, a
 different account, multiple effective entries, overlap with another account,
 or an effective mapping that differs from inventory fails closed. The size maps
-all current known container identities without guessing the future PostgreSQL
-or Valkey identity.
+the frontend and API container identities. Native PostgreSQL storage and
+account identity belong to [the PostgreSQL contract](native-postgresql.md),
+outside the rootless inventory and subordinate-ID mapping. Valkey is absent.
 
 ### Rootless runtime host facts
 
@@ -187,9 +188,8 @@ path. ASCII control characters and character-count-only values that the target
 filesystem cannot safely represent fail admission.
 
 API private/public storage uses container `10001:10001` and mapped host
-`110000:210000`; PostgreSQL uses container `999:999` and host
-`100998:200998`; Valkey uses container `10002:10002` and host
-`110001:210001`. Runtime secret directories are root-owned with service group
+`110000:210000`. PostgreSQL uses its distribution host account and native
+PGDATA contract, outside Podman identity mapping; Valkey has no production identity. Runtime secret directories are root-owned with service group
 `20000` and mode `0710`. These values derive from the one D.2 rootless mapping
 rather than container/host identity equality. Edge, ACME, and CrowdSec
 identities remain explicitly delegated rather than guessed. Podman graphroot
@@ -198,15 +198,23 @@ remains outside it.
 
 ### `resources`
 
-The inventory declares admission requirements. CPU, total storage, and total
-inode values cannot be lower than the schema contract. Memory remains an
-explicit positive operator-selected byte requirement until D.10 supplies a
-measured universal floor; it is still compared exactly with supplied facts.
-`resources.storage` contains only byte and inode
-headroom observations plus the backing filesystem's byte and inode totals.
-Each absolute/percentage pair must exactly match those per-filesystem totals,
-allowing whole-number flooring, and each filesystem total must fit within the
-corresponding aggregate host total.
+The inventory declares operating-profile admission requirements. CPU, RAM,
+total storage and total inode values are explicit positive operator-selected
+requirements, compared exactly with observed host facts. The example's four
+CPUs, 8 GiB, 100 GiB and one million inodes are preliminary planning estimates;
+they are neither universal platform minimums nor measured customer capacity.
+Functional platform conformance, workload capacity qualification and production
+operating reserve are distinct [contracts](production-host.md#kernel-resources-and-basic-host-prerequisites).
+No named capacity profile is required merely to prove Host Enrollment.
+
+The existing per-path absolute byte/inode reserve policy and 20% free-byte and
+free-inode guard remain enforced. Native PostgreSQL PGDATA/WAL reserve and durability
+admission remain independently owned and unchanged. A configured profile cannot
+waive any filesystem, security or durability check.
+
+Supplied storage headroom facts include backing filesystem totals. Each
+absolute/percentage pair must agree with those totals, allowing whole-number
+flooring, and each filesystem total must fit within the aggregate host total.
 The separate closed `filesystems` fact group contains a shared `access` fact
 for canonical path, ownership, mode, locality, and effective account access,
 plus filesystem type, effective read-only mount state, `d_type`, and XFS

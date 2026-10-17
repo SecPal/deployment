@@ -89,6 +89,62 @@ class ProductionContractRegressionTests(unittest.TestCase):
     def validate_synthetic_inventory(self, inventory: dict[str, object]) -> None:
         self.validator.validate_inventory(inventory, synthetic=True)
 
+    def test_declared_small_profile_is_not_rejected_by_planning_estimates(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        inventory["resources"].update(
+            logical_cpus=2, memory_bytes=4 * 1024**3,
+            storage_total_bytes=40 * 1024**3, total_inodes=800_000,
+        )
+        # This is a declared synthetic profile, not a qualification of a SKU.
+        self.validate_synthetic_inventory(inventory)
+        facts = copy.deepcopy(self.host_facts["resources"])
+        facts.update({key: inventory["resources"][key] for key in
+                      ("logical_cpus", "memory_bytes", "storage_total_bytes", "total_inodes")})
+        for item in facts["storage"].values():
+            item.update(filesystem_total_bytes=40 * 1024**3,
+                        free_bytes=30 * 1024**3, free_percent=75,
+                        filesystem_total_inodes=800_000,
+                        free_inodes=600_000, free_inode_percent=75)
+        self.validator.validate_resource_facts(inventory, facts)
+        for key in ("logical_cpus", "memory_bytes", "storage_total_bytes", "total_inodes"):
+            with self.subTest(resource=key):
+                insufficient = copy.deepcopy(facts)
+                insufficient[key] -= 1
+                self.assert_contract_violation(
+                    lambda: self.validator.validate_resource_facts(inventory, insufficient),
+                    "below inventory floor",
+                )
+                invalid = copy.deepcopy(inventory)
+                invalid["resources"][key] = 0
+                self.assert_contract_violation(lambda: self.validate_synthetic_inventory(invalid))
+
+    def test_postgresql_filesystem_cannot_exceed_aggregate_host_capacity(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        inventory["resources"].update(logical_cpus=2, memory_bytes=4 * 1024**3,
+                                      storage_total_bytes=40 * 1024**3, total_inodes=800_000)
+        facts = copy.deepcopy(self.host_facts)
+        facts["resources"].update({key: inventory["resources"][key] for key in
+                                  ("logical_cpus", "memory_bytes", "storage_total_bytes", "total_inodes")})
+        headroom = dict(filesystem_total_bytes=40 * 1024**3,
+                        free_bytes=30 * 1024**3, free_percent=75,
+                        filesystem_total_inodes=800_000,
+                        free_inodes=600_000, free_inode_percent=75)
+        for item in facts["resources"]["storage"].values():
+            item.update(headroom)
+        facts["native_postgresql"]["headroom"].update(headroom)
+        self.validator.validate_host_facts(inventory, facts)
+        for total, value, percentage, percent in (
+            ("filesystem_total_bytes", 100 * 1024**3, "free_percent", 30),
+            ("filesystem_total_inodes", 1_000_000, "free_inode_percent", 60),
+        ):
+            with self.subTest(total=total):
+                contradictory = copy.deepcopy(facts)
+                contradictory["native_postgresql"]["headroom"].update({total: value, percentage: percent})
+                self.assert_contract_violation(
+                    lambda: self.validator.validate_host_facts(inventory, contradictory),
+                    "PostgreSQL filesystem exceeds host total",
+                )
+
     def test_caller_authored_native_label_cannot_authenticate_host_facts(self) -> None:
         candidate = copy.deepcopy(self.host_facts)
         candidate["evidence_class"] = "rocky-native"
@@ -1123,7 +1179,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
             with self.subTest(read_only=read_only):
                 facts = copy.deepcopy(self.host_facts)
                 filesystem = nested_mapping(
-                    facts, "filesystems", "postgresql_data"
+                    facts, "filesystems", "private_application_storage"
                 )
                 if read_only is None:
                     filesystem.pop("mount_read_only")

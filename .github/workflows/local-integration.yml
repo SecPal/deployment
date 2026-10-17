@@ -61,9 +61,9 @@ jobs:
           "$RUNNER_TEMP/gh-bin/gh" version
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.22.2"
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Set up Python
@@ -78,7 +78,7 @@ jobs:
           npm install --global markdownlint-cli@0.49.0 prettier@3.5.3
           python -m pip install --disable-pip-version-check \
             jsonschema==4.25.1 PyYAML==6.0.2 reuse==6.1.2 \
-            shellcheck-py==0.11.0.1 yamllint==1.37.1
+            shellcheck-py==0.11.0.1 yamllint==1.37.1 psycopg==3.3.6
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.8
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
@@ -113,13 +113,30 @@ jobs:
           systemctl --user daemon-reload
           podman info --format json
 
+      - name: Set up pinned OpenTofu for exact metadata rendering
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.5
+          tofu_wrapper: false
+
+      - name: Exercise native PostgreSQL 18 enrollment transactions
+        env:
+          PSYCOPG_IMPL: python
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive \
+            apt-get install --yes --no-install-recommends postgresql-18
+          dpkg-query -W libpq5 postgresql-18
+          python3 -c 'from psycopg import pq; print("psycopg:", pq.__impl__, "libpq:", pq.version())'
+          python3 tests/host-enrollment.py
+
       - name: Run static preflight
         run: ./scripts/preflight.sh
 
       - name: Run real rootless Podman and Quadlet integration
         run: python3 scripts/quadlet-integration.py
 
-      - name: Prove production private-storage native lifecycle
+      - name: Prove disposable rootless runtime native lifecycle
         env:
           SECPAL_REQUIRE_NATIVE_LIFECYCLE: "1"
         run: bash tests/production-state-native-lifecycle.sh

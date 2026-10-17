@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "runs": [
+    {
+      "run_id": "37120628494",
+      "run_attempt": "1",
+      "provision_job": "111196027809",
+      "trusted_control_sha": "af171bd301dbc6e7efe470087d5bf6d50b59158a",
+      "target_sha": "402c22b0a1d69a5a3dba74ffb68cf016caba606b",
+      "profile": "gcp-rocky-10-2-x86-64",
+      "outcome": "AMBIGUOUS_INSTANCE_INSERT_TIMEOUT",
+      "retained_resources": [
+        {
+          "type": "google_compute_disk",
+          "name": "qualification",
+          "provider_id": "projects/secpal-dev/zones/europe-west3-a/disks/sprk-37120628494-1-disk"
+        },
+        {
+          "type": "google_compute_firewall",
+          "name": "egress_allow",
+          "provider_id": "projects/secpal-dev/global/firewalls/sprk-37120628494-1-egress-allow"
+        },
+        {
+          "type": "google_compute_firewall",
+          "name": "egress_deny",
+          "provider_id": "projects/secpal-dev/global/firewalls/sprk-37120628494-1-egress-deny"
+        },
+        {
+          "type": "google_compute_firewall",
+          "name": "ssh",
+          "provider_id": "projects/secpal-dev/global/firewalls/sprk-37120628494-1-ssh"
+        },
+        {
+          "type": "google_compute_network",
+          "name": "qualification",
+          "provider_id": "projects/secpal-dev/global/networks/sprk-37120628494-1-network"
+        },
+        {
+          "type": "google_compute_subnetwork",
+          "name": "qualification",
+          "provider_id": "projects/secpal-dev/regions/europe-west3/subnetworks/sprk-37120628494-1-subnet"
+        }
+      ]
+    },
+    {
+      "run_id": "37121117238",
+      "run_attempt": "1",
+      "provision_job": "111197394675",
+      "trusted_control_sha": "af171bd301dbc6e7efe470087d5bf6d50b59158a",
+      "target_sha": "402c22b0a1d69a5a3dba74ffb68cf016caba606b",
+      "profile": "gcp-rocky-10-2-x86-64",
+      "outcome": "AMBIGUOUS_INSTANCE_INSERT_TIMEOUT",
+      "retained_resources": [
+        {
+          "type": "google_compute_disk",
+          "name": "qualification",
+          "provider_id": "projects/secpal-dev/zones/europe-west3-a/disks/sprk-37121117238-1-disk"
+        },
+        {
+          "type": "google_compute_firewall",
+          "name": "egress_allow",
+          "provider_id": "projects/secpal-dev/global/firewalls/sprk-37121117238-1-egress-allow"
+        },
+        {
+          "type": "google_compute_firewall",
+          "name": "egress_deny",
+          "provider_id": "projects/secpal-dev/global/firewalls/sprk-37121117238-1-egress-deny"
+        },
+        {
+          "type": "google_compute_firewall",
+          "name": "ssh",
+          "provider_id": "projects/secpal-dev/global/firewalls/sprk-37121117238-1-ssh"
+        },
+        {
+          "type": "google_compute_network",
+          "name": "qualification",
+          "provider_id": "projects/secpal-dev/global/networks/sprk-37121117238-1-network"
+        },
+        {
+          "type": "google_compute_subnetwork",
+          "name": "qualification",
+          "provider_id": "projects/secpal-dev/regions/europe-west3/subnetworks/sprk-37121117238-1-subnet"
+        }
+      ]
+    },
+    {
+      "run_id": "37121646748",
+      "run_attempt": "1",
+      "provision_job": "111198971016",
+      "trusted_control_sha": "af171bd301dbc6e7efe470087d5bf6d50b59158a",
+      "target_sha": "402c22b0a1d69a5a3dba74ffb68cf016caba606b",
+      "profile": "gcp-rocky-10-2-arm64",
+      "outcome": "AMBIGUOUS_INSTANCE_INSERT_TIMEOUT",
+      "retained_resources": [
+        {
+          "type": "google_compute_disk",
+          "name": "qualification",
+          "provider_id": "projects/secpal-dev/zones/europe-west3-a/disks/sprk-37121646748-1-disk"
+        },
+        {
+          "type": "google_compute_firewall",
+          "name": "egress_allow",
+          "provider_id": "projects/secpal-dev/global/firewalls/sprk-37121646748-1-egress-allow"
+        },
+        {
+          "type": "google_compute_firewall",
+          "name": "egress_deny",
+          "provider_id": "projects/secpal-dev/global/firewalls/sprk-37121646748-1-egress-deny"
+        },
+        {
+          "type": "google_compute_firewall",
+          "name": "ssh",
+          "provider_id": "projects/secpal-dev/global/firewalls/sprk-37121646748-1-ssh"
+        },
+        {
+          "type": "google_compute_network",
+          "name": "qualification",
+          "provider_id": "projects/secpal-dev/global/networks/sprk-37121646748-1-network"
+        },
+        {
+          "type": "google_compute_subnetwork",
+          "name": "qualification",
+          "provider_id": "projects/secpal-dev/regions/europe-west3/subnetworks/sprk-37121646748-1-subnet"
+        }
+      ]
+    }
+  ]
+}

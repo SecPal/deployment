@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[Unit]
+Description=SecPal DIRECT Viewer certificate renewal
+BindsTo=secpal-acme-policy.service
+After=secpal-acme-policy.service haproxy.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+SELinuxContext=system_u:system_r:unconfined_service_t:s0
+# Verify signed package payloads in PID 1's host filesystem view before the
+# sandboxed controller consumes the successful current ExecStartPre via D-Bus.
+ExecStartPre=+/usr/bin/python3 -I -S /usr/local/libexec/secpal/viewer-tls-source/scripts/direct-viewer-tls.py --verify-packages
+ExecStart=/usr/bin/python3 -I -S /usr/local/libexec/secpal/viewer-tls-source/scripts/direct-viewer-tls.py --renew
+TimeoutStartSec=15min
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/srv/secpal/acme /etc/haproxy /run/secpal-viewer-tls
+ReadWritePaths=-/var/log/dnf.log -/var/log/dnf.librepo.log -/var/log/hawkey.log -/var/cache/dnf
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SocketBindDeny=any
+SocketBindAllow=ipv4:tcp:18084
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_NET_ADMIN
+InaccessiblePaths=-/run/docker.sock -/run/podman -/run/user -/var/lib/containers -/srv/secpal/secrets
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=secpal-viewer-tls

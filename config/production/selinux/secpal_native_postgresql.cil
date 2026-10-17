@@ -1,0 +1,4 @@
+; SPDX-FileCopyrightText: 2026 SecPal Contributors
+; SPDX-License-Identifier: MIT
+; Rootless pasta may connect to native PostgreSQL; nftables limits runtime UID to TCP 5432.
+(allow pasta_t postgresql_port_t (tcp_socket (name_connect)))

@@ -427,6 +427,50 @@ class QuadletLifecycleContract(unittest.TestCase):
                 ],
             )
 
+    def test_gateway_manifest_pin_drives_staging_and_build(self) -> None:
+        reference = "docker.io/library/caddy:2.10.3-alpine@sha256:" + "a" * 64
+        for name, source, accepted in (
+            ("updated pin", f"FROM {reference}\n", True),
+            ("indirect image", "FROM ${CADDY_IMAGE}\n", False),
+            ("unpinned image", "FROM docker.io/library/caddy:2.10.3-alpine\n", False),
+            ("multiple stages", f"FROM {reference}\nFROM {reference}\n", False),
+            ("lowercase extra stage", f"FROM {reference}\nfrom {reference}\n", False),
+            ("indented extra stage", f"FROM {reference}\n  FROM {reference}\n", False),
+        ):
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                temporary = Path(directory)
+                root = temporary / "repo"
+                containerfile = root / "containers/phase-b-gateway/Containerfile"
+                containerfile.parent.mkdir(parents=True)
+                containerfile.write_text(source, encoding="utf-8")
+                fixture = temporary / "runtime"
+                fixture.mkdir(mode=0o700)
+                lifecycle = self.module.IntegrationLifecycle(
+                    root=root, instance="contract01", port=18443,
+                    fixture_root=fixture, output=fixture / "quadlets",
+                    runner=FakeRunner(),
+                )
+                lifecycle.stage_cloud_gh_cli = mock.Mock()
+                lifecycle.verify_and_stage_product = mock.Mock()
+                lifecycle.verify_and_stage_dependency = mock.Mock()
+                lifecycle.command = mock.Mock()
+                if not accepted:
+                    with self.assertRaises(self.module.IntegrationError):
+                        lifecycle.retrieve_verify_and_stage_images()
+                    lifecycle.stage_cloud_gh_cli.assert_not_called()
+                    lifecycle.verify_and_stage_dependency.assert_not_called()
+                    lifecycle.command.assert_not_called()
+                    continue
+                lifecycle.retrieve_verify_and_stage_images()
+                self.assertIn(
+                    mock.call("caddy", "docker.io/library/caddy@sha256:" + "a" * 64),
+                    lifecycle.verify_and_stage_dependency.call_args_list,
+                )
+                build = lifecycle.command.call_args.args[0]
+                self.assertEqual(build[build.index("--file") + 1], str(containerfile))
+                self.assertIn("--pull=never", build)
+                self.assertNotIn("--build-arg", build)
+
     def test_cloud_prepare_diagnostics_cover_every_real_image_operation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory)

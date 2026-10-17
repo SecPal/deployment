@@ -9,6 +9,16 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- Add the portable endpoint-switch adapter contract with conditional mutation,
+  independent read-back and observation-only recovery; writer authority remains
+  owned by the replacement cutover.
+
+- Add the mode-specific native host firewall baseline, preserving specialized
+  network barriers and bounded CrowdSec remediation without global ruleset flushes.
+
+- Provider-neutral capacity qualification, separated from functional host
+  conformance and inventory-selected operating reserves.
+
 - A bounded, negative-only AVC-correlation diagnostic projection that preserves
   closed rejection facts for independent post-cleanup verification without
   retaining audit records, command output, journals, or host state.
@@ -105,6 +115,9 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Corrected isolated DIRECT Viewer TLS dependency admission: DNF/RPM bindings
+  load from verified ordinary Rocky packages before the complete Certbot gate,
+  retaining `python3 -I -S`, exact supply identities and fail-closed isolation.
 - Installed and admitted the required `catatonit` package in disposable Debian
   cloud hosts so D.1a runtime admission no longer fails before image staging
   because the required init binary is missing. The local integration runtime

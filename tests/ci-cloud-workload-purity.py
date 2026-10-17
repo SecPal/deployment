@@ -152,6 +152,11 @@ class WorkloadPurityTests(unittest.TestCase):
                 "def parsed_manager_environment(output: str) -> dict[str, str] | None:\n"
                 "    re = output\n", 1), None,
              "PURITY_DYNAMIC_CAPABILITY"),
+            (None, admission.replace(
+                "def workload_admission_failures(observations: object) -> list[str]:\n",
+                "def workload_admission_failures(observations: object) -> list[str]:\n"
+                "    del ROLE_CONTRACTS['api']\n", 1),
+             "PURITY_CONTRACT_REBIND"),
             (collector + "\nre = subprocess\n", None,
              "PURITY_IMPORT_SIDE_EFFECT"),
             (collector + "\nnormalized_mounts = subprocess.run\n", None,
@@ -184,10 +189,15 @@ class WorkloadPurityTests(unittest.TestCase):
                 ("file", f"open({str(marker)!r}, 'w').write('bad')"),
                 ("process", "subprocess.run(['true'])"),
                 ("network", "import socket\nsocket.socket()"),
+                ("keyword-default", f"def injected(*, value=open({str(marker)!r}, 'w')):\n    return value"),
+                ("method-default", f"class Injected(NamedTuple):\n    value: int\n    def method(self, *, value=open({str(marker)!r}, 'w')):\n        return value"),
+                ("annotation", f"def injected(value: open({str(marker)!r}, 'w')):\n    return value"),
             ):
                 with self.subTest(name=name):
                     (fixture / "collect-workload-evidence.py").write_text(
-                        self.collector_source + "\n" + injected + "\n"
+                        (self.collector_source.replace("from __future__ import annotations\n", "")
+                         if name == "annotation" else self.collector_source)
+                        + "\n" + injected + "\n"
                     )
                     (fixture / "workload-admission.py").write_text(self.admission_source)
                     with self.assertRaises(self.purity.PurityViolation):
@@ -206,12 +216,9 @@ class WorkloadPurityTests(unittest.TestCase):
         observations = self.workload_fixture.valid_observations()
         if invalid:
             observations["baseline"].pop("complete")
-        host = self.host_fixture.valid_document()
-        host.pop("host_admission")
-        host.pop("workload")
-        host["schema_version"] = 1
+        workflow = self.host_fixture.valid_document()["workflow"]
         statuses = {name: 0 for name in (
-            "host", "workload_prepare_start", "workload_cleanup",
+            "workload_prepare_start", "workload_cleanup",
             "trusted_quadlet_normalize_live", "trusted_quadlet_normalize_cleanup",
         )}
         collection = {name: 0 for name in ("baseline", "live", "post_cleanup")}
@@ -223,7 +230,7 @@ class WorkloadPurityTests(unittest.TestCase):
         module = types.SimpleNamespace(workload_admission_failures=decision)
         with patch.object(self.assembler, "load_workload_admission", return_value=module):
             return self.assembler.assemble(
-                host, observations["baseline"], observations["live"],
+                workflow, observations["baseline"], observations["live"],
                 observations["post_cleanup"], diagnostics, statuses, collection,
             )
 
@@ -290,7 +297,7 @@ class WorkloadPurityTests(unittest.TestCase):
                     return original(path, name)
 
                 with patch.object(self.validator, "load_trusted_module", side_effect=loader):
-                    _, workload_failures, _ = self.validator.recompute_admission(document)
+                    workload_failures = self.validator.recompute_admission(document)
                 self.assertIn(identity, workload_failures)
                 self.assertFalse(marker.exists())
 

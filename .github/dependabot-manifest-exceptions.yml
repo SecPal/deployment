@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+---
+version: 1
+classifications:
+  - directory: infra/ci-cloud/digitalocean
+    ecosystem: opentofu
+    reason: Cleanup-only OpenTofu provider and lock retain state-driven destruction; provisioning is retired.
+    reviewed-by: "@aroviqen"
+    reviewed-on: "2026-10-15"
+  - directory: infra/ci-cloud/gcp
+    ecosystem: opentofu
+    reason: Cleanup-only OpenTofu provider and lock retain state-driven destruction; provisioning is retired.
+    reviewed-by: "@aroviqen"
+    reviewed-on: "2026-10-15"
+  - directory: infra/ci-cloud/gcp-rocky
+    ecosystem: opentofu
+    reason: Active Rocky qualification uses pinned OpenTofu and this module's provider lock.
+    reviewed-by: "@aroviqen"
+    reviewed-on: "2026-10-15"

@@ -50,11 +50,9 @@ class WorkloadLayerTests(unittest.TestCase):
         if observations is None:
             observations = self.workload_fixture.valid_observations()
         host = self.host_fixture.valid_document()
-        host.pop("host_admission")
-        host.pop("workload")
-        host["schema_version"] = 1
+        workflow = host["workflow"]
         statuses = {name: 0 for name in (
-            "host", "workload_prepare_start", "workload_cleanup",
+            "workload_prepare_start", "workload_cleanup",
             "trusted_quadlet_normalize_live", "trusted_quadlet_normalize_cleanup",
         )}
         collection = {name: 0 for name in ("baseline", "live", "post_cleanup")}
@@ -66,7 +64,7 @@ class WorkloadLayerTests(unittest.TestCase):
             for mode in ("live", "cleanup")
         }
         return self.assembler.assemble(
-            host, observations["baseline"], observations["live"],
+            workflow, observations["baseline"], observations["live"],
             observations["post_cleanup"], diagnostics, statuses, collection,
         )
 

@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[Unit]
+Description=Observe SecPal DIRECT Viewer certificate freshness
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+AccuracySec=1min
+Unit=secpal-viewer-health.service
+
+[Install]
+WantedBy=timers.target

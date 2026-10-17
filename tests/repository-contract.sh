@@ -42,6 +42,11 @@ required_files=(
   .editorconfig
   .pre-commit-config.yaml
   CHANGELOG.md
+  config/capacity-probes-v1.json
+  docs/architecture/capacity-capabilities.md
+  schemas/capacity-qualification.schema.json
+  scripts/validate-capacity-qualification.py
+  tests/capacity-capability-contract.py
   docs/architecture/scope.md
   docs/architecture/production-host.md
   docs/architecture/production-inventory.md
@@ -51,26 +56,18 @@ required_files=(
   docs/api-image-consumption.md
   docs/frontend-image-consumption.md
   docs/quadlet-integration.md
-  docs/ci-cloud-conformance.md
   docs/rocky-cloud-qualification.md
   docs/roadmap.md
-  infra/ci-cloud/digitalocean/.terraform.lock.hcl
-  infra/ci-cloud/digitalocean/main.tf
-  infra/ci-cloud/digitalocean/outputs.tf
-  infra/ci-cloud/digitalocean/variables.tf
-  infra/ci-cloud/digitalocean/versions.tf
-  infra/ci-cloud/gcp/.terraform.lock.hcl
   infra/ci-cloud/gcp/iam-role.yaml
-  infra/ci-cloud/gcp/main.tf
-  infra/ci-cloud/gcp/outputs.tf
-  infra/ci-cloud/gcp/variables.tf
+  infra/ci-cloud/digitalocean/versions.tf
+  infra/ci-cloud/digitalocean/.terraform.lock.hcl
   infra/ci-cloud/gcp/versions.tf
+  infra/ci-cloud/gcp/.terraform.lock.hcl
   infra/ci-cloud/gcp-rocky/.terraform.lock.hcl
   infra/ci-cloud/gcp-rocky/main.tf
   infra/ci-cloud/gcp-rocky/outputs.tf
   infra/ci-cloud/gcp-rocky/variables.tf
   infra/ci-cloud/gcp-rocky/versions.tf
-  schemas/ci-cloud-bootstrap-failure.schema.json
   schemas/ci-cloud-evidence.schema.json
   schemas/rocky-cloud-continuation.schema.json
   schemas/rocky-cloud-discovery-evidence.schema.json
@@ -95,15 +92,14 @@ required_files=(
   scripts/quadlet-oneshot-entrypoint.sh
   scripts/production-secret-bootstrap.php
   scripts/production-state.py
-  scripts/production-valkey-entrypoint.sh
+  scripts/production-migrate.php
+  scripts/render-native-postgresql.py
+  config/production/postgresql-contract.json
+  docs/architecture/native-postgresql.md
+  tests/native-postgresql-production-contract.py
   scripts/render-production-quadlets.py
   scripts/render-integration-quadlets.py
   scripts/ci-cloud/bounded-target-diagnostic.py
-  scripts/ci-cloud/collect-host-evidence.py
-  scripts/ci-cloud/bootstrap-conformance-host.tftpl
-  scripts/ci-cloud/continue-conformance-bootstrap.sh
-  scripts/ci-cloud/configure-conformance-host.sh
-  scripts/ci-cloud/install-diagnostic-ssh.sh
   scripts/ci-cloud/digitalocean-janitor.py
   scripts/ci-cloud/gcp-janitor.py
   scripts/ci-cloud/gcp-rocky-janitor.py
@@ -132,16 +128,10 @@ required_files=(
   scripts/ci-cloud/rocky-primary-runtime.py
   scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py
   scripts/ci-cloud/wait-github-artifact.sh
-  scripts/ci-cloud/detach-gcp-vm-identity.sh
-  scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh
-  scripts/ci-cloud/host-setup-failure.py
-  scripts/ci-cloud/probe-ssh-port.py
   scripts/ci-cloud/quadlet-fixture-client.py
   scripts/ci-cloud/quadlet-fixture-installer.py
-  scripts/ci-cloud/run-remote-conformance.sh
   scripts/ci-cloud/target-conformance.sh
   scripts/ci-cloud/validate-evidence.py
-  scripts/ci-cloud/write-bootstrap-failure.py
   tests/ci-cloud-openssh-account.sh
   scripts/reject-sensitive-paths.sh
   scripts/validate-ci-cloud.py
@@ -151,10 +141,7 @@ required_files=(
   tests/repository-contract.sh
   tests/compose-prohibition-contract.sh
   tests/image-consumption-evidence-contract.py
-  tests/ci-cloud-bootstrap-failure.py
-  tests/ci-cloud-config.py
   tests/ci-cloud-contract.py
-  tests/ci-cloud-collector.py
   tests/ci-cloud-evidence.py
   tests/ci-cloud-gcp-janitor.py
   tests/ci-cloud-gcp-rocky-janitor.py
@@ -164,13 +151,8 @@ required_files=(
   tests/selinux-isolation-contract.py
   tests/production-host-signal-contract.sh
   tests/ci-cloud-rocky-readiness.py
-  tests/ci-cloud-gcp-identity.sh
-  tests/ci-cloud-host-setup-failure.py
   tests/ci-cloud-janitor.py
   tests/ci-cloud-quadlet-fixture.py
-  tests/ci-cloud-ssh-port-probe.py
-  tests/ci-cloud-remote-bootstrap.sh
-  tests/ci-cloud-systemd-reboot.py
   tests/ci-cloud-target-diagnostic.py
   tests/production-contract-regressions.py
   tests/production-host-contract.sh
@@ -180,7 +162,6 @@ required_files=(
   tests/production-edge-decision-contract.py
   tests/production-state-native-lifecycle-gate.sh
   tests/production-state-native-lifecycle.sh
-  tests/work-graph-governance.py
   tests/runtime-secret-contract.sh
   tests/rocky-dnf4-nevra-contract.sh
   tests/rocky-rpmdb-provenance-contract.sh
@@ -195,7 +176,6 @@ required_files=(
   tests/quadlet-integration-lifecycle.py
   .github/workflows/quality.yml
   .github/actionlint.yaml
-  .github/workflows/cloud-conformance.yml
   .github/workflows/cloud-janitor.yml
   .github/workflows/rocky-cloud-qualification.yml
   LICENSES/AGPL-3.0-or-later.txt
@@ -216,7 +196,6 @@ require_text README.md "It is not a production-ready deployment."
 require_text README.md "./scripts/preflight.sh"
 require_text README.md "Phase B completed in the required check context"
 require_text README.md "Phase C is complete."
-require_text README.md "Ephemeral Debian 13 cloud conformance"
 require_text docs/architecture/scope.md "activity-hash-chain worker: exactly one"
 require_text docs/architecture/scope.md "scheduler: exactly one"
 require_text docs/architecture/scope.md "Step A bootstrap contract"
@@ -228,7 +207,6 @@ fi
 require_text docs/roadmap.md "Local container integration stack"
 require_text docs/roadmap.md "Phase B — Local container integration stack (complete)"
 require_text docs/roadmap.md "Phase C — Immutable image publishing (complete)"
-require_text docs/ci-cloud-conformance.md "The workflow never checks out"
 # The Markdown backticks must remain literal.
 # shellcheck disable=SC2016
 require_text docs/roadmap.md 'was enforced for `main` at that time'

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib.util
 import json
 import re
 import symtable
@@ -241,7 +242,7 @@ def schema_const_pair_at(document: object, *path: object) -> tuple[str, str] | N
     return target["const"], harness["const"]
 
 
-def validate_pure_contract(path: Path) -> None:
+def validate_pure_capabilities(path: Path) -> ast.Module:
     tree = parse(path)
     imports: set[str] = set()
     for node in ast.walk(tree):
@@ -256,6 +257,12 @@ def validate_pure_contract(path: Path) -> None:
     forbidden = sorted(imports & FORBIDDEN_PURE_IMPORTS)
     if forbidden:
         raise ArchitectureError(f"forbidden pure capability import: {','.join(forbidden)}")
+    return tree
+
+
+def validate_pure_contract(path: Path) -> None:
+    tree = validate_pure_capabilities(path)
+    validate_pure_capabilities(ROOT / "scripts/ci-cloud/certbot_package_admission.py")
     if assignment_string(tree, "RESPONSIBILITY") != "normalization,admission,assembly":
         raise ArchitectureError("pure contract responsibility declaration is invalid")
     source = path.read_text(encoding="utf-8")
@@ -273,6 +280,10 @@ def validate_pure_contract(path: Path) -> None:
             "authoritative authenticated-package invariant owner is absent"
         )
     invariant_owners = assignment_string_dict(tree, "INVARIANT_OWNERS")
+    if invariant_owners is None or invariant_owners.get("certbot-package-exception") != (
+        "rocky_preparation_contract.admit_certbot_exception"
+    ):
+        raise ArchitectureError("authoritative TLS package-provenance owner is absent")
     if invariant_owners is None or any(
         invariant_owners.get(invariant) != owner
         for invariant, owner in RUNTIME_INVARIANT_OWNERS.items()
@@ -989,6 +1000,49 @@ def validate_target_qualification_binding(
         raise ArchitectureError("diagnostic schema target/harness binding disagrees")
 
 
+
+def validate_instance_transport_architecture() -> None:
+    """Consume the canonical transport owner; never create a second rule set."""
+    contract = ROOT / "scripts/ci-cloud/instance_transport_contract.py"
+    collector = ROOT / "scripts/ci-cloud/observe-instance-transport.py"
+    tree = parse(contract)
+    imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imports.add(node.module.split(".")[0])
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_PURE_CALLS:
+            raise ArchitectureError("transport owner has an external capability")
+    if imports & FORBIDDEN_PURE_IMPORTS or assignment_string(tree, "RESPONSIBILITY") != "normalization,admission,assembly":
+        raise ArchitectureError("transport normalization/admission must remain pure")
+    specification = importlib.util.spec_from_file_location("transport_architecture_owner", contract)
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    schema = json.loads((ROOT / "schemas/instance-insert-transport-evidence.schema.json").read_text())
+    if schema != module.schema():
+        raise ArchitectureError("transport schema differs from its canonical invariant owner")
+    source = collector.read_text()
+    collector_tree = parse(collector)
+    if assignment_string(collector_tree, "RESPONSIBILITY") != "observation,orchestration":
+        raise ArchitectureError("transport observation boundary is absent")
+    # This contract permits only the existing producer, never a captured output
+    # stream or a second network client. Mutation tests keep these guards live.
+    popen = [node for node in ast.walk(collector_tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and node.func.attr == "Popen"]
+    if len(popen) != 1 or popen[0].keywords or ast.literal_eval(popen[0].args[0]) != ["tofu", "apply", "--auto-approve", "--input=false"]:
+        raise ArchitectureError("transport observation changed the existing request producer")
+    forbidden = ("AF_PACKET", "SOCK_PACKET", "GODEBUG", "SSLKEYLOGFILE", "HTTPS_PROXY",
+                 "HTTP_PROXY", "NO_PROXY", "/environ", "/cmdline", "/mem", "capture_output", "stdout=", "stderr=")
+    if any(value in source for value in forbidden):
+        raise ArchitectureError("transport observer has a payload or network-semantics capability")
+    required = ("set_cookie_filter(self.listener,[])", "set_cookie_filter(self.listener,list(self.cookies.values()))",
+                "process_ticks(pid)!=ticks", "row['inode'] not in owned_inodes(pid)",
+                "sender[0]!=0", "contract.admit(document,identity)")
+    if any(value not in source for value in required):
+        raise ArchitectureError("transport observation lacks bounded correlation or independent admission")
+
+
 def main(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
@@ -1028,6 +1082,7 @@ def main(arguments: list[str]) -> int:
     options = parser.parse_args(arguments)
     try:
         validate_pure_contract(options.contract)
+        validate_instance_transport_architecture()
         validate_collector(options.collector)
         validate_preparation(options.preparation)
         validate_component_complexity(options.contract, options.collector)

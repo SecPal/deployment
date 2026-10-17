@@ -5,7 +5,18 @@ SPDX-License-Identifier: MIT
 
 # Current workload evidence layers
 
-The target receives one self-contained streamed file,
+## Operational status
+
+These maintained #119/#121 components are exercised by repository tests and their
+CLI interfaces. No active GitHub workflow currently orchestrates them end to end.
+Issue #123 owns connection to current Rocky runtime qualification. Neither a schema
+instance nor repository tests claim real-host or cloud acceptance.
+Rocky host qualification remains independently executable through its existing
+workflow and evidence contract.
+
+## Component interfaces
+
+The collection interface is one self-contained streamable file,
 `scripts/ci-cloud/collect-workload-evidence.py`. Its `COLLECTION_SURFACE` names
 operations that observe Podman, systemd, processes, files, namespaces, and
 runtime state. `normalize_quadlet_runtime` belongs to this surface: it performs
@@ -37,4 +48,35 @@ document. Neither controller path accepts a target-reported workload result.
 `tests/ci-cloud-workload-layers.py` checks declared exports, schema agreement,
 current positive representations, and rejection at the schema, validator, or
 admission boundary. The existing workload suite remains the detailed behavior
-contract. Purity enforcement for these declared surfaces belongs to #122.
+contract.
+
+## Current workload purity boundary
+
+`workload-purity.py` checks the accepted #121 normalization export and the
+frozen admission contract before the controller loads either workload module.
+Closed import, imported-member, module-attribute, builtin, and global surfaces
+cover the declared pure functions and their reachable local helpers. Python's
+`symtable` determines which names are global across nested scopes and
+comprehensions. The controller also scopes a Python audit hook to the actual
+workload admission call; process, filesystem, network, and other audited system
+capabilities produce named workload failures. Evidence reading and summary
+writing occur outside that guarded call. Static mutations and adversarial
+controller tests run in repository preflight. The current #121 admission
+decisions and workload invariants remain the authority for valid and invalid
+evidence; no provider run is part of this purity check.
+
+These controls protect against accidental architectural drift, reachable
+impurity, capability growth, and boundary bypasses during normal development.
+They are not a Python sandbox, a defense against a hostile committer who can
+change both the checker and checked code, or a replacement for code review,
+signed commits, and branch protection. PR #74 was a historical design reference
+only; its superseded workload assumptions are not part of this contract.
+
+## Independent host qualification
+
+The current workload envelope contains trusted workflow identity, phase and
+collection statuses, bounded normalization diagnostics, and independently
+admitted workload observations. It does not claim host or production acceptance.
+Rocky host qualification uses its existing separate evidence contract.
+The retired Debian/APT/AppArmor host envelope and collector are preserved in Git
+history rather than required by current workload validation.

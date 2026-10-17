@@ -45,10 +45,11 @@ cache; Valkey is not part of the production baseline.
 is the normative owner of the two accepted Edge modes and their Viewer/Origin
 trust boundaries:
 
-- **DIRECT:** HAProxy is the Viewer Edge. ADR-019 and
-  [deployment #89](https://github.com/SecPal/deployment/issues/89) own the
-  decision; the [DIRECT delivery subtree](https://github.com/SecPal/deployment/issues/90)
-  owns implementation.
+- **DIRECT:** Host-native HAProxy is the Viewer Edge. The
+  [accepted DIRECT decision](docs/architecture/decisions/direct-viewer-edge.md)
+  records [#89](https://github.com/SecPal/deployment/issues/89) under ADR-019;
+  the [#90 subtree](https://github.com/SecPal/deployment/issues/90) owns
+  implementation.
 - **PROTECTED:** CloudFront Multi-Tenant is the Viewer Edge and HAProxy remains
   the Origin/backend boundary. ADR-019 owns the architecture; the
   [#209 descendants](https://github.com/SecPal/deployment/issues/209) own the
@@ -61,6 +62,11 @@ are authoritative for their current delivery state.
 The public [portable provider capability contract](docs/provider-capability-contract.md)
 defines bounded create, inspect, rebuild, and delete adapter mechanics without
 embedding provider selection, customer/fleet state, or commercial policy.
+The [PROTECTED provider-firewall adapter contract](docs/provider-firewall-contract.md)
+consumes #214 accepted CloudFront Origin state and defines #169-correlated,
+ownership-scoped planning, verification, and fresh-state-bound semantic rollback.
+The [portable endpoint-switch contract](docs/endpoint-switch.md) adds exact-state
+routing changes without owning writer fencing or Managed rollout policy.
 The [PROTECTED CloudFront Viewer Edge contract](docs/cloudfront-viewer-edge.md)
 implements the bounded Multi-Tenant Distribution, Distribution Tenant, and
 managed Viewer-certificate lifecycle without performing provider mutation.
@@ -104,14 +110,14 @@ The active checks are `Local Integration / Quadlet Contract (amd64)` and
 `Local Integration / Quadlet Contract (arm64)`. The current integration runtime
 is exclusively rootless Podman, systemd-user, and native Quadlet.
 
-### Ephemeral Debian 13 cloud conformance
+### Ephemeral Rocky cloud qualification
 
-The repository retains the historical
-[Debian 13 cloud conformance](docs/ci-cloud-conformance.md) contract and evidence.
-It is non-production and does not define the current production OS direction.
-Current ephemeral host qualification is the separate
-[Rocky Linux 10.2 contract](docs/rocky-cloud-qualification.md). Neither record
-claims production provisioning or operation.
+Current ephemeral host qualification follows the
+[Rocky Linux 10.2 contract](docs/rocky-cloud-qualification.md).
+The retired Debian provisioning path is preserved in Git history.
+Bounded legacy cloud janitors remain until outstanding resource ownership and
+cleanup responsibilities have been independently discharged.
+This qualification does not claim production provisioning or operation.
 
 ## Security
 
@@ -128,7 +134,19 @@ Run deterministic repository checks without starting the integration stack:
 ./scripts/preflight.sh
 ```
 
-The preflight installs nothing and does not access production infrastructure.
+The preflight does not install system tools or access production infrastructure.
+Install the pinned OpenTofu 1.12.5 alongside the existing validation tools;
+Rocky metadata tests evaluate the actual provider-bound representation locally.
+The transport-provider regression initializes Google 8.6.0 with the unchanged
+dependency lock in a disposable credential-isolated directory, then runs the
+real producer with only loopback networking. It accepts TCP without reading
+application data. Independent loopback, TCP_INFO/inet_diag and filtered
+destruction-subscription capability admission precedes provider initialization
+or installed-package copying. Unsupported Linux namespace capabilities report `SKIP`;
+`python3 tests/ci-cloud-instance-transport-provider.py --required` instead fails
+when the real-provider regression cannot run. Use `--tofu` for an ephemeral
+official OpenTofu 1.12.5 executable. No cloud credentials or GCP calls are needed.
+Observer failures after capability admission remain failures in optional mode.
 
 ## Repository boundary
 

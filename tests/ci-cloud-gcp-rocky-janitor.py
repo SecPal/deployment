@@ -38,7 +38,7 @@ LABELS = {
 
 
 def resource(component: str, labels: dict[str, str] | None = None) -> dict[str, Any]:
-    item: dict[str, Any] = {"name": f"sprk-12345-1-{component}"}
+    item: dict[str, Any] = {"name": f"sprk-12345-1-{component}", "id": "987654321"}
     effective = LABELS if labels is None else labels
     if component in {"instance", "disk"}:
         item["labels"] = effective
@@ -72,7 +72,7 @@ class FakeClient:
     def get_component(self, component: str, name: str) -> dict[str, Any]:
         return next(item for item in self.resources[component] if item["name"] == name)
 
-    def delete_component(self, component: str, name: str) -> None:
+    def delete_component(self, component: str, name: str, resource_id: str) -> None:
         self.deleted.append((component, name))
 
 
