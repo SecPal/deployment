@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+share_manual_decisions: false
+share_tainted: false
+share_custom: false
+share_context: false
+console_management: false

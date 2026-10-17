@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+common:
+  daemonize: false
+  log_media: stdout
+  log_level: warning
+config_paths:
+  config_dir: /usr/share/secpal/crowdsec
+  data_dir: /srv/secpal/crowdsec/data
+  hub_dir: /usr/share/secpal/crowdsec/hub
+  index_path: /usr/share/secpal/crowdsec/hub/.index.json
+  notification_dir: /usr/share/secpal/crowdsec/notifications
+  plugin_dir: /usr/share/secpal/crowdsec/plugins
+  simulation_path: /usr/share/secpal/crowdsec/simulation.yaml
+crowdsec_service:
+  acquisition_path: /usr/share/secpal/crowdsec/acquis.json
+  parser_routines: 1
+  buckets_routines: 1
+  output_routines: 1
+cscli:
+  output: raw
+db_config:
+  type: sqlite
+  db_path: /srv/secpal/crowdsec/crowdsec.db
+  log_level: warning
+  flush:
+    max_items: 5000
+    max_age: 24h
+api:
+  client:
+    credentials_path: /run/credentials/crowdsec.service/local-api
+  server:
+    enable: true
+    listen_uri: ""
+    listen_socket: /run/secpal-crowdsec/lapi.sock
+    log_level: warning
+    profiles_path: /usr/share/secpal/crowdsec/profiles.yaml
+    console_path: /usr/share/secpal/crowdsec/console.yaml
+    disable_remote_lapi_registration: true
+    disable_usage_metrics_export: true
+    use_forwarded_for_headers: false
+    trusted_ips: []
+    auto_registration:
+      enabled: false
+prometheus:
+  enabled: false

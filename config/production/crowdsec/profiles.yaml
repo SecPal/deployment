@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: secpal-reviewed-local-decisions
+filters:
+  - Alert.Remediation == true && Alert.GetScope() == "Ip" && Alert.GetScenario() in ["crowdsecurity/ssh-bf", "secpal/haproxy-auth-v1"]
+decisions:
+  - type: ban
+    duration: 10m
+on_success: break

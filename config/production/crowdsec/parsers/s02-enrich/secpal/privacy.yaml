@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: secpal/security-event-minimization-v1
+description: Keep IP authority and security outcome, not usernames or raw events
+filter: evt.Meta.service in ['ssh', 'http']
+statics:
+  - meta: target_user
+    value: redacted
+  - target: evt.Line.Raw
+    value: security-event-redacted

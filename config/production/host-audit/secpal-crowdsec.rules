@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Native audit metadata only; capture policy replacement/permission changes.
+-w /etc/secpal/crowdsec -p wa -k secpal_crowdsec_policy
+# Local administrator recovery uses generated/file-delivered credentials, never argv secrets.
+-w /usr/bin/cscli -p x -k secpal_crowdsec_admin

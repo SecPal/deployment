@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: secpal/sshd-auth-peer-v1
+description: Only terminal sshd transport facts; no username-derived IP authority
+filter: evt.Line.Labels.secpal_source == 'host-security-v1' && evt.Parsed.program in ['sshd', 'sshd-session']
+onsuccess: next_stage
+statics:
+  - meta: source_ip
+    expression: evt.Parsed.sshd_client_ip
+  - meta: network_peer
+    expression: evt.Parsed.sshd_client_ip
+  - meta: service
+    value: ssh
+  - meta: log_type
+    value: ssh_failed-auth
+  - parsed: discard_subject
+    value: redacted
+pattern_syntax:
+  SECPAL_SSH_METHOD: password|publickey|keyboard-interactive/pam
+  SECPAL_SSH_FAILURE: Failed %{SECPAL_SSH_METHOD:auth_method} for %{GREEDYDATA:discard_subject} from %{IP:sshd_client_ip} port %{INT:sshd_port} ssh2
+nodes:
+  - grok:
+      pattern: ^%{SECPAL_SSH_FAILURE}$
+      apply_on: message
+  - grok:
+      pattern: ^%{SECPAL_SSH_FAILURE} \[preauth\]$
+      apply_on: message
