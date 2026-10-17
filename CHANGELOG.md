@@ -9,6 +9,10 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- Add the provider-neutral Private Object catalog and immutable publication contract
+  with separate retention/destruction interfaces; Managed adapter and product
+  integration qualification remain outstanding (#99).
+
 - Provider-neutral capacity qualification, separated from functional host
   conformance and inventory-selected operating reserves.
 
