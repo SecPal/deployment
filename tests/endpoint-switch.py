@@ -69,15 +69,19 @@ class SQLiteAdapter:
             db.execute("BEGIN IMMEDIATE")
             changed = db.execute(
                 "UPDATE routing SET generation=generation+1,target=?,operation=? "
-                "WHERE generation=? AND target=? AND exposure=?",
+                "WHERE generation=? AND target=? AND exposure=? AND operation IS ?",
                 (plan.target, plan.operation_id, int(plan.before.generation),
-                 plan.before.target, plan.before.exposure_sha256),
+                 plan.before.target, plan.before.exposure_sha256, plan.before.operation_id),
             ).rowcount
             if self.mode == "interrupted":
                 db.rollback()
                 raise TimeoutError("private transport detail must not enter evidence")
         if self.mode == "lost-ack":
             raise TimeoutError("private transport detail must not enter evidence")
+        if self.mode == "partial-rejected":
+            with connection(self.path) as db:
+                db.execute("UPDATE routing SET target='green-alt'")
+            return contract.Mutation.REJECTED
         if self.mode == "bad-response":
             return {"success": True}
         if self.mode == "readback-mismatch":
@@ -119,6 +123,20 @@ class EndpointSwitchTests(unittest.TestCase):
             plan or self.plan, adapter or self.adapter, observer or adapter or self.adapter,
             owner or self.owner,
         )
+
+    def test_accepted_enrollment_resource_is_readmitted_across_module_names(self):
+        import host_enrollment
+        public_target = host_enrollment.host_resource(self.endpoint.resource)
+        self.assertIsNot(type(public_target), contract.ResourceTarget)
+        admitted = contract.Endpoint(self.endpoint.deployment_id, public_target)
+        self.assertEqual(self.endpoint, admitted)
+        self.assertIs(type(admitted.resource), contract.ResourceTarget)
+        for invalid in (
+            replace(public_target, provider_resource_id=None),
+            replace(public_target, expected_version="duplicate-generation"),
+        ):
+            with self.assertRaises(contract.ContractError):
+                contract.Endpoint(self.endpoint.deployment_id, invalid)
 
     def test_current_observation_plan_apply_and_independent_readback(self):
         self.assertEqual(1, contract.CONTRACT_VERSION)
@@ -196,6 +214,16 @@ class EndpointSwitchTests(unittest.TestCase):
         result = self.execute(plan=reverse, owner=Owner(self.path, [reverse]),
                               adapter=SQLiteAdapter(self.path, self.endpoint, mode="readback-mismatch"))
         self.assertEqual(contract.Outcome.RECOVERY_REQUIRED, result.outcome)
+
+    def test_correlated_rejection_cannot_hide_partial_provider_mutation(self):
+        adapter = SQLiteAdapter(self.path, self.endpoint, mode="partial-rejected")
+        result = self.execute(adapter=adapter)
+        self.assertEqual(contract.Outcome.RECOVERY_REQUIRED, result.outcome)
+        self.assertEqual("operation-1", result.observed.operation_id)
+        self.assertEqual("green-alt", result.observed.target)
+        wrong_generation = replace(result.observed, target="green", generation=self.before.generation)
+        self.assertEqual(contract.Outcome.RECOVERY_REQUIRED,
+                         contract.assess(self.plan, contract.Mutation.REJECTED, wrong_generation).outcome)
 
     def test_observation_failure_does_not_publish_or_disclose_provider_errors(self):
         class Broken:
@@ -285,6 +313,10 @@ class EndpointSwitchTests(unittest.TestCase):
         self.assertEqual(0, self.adapter.calls)
         result = contract.assess(self.plan, contract.Mutation.REJECTED, self.before)
         self.assertEqual(contract.Outcome.REJECTED, result.outcome)
+        with connection(self.path) as db:
+            db.execute("UPDATE routing SET operation='concurrent-operation'")
+        self.assertEqual(contract.Mutation.REJECTED, self.adapter.compare_and_switch(self.plan))
+        self.assertEqual("blue", self.adapter.observe(self.endpoint).target)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 """#170 endpoint adapter v1; #131 owns admission, dispatch intent and writers."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
 import importlib.util
 from pathlib import Path
@@ -55,10 +55,15 @@ class Endpoint:
 
     def __post_init__(self):
         _identity(self.deployment_id)
-        if (type(self.resource) is not ResourceTarget
-                or self.resource.provider_resource_id is None
-                or self.resource.expected_version is not None):
+        # Public #169 targets also arrive through #241's own module instance.
+        # Re-admit their fields through the canonical owner, as #241 does.
+        try:
+            resource = ResourceTarget(**asdict(self.resource))
+        except (TypeError, ContractError):
+            raise ContractError("endpoint-resource-format") from None
+        if resource.provider_resource_id is None or resource.expected_version is not None:
             raise ContractError("endpoint-requires-exact-resource-and-observed-generation")
+        object.__setattr__(self, "resource", resource)
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,9 +180,9 @@ def assess(request, mutation, observed):
         return Result(Outcome.RECOVERY_REQUIRED, "endpoint-readback-boundary")
     if type(mutation) is not Mutation:
         mutation = Mutation.UNKNOWN
+    if mutation is Mutation.REJECTED and observed.operation_id == request.operation_id:
+        return Result(Outcome.RECOVERY_REQUIRED, "endpoint-contradictory-rejection", observed)
     if _committed(request, observed):
-        if mutation is Mutation.REJECTED:
-            return Result(Outcome.RECOVERY_REQUIRED, "endpoint-contradictory-rejection", observed)
         return Result(Outcome.APPLIED, "endpoint-switch-verified", observed)
     if observed == request.before:
         if mutation is Mutation.REJECTED:

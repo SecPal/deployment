@@ -18,7 +18,9 @@ outside this public repository.
 ## Data and authority
 
 `Endpoint` reuses the existing `ResourceTarget` provider/context/native-resource
-identity and adds Deployment Identity. An exact native resource ID is mandatory.
+identity and adds Deployment Identity. Equivalent public target dataclasses are
+re-admitted through the canonical constructor, including #241 module instances.
+An exact native resource ID is mandatory.
 Its `expected_version` must be null: one observed `RoutingState.generation` owns the
 endpoint precondition. Provider names are runtime adapter details.
 
