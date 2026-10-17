@@ -9,6 +9,10 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- Add the portable endpoint-switch adapter contract with conditional mutation,
+  independent read-back and observation-only recovery; writer authority remains
+  owned by the replacement cutover.
+
 - Add the mode-specific native host firewall baseline, preserving specialized
   network barriers and bounded CrowdSec remediation without global ruleset flushes.
 
