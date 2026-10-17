@@ -62,6 +62,9 @@ are authoritative for their current delivery state.
 The public [portable provider capability contract](docs/provider-capability-contract.md)
 defines bounded create, inspect, rebuild, and delete adapter mechanics without
 embedding provider selection, customer/fleet state, or commercial policy.
+The [PROTECTED provider-firewall adapter contract](docs/provider-firewall-contract.md)
+consumes #214 accepted CloudFront Origin state and defines #169-correlated,
+ownership-scoped planning, verification, and fresh-state-bound semantic rollback.
 The [portable endpoint-switch contract](docs/endpoint-switch.md) adds exact-state
 routing changes without owning writer fencing or Managed rollout policy.
 The [PROTECTED CloudFront Viewer Edge contract](docs/cloudfront-viewer-edge.md)
