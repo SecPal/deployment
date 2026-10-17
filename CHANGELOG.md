@@ -9,6 +9,9 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- Add the mode-specific native host firewall baseline, preserving specialized
+  network barriers and bounded CrowdSec remediation without global ruleset flushes.
+
 - Provider-neutral capacity qualification, separated from functional host
   conformance and inventory-selected operating reserves.
 

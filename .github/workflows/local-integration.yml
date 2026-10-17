@@ -119,6 +119,14 @@ jobs:
           tofu_version: 1.12.5
           tofu_wrapper: false
 
+      - name: Prove isolated native host firewall enforcement
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive \
+            apt-get install --yes --no-install-recommends nftables iproute2
+          python3 tests/host-firewall-contract.py
+          sudo -n -- python3 tests/host-firewall-native.py
+
       - name: Exercise native PostgreSQL 18 enrollment transactions
         env:
           PSYCOPG_IMPL: python
