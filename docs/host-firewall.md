@@ -150,7 +150,14 @@ The default launcher verifies network-namespace separation before mutation.
 These are real kernel/socket results, not a handwritten packet-policy evaluator.
 The source document supplying test CloudFront ranges is explicitly synthetic;
 the test does not claim a live AWS observation or cloud firewall qualification.
-Both existing native architecture CI jobs execute the same namespace test on
-disposable runners. No deployment/provider mutation or existing-host installation
-is implied. Production installation remains #92's responsibility, with #80
-platform and existing specialized-policy qualification consumed in their scope.
+The ordinary existing architecture CI jobs run the focused admission tests
+through preflight. Native firewall qualification runs in the available authorized
+Rocky environment; it is not substituted with fixture success on an incapable
+runner. Hosted Ubuntu 26.04 denies the second peer network namespace even with
+CAP_NET_ADMIN/CAP_SYS_ADMIN in the first namespace. That environment is UNAVAILABLE
+for this native test. No runner security restriction is relaxed, no native test
+is changed into a successful skip, and no hosted ARM64 firewall PASS is claimed.
+
+No deployment/provider mutation or existing-host installation is implied.
+Production installation remains #92's responsibility, with #80 platform and
+existing specialized-policy qualification consumed in their scope.
