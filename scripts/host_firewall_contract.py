@@ -6,6 +6,7 @@ from copy import deepcopy
 import importlib.util
 import ipaddress
 import json
+import re
 from pathlib import Path
 
 _spec = importlib.util.spec_from_file_location(
@@ -20,9 +21,16 @@ MAX_TTL = 3600
 
 def configuration(value):
     if (type(value) is not dict or value.keys() !=
-            {"edge_mode", "management_ipv4", "management_ipv6"}
+            {"edge_mode", "management_ipv4", "management_ipv6", "dhcp_interfaces"}
             or value["edge_mode"] not in ("DIRECT", "PROTECTED")):
         raise ValueError("admit-host-firewall-configuration")
+    interfaces = value["dhcp_interfaces"]
+    if (type(interfaces) is not list or not 1 <= len(interfaces) <= 8
+            or any(type(name) is not str or name == "lo"
+                   or re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", name) is None
+                   for name in interfaces)
+            or interfaces != sorted(set(interfaces))):
+        raise ValueError("admit-dhcp-uplinks")
     for key, family in (("management_ipv4", 4), ("management_ipv6", 6)):
         entries = value[key]
         if type(entries) is not list or len(entries) > 64:
@@ -86,6 +94,14 @@ def policy(config, source=None):
     allow(_match({"meta": {"key": "iifname"}}, "lo"))
     for family, loopback in (("ip", "127.0.0.0/8"), ("ip6", "::1/128")):
         rule(_match(_address(family, "saddr"), _network(loopback)), {"drop": None})
+    # DHCP replies need explicit admission: broadcast/multicast requests do not
+    # guarantee a reverse conntrack tuple. Only reviewed uplinks and client ports.
+    for interface in config["dhcp_interfaces"]:
+        uplink = _match({"meta": {"key": "iifname"}}, interface)
+        allow(uplink, _match({"meta": {"key": "nfproto"}}, "ipv4"),
+              _match(_address("udp", "sport"), 67), _match(_address("udp", "dport"), 68))
+        allow(uplink, _match(_address("ip6", "saddr"), _network("fe80::/10")),
+              _match(_address("udp", "sport"), 547), _match(_address("udp", "dport"), 546))
     # Explicit management is checked before remediation, preserving its exact
     # authorization even for established inbound SSH. No arbitrary management port.
     for family, key in (("ip", "management_ipv4"), ("ip6", "management_ipv6")):

@@ -13,7 +13,7 @@ import host_firewall_contract as contract
 
 def config(mode="DIRECT"):
     return {"edge_mode": mode, "management_ipv4": ["198.51.100.4/32"],
-            "management_ipv6": ["2001:db8::4/128"]}
+            "management_ipv6": ["2001:db8::4/128"], "dhcp_interfaces": ["fw104"]}
 
 
 def prefixes():
@@ -30,6 +30,10 @@ def prefixes():
 class AdmissionTests(unittest.TestCase):
     def test_modes_and_unambiguous_management_are_closed(self):
         for bad in [config("direct"), config("BOTH"), config() | {"extra": True},
+                    config() | {"dhcp_interfaces": []},
+                    config() | {"dhcp_interfaces": ["lo"]},
+                    config() | {"dhcp_interfaces": ["fw104", "fw104"]},
+                    config() | {"dhcp_interfaces": ["bad interface"]},
                     config() | {"management_ipv4": ["0.0.0.0/0"]},
                     config() | {"management_ipv4": ["198.51.100.4/24"]},
                     config() | {"management_ipv4": ["198.51.100.4/32"] * 2},

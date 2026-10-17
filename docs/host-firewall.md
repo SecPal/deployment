@@ -32,11 +32,13 @@ private-network exceptions.
 
 TCP 22 is allowed only from explicit authorized management networks, independently
 of the Edge mode. Management never receives private DB/backend access. All other
-unsolicited TCP/UDP ingress is denied, including PostgreSQL 5432, LAPI 8080,
+unsolicited TCP/UDP ingress is denied except bounded DHCP client replies, including PostgreSQL 5432, LAPI 8080,
 product 18080/18081, decoders 18082/18083 and ACME responder 18084. Loopback
 acceptance does not bypass the existing specialized output rules. External
 loopback-source spoofing is rejected. Essential ICMP errors/PMTU and on-link
-IPv6 neighbor discovery remain permitted.
+IPv6 neighbor discovery remain permitted. Explicitly reviewed uplinks admit only
+DHCPv4 server UDP 67 to client 68 and link-local DHCPv6 server UDP 547 to client 546. This preserves lease renewal when broadcast/multicast requests cannot produce
+a reverse conntrack tuple; it grants no DHCP server or relay authority.
 
 An established inbound connection must still satisfy the current mode. The
 conntrack exception admits only replies to host-initiated traffic, so switching
@@ -57,17 +59,21 @@ The fixed root-owned `/etc/secpal/host-firewall.json` has exactly:
 {
   "edge_mode": "DIRECT",
   "management_ipv4": ["192.0.2.10/32"],
-  "management_ipv6": ["2001:db8::10/128"]
+  "management_ipv6": ["2001:db8::10/128"],
+  "dhcp_interfaces": ["ens3"]
 }
 ```
 
 These are documentation-only addresses. #92 construction supplies independently
-authenticated deployment mode and management paths, verifies initial management
+authenticated deployment mode, management paths and exact host uplink interfaces, verifies initial management
 reachability, and keeps HAProxy/Edge composition consistent. CIDRs must be
 canonical, sorted, unique, family-correct and non-default; at least one family
 must provide management. Later reloads cannot remove an already authorized
 management network. Changing that authority is separate maintenance, not an
-automatic firewall update.
+automatic firewall update. Uplink names must be sorted, unique, bounded Linux
+interface names (one to eight, never loopback); reload cannot withdraw an existing
+uplink's DHCP client admission. Static hosts still explicitly name their reviewed
+uplinks; no broad UDP or network-discovery exception is inferred.
 
 PROTECTED reads only the existing administrator-owned accepted prefix LKG at
 `/var/lib/secpal/cloudfront-origin-prefixes`. There is no caller-provided prefix
@@ -77,6 +83,9 @@ publication metadata and digest. Its shared `admit_successor` also rejects
 publication rollback or contradictory content at the same publication identity.
 The prefix owner's existing no-maximum-age policy is preserved; no arbitrary
 new freshness cutoff is introduced. DIRECT rejects a supplied CloudFront snapshot.
+The existing accepted-state prefix field retains the last PROTECTED publication
+across DIRECT operation, solely for anti-rollback checks on re-entry. Those
+historical prefixes grant no DIRECT ingress or remediation exemption.
 
 ## Checked publication and restart
 
@@ -93,7 +102,8 @@ Authoritative kernel read-back must exactly match the generated policy before
 atomic persistence of `/var/lib/secpal/host-firewall/accepted.json`.
 
 Rejected candidates retain the previous policy. A lost acknowledgement causes
-independent read-back, never blind mutation retry. If the kernel committed but
+independent read-back, never blind mutation retry. Boot restore uses the same
+checked commit/read-back boundary, including a committed batch with lost reply. If the kernel committed but
 accepted-file publication was interrupted, a subsequent normal `--apply` can
 persist the exact independently verified desired policy without replaying nft.
 An unexplained different table fails closed. Post-rename directory-sync failure
@@ -129,7 +139,9 @@ expiration tests. No CIDR ban, arbitrary rule or executable input is accepted.
 Management and current CloudFront Origin peer addresses cannot be banned.
 
 Baseline updates/restarts preserve existing decisions. Removal/addition is one
-checked atomic element batch with read-back. #105 owns authenticated decision
+checked atomic element batch with read-back, including lost acknowledgements.
+An add must read back the exact address and requested bounded timeout; removal
+must prove absence. Unknown results never trigger a blind replay or TTL extension. #105 owns authenticated decision
 selection and its reviewed host-security dispatch; this interface does not grant
 CrowdSec CAP_NET_ADMIN, create sudo rules, implement a bouncer, or authorize
 blocking a CDN peer based on a client-controlled identity.
@@ -143,7 +155,9 @@ a veth peer, actual dual-stack TCP listeners and genuine nft kernel rules.
 It checks positive controls, private ingress denial, mode changes on an existing
 connection, spoofed XFF non-authority, preservation of a foreign specialized
 table, rejected atomic batches, interrupted persistence, lost acknowledgements,
-management preservation, remediation expiry/removal and CAP_NET_ADMIN denial.
+management/uplink preservation, real DHCPv4/v6 UDP admission and negative cases,
+cross-mode prefix anti-rollback, restore/remediation lost acknowledgements,
+remediation expiry/removal and CAP_NET_ADMIN denial.
 All links/listeners/firewall tables exist only inside those disposable namespaces.
 The default launcher verifies network-namespace separation before mutation.
 

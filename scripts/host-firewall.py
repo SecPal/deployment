@@ -97,6 +97,12 @@ class Nft:
         return sets[0].get("elem", [])
 
 
+def _source(document):
+    # Preserve the last PROTECTED publication across DIRECT without admitting
+    # its networks into DIRECT policy or remediation authority.
+    return document["prefixes"] if document["configuration"]["edge_mode"] == "PROTECTED" else None
+
+
 def _read(directory):
     path = contract.prefixes._state_file(directory, "accepted.json", required=False)
     if path is None:
@@ -108,7 +114,9 @@ def _read(directory):
     value = contract.prefixes._decode_json(raw)
     if type(value) is not dict or value.keys() != {"configuration", "prefixes"}:
         raise ValueError("admit-firewall-state")
-    contract.policy(value["configuration"], value["prefixes"])
+    if value["prefixes"] is not None:
+        contract.prefixes.validate_candidate(value["prefixes"])
+    contract.policy(value["configuration"], _source(value))
     return value
 
 
@@ -116,13 +124,15 @@ def _same(observed, document):
     if observed is None:
         return False
     return contract.normalize_table(observed) == contract.policy(
-        document["configuration"], document["prefixes"])
+        document["configuration"], _source(document))
 
 
 def _management_transition(previous, candidate):
     """Never remove currently authorized management networks during a reload."""
     if previous is None:
         return
+    if not set(previous["configuration"]["dhcp_interfaces"]) <= set(candidate["dhcp_interfaces"]):
+        raise ValueError("admit-dhcp-uplink-preservation")
     for key in ("management_ipv4", "management_ipv6"):
         new = list(contract.ipaddress.collapse_addresses(
             contract.ipaddress.ip_network(value) for value in candidate[key]))
@@ -161,7 +171,7 @@ class Controller:
                         or type(value["expires"]) is not int
                         or not 0 <= value["expires"] <= value["timeout"]):
                     raise ValueError("admit-remediation-lifetime")
-                actual, _ = contract.remediation(document["configuration"], document["prefixes"],
+                actual, _ = contract.remediation(document["configuration"], _source(document),
                                                  value["val"], ttl=1)
                 if name != actual:
                     raise ValueError("admit-remediation-family")
@@ -174,6 +184,8 @@ class Controller:
         with contract.prefixes._state_lock(self.directory):
             previous = _read(self.directory)
             _management_transition(previous, config)
+            if source is None and previous is not None:
+                value["prefixes"] = previous["prefixes"]
             if previous is not None and previous["prefixes"] is not None and source is not None:
                 contract.prefixes.admit_successor(previous["prefixes"], source)
             observed = self.native.snapshot()
@@ -187,18 +199,21 @@ class Controller:
                 if previous is None or not _same(observed, previous):
                     raise ValueError("admit-prior-firewall")
             commands = contract.batch(config, source, initial=observed is None)
-            self.native.validate(commands)
-            try:
-                self.native.commit(commands)
-            except ValueError:
-                # An unknown acknowledgement never authorizes a blind replay.
-                # Independent native read-back must prove this exact candidate.
-                if not _same(self.native.snapshot(), value):
-                    raise
-            if not _same(self.native.snapshot(), value):
-                raise ValueError("admit-applied-firewall")
+            self._commit_policy(commands, value)
             self._admit_decisions(value)
             self._save(value)
+
+    def _commit_policy(self, commands, value):
+        self.native.validate(commands)
+        try:
+            self.native.commit(commands)
+        except ValueError:
+            # Unknown acknowledgement: independently prove the exact policy,
+            # never replay an authority-changing batch.
+            if not _same(self.native.snapshot(), value):
+                raise
+        if not _same(self.native.snapshot(), value):
+            raise ValueError("admit-applied-firewall")
 
     def restore(self):
         with contract.prefixes._state_lock(self.directory):
@@ -207,9 +222,8 @@ class Controller:
                 raise ValueError("admit-accepted-firewall-required")
             observed = self.native.snapshot()
             if observed is None:
-                commands = contract.batch(value["configuration"], value["prefixes"], initial=True)
-                self.native.validate(commands)
-                self.native.commit(commands)
+                commands = contract.batch(value["configuration"], _source(value), initial=True)
+                self._commit_policy(commands, value)
             if not _same(self.native.snapshot(), value):
                 raise ValueError("admit-restored-firewall")
             self._admit_decisions(value)
@@ -226,7 +240,7 @@ class Controller:
             value = _read(self.directory)
             if value is None or not _same(self.native.snapshot(), value):
                 raise ValueError("admit-effective-host-firewall")
-            name, peer = contract.remediation(value["configuration"], value["prefixes"], address, ttl=ttl)
+            name, peer = contract.remediation(value["configuration"], _source(value), address, ttl=ttl)
             self._admit_decisions(value)
             identity = {"family": "inet", "table": contract.TABLE, "name": name}
             element = dict(**identity, elem=[peer])
@@ -236,10 +250,20 @@ class Controller:
                 commands.append({"add": {"element": element}})
             document = {"nftables": commands}
             self.native.validate(document)
-            self.native.commit(document)
+            failure = None
+            try:
+                self.native.commit(document)
+            except ValueError as error:
+                failure = error
+            # Both ordinary and lost acknowledgements require independent
+            # bounded set read-back; never retry and extend a decision blindly.
             entries = self.native.decisions(name)
-            found = any(entry.get("elem", {}).get("val") == peer for entry in entries)
-            if found == remove:
+            found = [entry.get("elem", {}) for entry in entries
+                     if entry.get("elem", {}).get("val") == peer]
+            desired = not found if remove else len(found) == 1 and found[0].get("timeout") == ttl
+            if not desired:
+                if failure is not None:
+                    raise failure
                 raise ValueError("admit-remediation-readback")
             self._admit_decisions(value)
 

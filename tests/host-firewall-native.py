@@ -82,6 +82,7 @@ class KernelTests(unittest.TestCase):
         for arguments in [
             ["addr", "add", "198.51.100.1/24", "dev", "fw104"],
             ["-6", "addr", "add", "2001:db8::1/64", "dev", "fw104", "nodad"],
+            ["-6", "addr", "add", "fe80::1/64", "dev", "fw104", "nodad"],
             ["link", "set", "fw104", "up"],
         ]:
             command(["/usr/sbin/ip", *arguments])
@@ -89,6 +90,7 @@ class KernelTests(unittest.TestCase):
             ["link", "set", "lo", "up"], ["link", "set", "peer104", "up"],
             *[["addr", "add", "198.51.100." + str(n) + "/24", "dev", "peer104"] for n in (2,4,5)],
             *[["-6", "addr", "add", "2001:db8::" + str(n) + "/64", "dev", "peer104", "nodad"] for n in (2,4,5)],
+            ["-6","addr","add","fe80::2/64","dev","peer104","nodad"],
         ]:
             command([*cls.enter, "/usr/sbin/ip", *arguments])
         cls.listeners = []
@@ -173,6 +175,13 @@ class KernelTests(unittest.TestCase):
         old["candidate_sha256"]=contract.prefixes.candidate_digest(old)
         with self.assertRaises(contract.prefixes.ContractError):
             self.admin.apply(self.protected,old)
+        self.admin.apply(self.direct)
+        # Retained history must not grant a DIRECT remediation exemption.
+        self.admin.remediate("198.51.100.2",ttl=60)
+        self.admin.remediate("198.51.100.2",remove=True)
+        with self.assertRaises(contract.prefixes.ContractError):
+            self.admin.apply(self.protected,old)
+        self.admin.apply(self.protected,self.prefixes)
         self.admin.check()
         self.probe("198.51.100.5",443,False,action="exchange")
         for source in ("198.51.100.2","2001:db8::2"):
@@ -193,7 +202,8 @@ class KernelTests(unittest.TestCase):
         self.admin.apply(self.direct)
         original=self.admin.native.snapshot()
         for bad in [self.direct | {"edge_mode":"BOTH"},
-                    self.direct | {"management_ipv4":[]}]:
+                    self.direct | {"management_ipv4":[]},
+                    self.direct | {"dhcp_interfaces":["unused104"]}]:
             with self.assertRaises(ValueError):
                 self.admin.apply(bad)
         with patch.object(self.admin.native,"validate",side_effect=ValueError("synthetic check failure")):
@@ -225,9 +235,29 @@ class KernelTests(unittest.TestCase):
             self.admin.apply(self.direct)
         self.admin.check()
         self.probe("198.51.100.5",443,True)
+        # Fresh-kernel boot with existing accepted configuration.
+        command(["/usr/sbin/nft","delete","table","inet",contract.TABLE])
+        with patch.object(self.admin.native,"commit",side_effect=controller.NftFailure("not committed")):
+            with self.assertRaises(controller.NftFailure):
+                self.admin.restore()
+        self.assertIsNone(self.admin.native.snapshot())
+        with patch.object(self.admin.native,"commit",side_effect=lost_ack):
+            self.admin.restore()
+        self.admin.check()
 
     def test_bounded_remediation_expiry_reload_and_capability_separation(self):
         self.admin.apply(self.direct)
+        with patch.object(self.admin.native,"commit",side_effect=controller.NftFailure("not committed")):
+            with self.assertRaises(controller.NftFailure):
+                self.admin.remediate("198.51.100.5",ttl=60)
+        self.probe("198.51.100.5",443,True)
+        commit=self.admin.native.commit
+        def lost_ack(document):
+            commit(document)
+            raise controller.NftFailure("synthetic lost remediation acknowledgement")
+        with patch.object(self.admin.native,"commit",side_effect=lost_ack):
+            self.admin.remediate("198.51.100.5",ttl=60)
+            self.admin.remediate("198.51.100.5",remove=True)
         for source in ("198.51.100.5","2001:db8::5"):
             self.admin.remediate(source,ttl=60)
             self.probe(source,443,False)
@@ -237,6 +267,11 @@ class KernelTests(unittest.TestCase):
         self.probe("2001:db8::5",443,False)
         for source in ("198.51.100.5","2001:db8::5"):
             self.admin.remediate(source,remove=True)
+            # A denied probe may leave a pending neighbor retry. Force fresh
+            # resolution in this isolated peer instead of assuming its timer.
+            if ":" in source:
+                command([*self.enter,"/usr/sbin/ip","-6","neigh","flush","dev","peer104"])
+                command(["/usr/sbin/ip","-6","neigh","flush","dev","fw104"])
             self.probe(source,443,True)
         self.admin.remediate("198.51.100.5",ttl=1)
         self.probe("198.51.100.5",443,False)
@@ -247,6 +282,44 @@ class KernelTests(unittest.TestCase):
                                capture_output=True)
         self.assertNotEqual(result.returncode,0)
         self.admin.check()
+
+    def test_dhcp_client_responses_are_bounded_to_reviewed_uplinks(self):
+        # Valid DHCP replies on an unreviewed uplink still receive no admission.
+        self.admin.apply(self.direct | {"dhcp_interfaces":["unused104"]})
+        for admitted in (False, True):
+            if admitted:
+                self.admin.apply(self.protected | {"dhcp_interfaces":["fw104","unused104"]},self.prefixes)
+            self._dhcp_replies(admitted)
+
+    def _dhcp_replies(self, admitted):
+        for family,source,target,sport,dport,expected in [
+            (socket.AF_INET,"198.51.100.2","198.51.100.1",67,68,True),
+            (socket.AF_INET6,"fe80::2","fe80::1",547,546,True),
+            (socket.AF_INET,"198.51.100.2","198.51.100.1",6667,68,False),
+            (socket.AF_INET6,"2001:db8::2","2001:db8::1",547,546,False),
+        ]:
+            with self.subTest(source=source,sport=sport,dport=dport):
+                listener=socket.socket(family,socket.SOCK_DGRAM)
+                listener.settimeout(.4)
+                listener.bind(("" if family==socket.AF_INET else "::",dport))
+                code=(
+                    "import socket;"
+                    f"s=socket.socket({int(family)},socket.SOCK_DGRAM);"
+                    "i=socket.if_nametoindex('peer104');"
+                    f"s.bind(({source!r},{sport})" +
+                    ("+(0,i)" if family==socket.AF_INET6 and source.startswith("fe80:") else "") + ");"
+                    f"s.sendto(b'dhcp-client-probe',({target!r},{dport})" +
+                    ("+(0,i)" if family==socket.AF_INET6 and target.startswith("fe80:") else "") + ")"
+                )
+                try:
+                    command([*self.enter,sys.executable,"-c",code])
+                    try:
+                        received=listener.recv(64)==b"dhcp-client-probe"
+                    except TimeoutError:
+                        received=False
+                    self.assertEqual(received,expected and admitted)
+                finally:
+                    listener.close()
 
 
 def main():
