@@ -96,6 +96,7 @@ jobs:
           scripts/validate-rocky-evidence-architecture.py
           scripts/validate-postgresql-qualification.py
           scripts/validate-product-backend-qualification.py
+          python3 tests/rocky-workload-integration.py
 
       - name: Validate immutable inputs
         id: closed
@@ -1184,6 +1185,85 @@ jobs:
             ${{ runner.temp }}/rocky-target/qualification.stdout
           if-no-files-found: error
           retention-days: 14
+
+      - name: Install pinned workload schema validator
+        if: ${{ needs.validate.outputs.qualification == 'rocky-host' }}
+        run: python3 -m pip install --disable-pip-version-check jsonschema==4.25.1
+
+      - name: Collect exact-target workload facts without provider authority
+        id: workload_collection
+        if: ${{ needs.validate.outputs.qualification == 'rocky-host' }}
+        continue-on-error: true
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          harness_sha256="$(sha256sum scripts/qualify-production-host.sh | awk '{print $1}')"
+          python3 scripts/ci-cloud/workload-source-loader.py source-bundle \
+            >"$RUNNER_TEMP/rocky-target/workload-sources.json"
+          set +e
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
+            -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip" \
+            sudo /usr/local/sbin/secpal-run-rocky-workload-qualification \
+            "$TARGET_SHA" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            "$harness_sha256" <"$RUNNER_TEMP/rocky-target/workload-sources.json" |
+            {
+              head -c 2097153 >"$RUNNER_TEMP/rocky-target/workload-transport.json"
+              head_status=$?
+              cat >/dev/null
+              drain_status=$?
+              ((head_status == 0 && drain_status == 0))
+            }
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          test "$(stat -c %s "$RUNNER_TEMP/rocky-target/workload-transport.json")" -le 2097152
+          test "${statuses[1]}" -eq 0
+          test "${statuses[0]}" -eq 0
+
+      - name: Independently assemble and admit workload evidence on trusted control
+        id: workload_admission
+        if: >-
+          ${{ !cancelled() && needs.validate.outputs.qualification == 'rocky-host' &&
+          (steps.workload_collection.outcome == 'success' ||
+          steps.workload_collection.outcome == 'failure') }}
+        continue-on-error: true
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          set +e
+          scripts/ci-cloud/admit-rocky-workload.py \
+            "$RUNNER_TEMP/rocky-target/workload-transport.json" \
+            "$RUNNER_TEMP/rocky-target/workload-admitted" \
+            --control-sha "$GITHUB_SHA" --target-sha "$TARGET_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          status=$?
+          set -e
+          if [[ -f "$RUNNER_TEMP/rocky-target/workload-admitted/evidence.json" ]]; then
+            printf 'validated=true\n' >>"$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+
+      - name: Publish independently validated workload result
+        if: >-
+          ${{ !cancelled() && needs.validate.outputs.qualification == 'rocky-host' &&
+          steps.workload_admission.outputs.validated == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rocky-cloud-workload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/rocky-target/workload-admitted/evidence.json
+            ${{ runner.temp }}/rocky-target/workload-admitted/summary.md
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce complete workload collection and independent admission
+        if: ${{ always() && needs.validate.outputs.qualification == 'rocky-host' }}
+        env:
+          COLLECTION_OUTCOME: ${{ steps.workload_collection.outcome }}
+          ADMISSION_OUTCOME: ${{ steps.workload_admission.outcome }}
+        run: test "$COLLECTION_OUTCOME" = success && test "$ADMISSION_OUTCOME" = success
 
       - name: Qualify product backends using accepted-main root authority
         id: backend_execution

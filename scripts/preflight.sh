@@ -92,6 +92,7 @@ python3 tests/ci-cloud-target-diagnostic.py
 python3 tests/ci-cloud-workload-evidence.py
 python3 tests/ci-cloud-workload-layers.py
 python3 tests/ci-cloud-workload-purity.py
+python3 tests/rocky-workload-integration.py
 bash tests/ci-cloud-init-retry.sh
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py

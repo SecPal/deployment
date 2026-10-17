@@ -170,8 +170,9 @@ floors.
 ## Exact-target cloud workload interface
 
 The retained #119/#121 workload interface provides two closed operations in
-target code. Its integration with current Rocky cloud qualification remains
-owned by #123; this interface alone does not claim an end-to-end cloud PASS. `workload-prepare-start` derives the fixture identifier and port
+target code. The Rocky workflow connects it after host admission through the
+[existing evidence pipeline](cloud-workload-evidence-layers.md). Real provider
+acceptance remains owned by #123; source integration does not claim a cloud PASS. `workload-prepare-start` derives the fixture identifier and port
 from the already admitted commit, installs a checksum-pinned GitHub CLI in the
 private fixture, repeats both product attestation gates, stages immutable
 `localhost/secpal-ci-…@sha256:…` identities, renders the closed unit set, and
