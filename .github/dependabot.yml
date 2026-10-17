@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+---
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+      time: "04:00"
+      timezone: Europe/Berlin
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+      time: "04:00"
+      timezone: Europe/Berlin
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: daily
+      time: "04:00"
+      timezone: Europe/Berlin
+  - package-ecosystem: docker
+    directory: /containers/phase-b-gateway
+    schedule:
+      interval: daily
+      time: "04:00"
+      timezone: Europe/Berlin
+  - package-ecosystem: opentofu
+    directory: /infra/ci-cloud/digitalocean
+    schedule:
+      interval: daily
+      time: "04:00"
+      timezone: Europe/Berlin
+  - package-ecosystem: opentofu
+    directory: /infra/ci-cloud/gcp
+    schedule:
+      interval: daily
+      time: "04:00"
+      timezone: Europe/Berlin
+  - package-ecosystem: opentofu
+    directory: /infra/ci-cloud/gcp-rocky
+    schedule:
+      interval: daily
+      time: "04:00"
+      timezone: Europe/Berlin

@@ -17,7 +17,8 @@ digest in rootless local storage, and starts only native Quadlet units with
 
 ## Canonical identity
 
-The only approved API image reference is:
+The approved API image reference for the existing application integration
+fixture is:
 
 ```text
 ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e
@@ -41,6 +42,33 @@ Attestation. An anonymous public pull by digest was also confirmed externally.
 The deployment integration runner repeats the anonymous digest pull and
 requires the fixed-identity attestation verification before it permits any
 API-based role to execute.
+
+The separate native PostgreSQL qualifier and its #81 consumer use the scoped
+runtime identity below. Existing integration fixture consumers retain their
+approved digest and evidence contract.
+
+## Native PostgreSQL application identity
+
+The trusted native PostgreSQL qualification contract consumes an existing
+accepted API runtime that supplies verified PHP/PDO transport and separate
+application readiness/liveness. It fixes
+`ghcr.io/secpal/api@sha256:ac97416f3feac5c57204421059105389c9add2cfbcda1b063eadf4c6ad7647ab`
+from accepted API source `7da77556e7a4896940b6c50ccf6ba2c3fb9a8653`, publisher
+run `36992636604`, attempt `1`, workflow `publish-container.yml`, on protected
+`main`. Its architecture identities are:
+
+- `linux/amd64`: `sha256:8d0d960306c6989be55a9c7bc41937699e55dbdbc6193bff870f38a1b19605a3`
+- `linux/arm64`: `sha256:ed91caa822e189187d57e0ff322c54e3b9837aa679cc087015933dcda9a3be7e`
+
+The trusted controller owns this identity; #81 cannot select another runtime.
+The declaration binds it for the #81 consumer. The qualifier verifies its OCI
+index and GitHub artifact attestation before a rootless application executes,
+using the same anonymous bundle retrieval and fixed GitHub CLI authority as
+the integration fixture. See
+[native PostgreSQL qualification](postgresql-qualification.md) for application
+observations, evidence admission and cleanup.
+
+## Existing fixture verification
 
 The image pull uses a new mode-`0700`, empty `DOCKER_CONFIG` directory and
 removes inherited `DOCKER_AUTH_CONFIG` only from the exact `docker pull`
@@ -116,7 +144,7 @@ python3 scripts/quadlet-integration.py
 
 Review and merge remain required. There is no automatic move to a newest image.
 
-Every digest update requires a new reviewed deployment pull request.
+Every integration fixture digest update requires a new reviewed deployment pull request.
 
 Rollback also requires a new reviewed pull request. It sets the API reference
 to a previously recorded and freshly reverified digest and reruns the same

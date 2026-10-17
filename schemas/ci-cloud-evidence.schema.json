@@ -1,44 +1,39 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://secpal.app/schemas/ci-cloud-evidence.schema.json",
-  "title": "SecPal ephemeral cloud conformance evidence",
+  "title": "Disposable rootless application-workload evidence",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "workflow",
-    "test",
-    "host_admission",
-    "platform",
-    "apt",
-    "host",
-    "runtime",
-    "workload"
-  ],
+  "required": ["schema_version", "workflow", "test", "workload"],
   "properties": {
-    "schema_version": { "const": 3 },
+    "schema_version": {
+      "const": 5
+    },
     "workflow": {
       "type": "object",
       "additionalProperties": false,
       "required": ["repository", "run_id", "run_attempt", "target_sha"],
       "properties": {
-        "repository": { "const": "SecPal/deployment" },
-        "run_id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
-        "run_attempt": { "type": "string", "pattern": "^[1-9][0-9]{0,2}$" },
-        "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+        "repository": {
+          "const": "SecPal/deployment"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "run_attempt": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,2}$"
+        },
+        "target_sha": {
+          "$ref": "#/$defs/workloadTargetSha"
+        }
       }
     },
     "test": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "provider",
-        "region",
-        "profile",
-        "machine_type",
-        "provider_image",
-        "started_at",
-        "ended_at",
         "normalization_diagnostics",
         "phase_exit_statuses",
         "collection_exit_statuses",
@@ -46,28 +41,6 @@
         "failed_admission_invariants"
       ],
       "properties": {
-        "provider": { "enum": ["digitalocean", "gcp"] },
-        "region": { "enum": ["fra1", "europe-west3-a"] },
-        "profile": { "enum": ["intel", "amd", "axion"] },
-        "machine_type": {
-          "enum": ["s-4vcpu-8gb-intel", "s-4vcpu-8gb-amd", "c4a-standard-4"]
-        },
-        "provider_image": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["slug", "id"],
-          "properties": {
-            "slug": {
-              "enum": ["debian-13-x64", "debian-cloud/debian-13-arm64"]
-            },
-            "id": {
-              "type": "string",
-              "pattern": "^([1-9][0-9]{0,19}|https://www\\.googleapis\\.com/compute/v1/projects/debian-cloud/global/images/debian-13-trixie-arm64-v[0-9]{8})$"
-            }
-          }
-        },
-        "started_at": { "type": "string", "format": "date-time" },
-        "ended_at": { "type": "string", "format": "date-time" },
         "normalization_diagnostics": {
           "type": "object",
           "additionalProperties": false,
@@ -75,14 +48,30 @@
           "properties": {
             "live": {
               "allOf": [
-                { "$ref": "#/$defs/normalizationDiagnostic" },
-                { "properties": { "mode": { "const": "live" } } }
+                {
+                  "$ref": "#/$defs/normalizationDiagnostic"
+                },
+                {
+                  "properties": {
+                    "mode": {
+                      "const": "live"
+                    }
+                  }
+                }
               ]
             },
             "cleanup": {
               "allOf": [
-                { "$ref": "#/$defs/normalizationDiagnostic" },
-                { "properties": { "mode": { "const": "cleanup" } } }
+                {
+                  "$ref": "#/$defs/normalizationDiagnostic"
+                },
+                {
+                  "properties": {
+                    "mode": {
+                      "const": "cleanup"
+                    }
+                  }
+                }
               ]
             }
           }
@@ -91,17 +80,21 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "host",
             "workload_prepare_start",
             "workload_cleanup",
             "trusted_quadlet_normalize_live",
             "trusted_quadlet_normalize_cleanup"
           ],
           "properties": {
-            "host": { "$ref": "#/$defs/exitStatus" },
-            "workload_prepare_start": { "$ref": "#/$defs/exitStatus" },
-            "workload_cleanup": { "$ref": "#/$defs/exitStatus" },
-            "trusted_quadlet_normalize_live": { "$ref": "#/$defs/exitStatus" },
+            "workload_prepare_start": {
+              "$ref": "#/$defs/exitStatus"
+            },
+            "workload_cleanup": {
+              "$ref": "#/$defs/exitStatus"
+            },
+            "trusted_quadlet_normalize_live": {
+              "$ref": "#/$defs/exitStatus"
+            },
             "trusted_quadlet_normalize_cleanup": {
               "$ref": "#/$defs/exitStatus"
             }
@@ -112,542 +105,72 @@
           "additionalProperties": false,
           "required": ["baseline", "live", "post_cleanup"],
           "properties": {
-            "baseline": { "$ref": "#/$defs/exitStatus" },
-            "live": { "$ref": "#/$defs/exitStatus" },
-            "post_cleanup": { "$ref": "#/$defs/exitStatus" }
+            "baseline": {
+              "$ref": "#/$defs/exitStatus"
+            },
+            "live": {
+              "$ref": "#/$defs/exitStatus"
+            },
+            "post_cleanup": {
+              "$ref": "#/$defs/exitStatus"
+            }
           }
         },
-        "result": { "enum": ["passed", "failed"] },
+        "result": {
+          "enum": ["passed", "failed"]
+        },
         "failed_admission_invariants": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^[A-Z0-9_]+$" }
-        }
-      },
-      "oneOf": [
-        {
-          "properties": {
-            "provider": { "const": "digitalocean" },
-            "region": { "const": "fra1" },
-            "profile": { "const": "intel" },
-            "machine_type": { "const": "s-4vcpu-8gb-intel" },
-            "provider_image": {
-              "properties": {
-                "slug": { "const": "debian-13-x64" },
-                "id": { "pattern": "^[1-9][0-9]{0,19}$" }
-              }
-            }
-          }
-        },
-        {
-          "properties": {
-            "provider": { "const": "digitalocean" },
-            "region": { "const": "fra1" },
-            "profile": { "const": "amd" },
-            "machine_type": { "const": "s-4vcpu-8gb-amd" },
-            "provider_image": {
-              "properties": {
-                "slug": { "const": "debian-13-x64" },
-                "id": { "pattern": "^[1-9][0-9]{0,19}$" }
-              }
-            }
-          }
-        },
-        {
-          "properties": {
-            "provider": { "const": "gcp" },
-            "region": { "const": "europe-west3-a" },
-            "profile": { "const": "axion" },
-            "machine_type": { "const": "c4a-standard-4" },
-            "provider_image": {
-              "properties": {
-                "slug": { "const": "debian-cloud/debian-13-arm64" },
-                "id": {
-                  "pattern": "^https://www\\.googleapis\\.com/compute/v1/projects/debian-cloud/global/images/debian-13-trixie-arm64-v[0-9]{8}$"
-                }
-              }
-            }
-          }
-        }
-      ]
-    },
-    "host_admission": { "$ref": "#/$defs/admissionResult" },
-    "platform": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "os_release",
-        "architecture",
-        "uname",
-        "kernel",
-        "cpu",
-        "virtualization",
-        "logical_cpu",
-        "memory_bytes",
-        "root_filesystem_bytes"
-      ],
-      "properties": {
-        "os_release": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["ID", "VERSION_ID", "VERSION_CODENAME", "PRETTY_NAME"],
-          "properties": {
-            "ID": { "$ref": "#/$defs/shortString" },
-            "VERSION_ID": { "$ref": "#/$defs/shortString" },
-            "VERSION_CODENAME": { "$ref": "#/$defs/shortString" },
-            "PRETTY_NAME": { "$ref": "#/$defs/mediumString" }
-          }
-        },
-        "architecture": { "$ref": "#/$defs/shortString" },
-        "uname": { "type": "string", "maxLength": 1024 },
-        "kernel": { "$ref": "#/$defs/mediumString" },
-        "cpu": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["vendor", "model"],
-          "properties": {
-            "vendor": { "type": "string", "maxLength": 512 },
-            "model": { "type": "string", "maxLength": 512 }
-          }
-        },
-        "virtualization": { "$ref": "#/$defs/mediumString" },
-        "logical_cpu": { "type": "integer", "minimum": 0, "maximum": 1024 },
-        "memory_bytes": { "type": "integer", "minimum": 1 },
-        "root_filesystem_bytes": { "$ref": "#/$defs/nonNegativeInteger" }
-      }
-    },
-    "apt": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "source_files",
-        "source_hosts",
-        "configured_suites",
-        "release_origins",
-        "verified_release_suites",
-        "release_signatures_verified",
-        "debian_archive_keyring_version",
-        "runtime_packages",
-        "bootstrap_packages",
-        "forbidden_packages_present"
-      ],
-      "properties": {
-        "source_files": { "$ref": "#/$defs/stringArray" },
-        "source_hosts": { "$ref": "#/$defs/stringArray" },
-        "configured_suites": { "$ref": "#/$defs/stringArray" },
-        "release_origins": { "$ref": "#/$defs/stringArray" },
-        "verified_release_suites": { "$ref": "#/$defs/stringArray" },
-        "release_signatures_verified": { "type": "boolean" },
-        "debian_archive_keyring_version": { "$ref": "#/$defs/mediumString" },
-        "runtime_packages": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "podman",
-            "conmon",
-            "crun",
-            "catatonit",
-            "netavark",
-            "aardvark-dns",
-            "passt",
-            "uidmap",
-            "dbus-user-session",
-            "dirmngr",
-            "gpg",
-            "gpg-agent",
-            "openssh-client"
-          ],
-          "properties": {
-            "podman": { "$ref": "#/$defs/packageFact" },
-            "conmon": { "$ref": "#/$defs/packageFact" },
-            "crun": { "$ref": "#/$defs/packageFact" },
-            "catatonit": { "$ref": "#/$defs/packageFact" },
-            "netavark": { "$ref": "#/$defs/packageFact" },
-            "aardvark-dns": { "$ref": "#/$defs/packageFact" },
-            "passt": { "$ref": "#/$defs/packageFact" },
-            "uidmap": { "$ref": "#/$defs/packageFact" },
-            "dbus-user-session": { "$ref": "#/$defs/packageFact" },
-            "dirmngr": { "$ref": "#/$defs/packageFact" },
-            "gpg": { "$ref": "#/$defs/packageFact" },
-            "gpg-agent": { "$ref": "#/$defs/packageFact" },
-            "openssh-client": { "$ref": "#/$defs/packageFact" }
-          }
-        },
-        "bootstrap_packages": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "aardvark-dns",
-            "apparmor",
-            "apparmor-utils",
-            "catatonit",
-            "crun",
-            "curl",
-            "dbus-user-session",
-            "dirmngr",
-            "git",
-            "gh",
-            "gpg",
-            "gpg-agent",
-            "jq",
-            "netavark",
-            "openssh-client",
-            "passt",
-            "podman",
-            "python3",
-            "python3-jsonschema",
-            "python3-yaml",
-            "uidmap",
-            "unattended-upgrades"
-          ],
-          "properties": {
-            "aardvark-dns": { "$ref": "#/$defs/packageFact" },
-            "apparmor": { "$ref": "#/$defs/packageFact" },
-            "apparmor-utils": { "$ref": "#/$defs/packageFact" },
-            "catatonit": { "$ref": "#/$defs/packageFact" },
-            "crun": { "$ref": "#/$defs/packageFact" },
-            "curl": { "$ref": "#/$defs/packageFact" },
-            "dbus-user-session": { "$ref": "#/$defs/packageFact" },
-            "dirmngr": { "$ref": "#/$defs/packageFact" },
-            "git": { "$ref": "#/$defs/packageFact" },
-            "gh": { "$ref": "#/$defs/packageFact" },
-            "gpg": { "$ref": "#/$defs/packageFact" },
-            "gpg-agent": { "$ref": "#/$defs/packageFact" },
-            "jq": { "$ref": "#/$defs/packageFact" },
-            "netavark": { "$ref": "#/$defs/packageFact" },
-            "openssh-client": { "$ref": "#/$defs/packageFact" },
-            "passt": { "$ref": "#/$defs/packageFact" },
-            "podman": { "$ref": "#/$defs/packageFact" },
-            "python3": { "$ref": "#/$defs/packageFact" },
-            "python3-jsonschema": { "$ref": "#/$defs/packageFact" },
-            "python3-yaml": { "$ref": "#/$defs/packageFact" },
-            "uidmap": { "$ref": "#/$defs/packageFact" },
-            "unattended-upgrades": { "$ref": "#/$defs/packageFact" }
-          }
-        },
-        "forbidden_packages_present": { "$ref": "#/$defs/stringArray" }
-      }
-    },
-    "host": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "kernel_package",
-        "filesystem",
-        "security_updates",
-        "required_tools",
-        "clock",
-        "ssh",
-        "cloud_identity"
-      ],
-      "properties": {
-        "kernel_package": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "name",
-            "version",
-            "architecture",
-            "origin",
-            "suite",
-            "owned",
-            "status",
-            "maintainer",
-            "database_files_safe",
-            "files_verified",
-            "provenance_basis"
-          ],
-          "properties": {
-            "name": { "$ref": "#/$defs/mediumString" },
-            "version": { "$ref": "#/$defs/mediumString" },
-            "architecture": { "$ref": "#/$defs/shortString" },
-            "origin": { "$ref": "#/$defs/mediumString" },
-            "suite": { "$ref": "#/$defs/mediumString" },
-            "owned": { "type": "boolean" },
-            "status": { "$ref": "#/$defs/shortString" },
-            "maintainer": { "$ref": "#/$defs/mediumString" },
-            "database_files_safe": { "type": "boolean" },
-            "files_verified": { "type": "boolean" },
-            "provenance_basis": {
-              "enum": ["active-apt-policy", "unavailable"]
-            }
-          }
-        },
-        "filesystem": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["type", "read_only", "overlayfs_supported", "d_type"],
-          "properties": {
-            "type": { "$ref": "#/$defs/shortString" },
-            "read_only": { "type": "boolean" },
-            "overlayfs_supported": { "type": "boolean" },
-            "d_type": { "type": "boolean" }
-          }
-        },
-        "security_updates": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "mechanism",
-            "automatic",
-            "timer_enabled",
-            "security_suite",
-            "normal_updates_automatic",
-            "major_release_upgrades_automatic",
-            "automatic_reboot",
-            "runtime_packages_excluded"
-          ],
-          "properties": {
-            "mechanism": { "$ref": "#/$defs/mediumString" },
-            "automatic": { "type": "boolean" },
-            "timer_enabled": { "type": "boolean" },
-            "security_suite": { "$ref": "#/$defs/mediumString" },
-            "normal_updates_automatic": { "type": "boolean" },
-            "major_release_upgrades_automatic": { "type": "boolean" },
-            "automatic_reboot": { "type": "boolean" },
-            "runtime_packages_excluded": { "type": "boolean" }
-          }
-        },
-        "required_tools": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["present", "missing"],
-          "properties": {
-            "present": { "$ref": "#/$defs/stringArray" },
-            "missing": { "$ref": "#/$defs/stringArray" }
-          }
-        },
-        "clock": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["synchronized"],
-          "properties": { "synchronized": { "type": "boolean" } }
-        },
-        "ssh": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["root_login_denied"],
-          "properties": { "root_login_denied": { "type": "boolean" } }
-        },
-        "cloud_identity": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "probe_supported",
-            "probe_succeeded",
-            "identity_present"
-          ],
-          "properties": {
-            "probe_supported": { "type": "boolean" },
-            "probe_succeeded": { "type": "boolean" },
-            "identity_present": { "type": "boolean" }
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z0-9_]+$"
           }
         }
       }
     },
-    "runtime": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "podman",
-        "crun_version",
-        "crun_features",
-        "netavark_version",
-        "aardvark_version",
-        "pasta_version",
-        "passt_version",
-        "uidmap",
-        "cgroup_version",
-        "systemd_version",
-        "apparmor_host",
-        "systemd_user",
-        "quadlet",
-        "storage",
-        "api",
-        "updates",
-        "registries"
-      ],
-      "properties": {
-        "podman": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "version",
-            "rootless",
-            "seccomp_enabled",
-            "apparmor_enabled",
-            "oci_runtime",
-            "network_backend",
-            "rootless_network_command",
-            "cgroup_version"
-          ],
-          "properties": {
-            "version": { "$ref": "#/$defs/mediumString" },
-            "rootless": { "type": ["boolean", "null"] },
-            "seccomp_enabled": { "type": ["boolean", "null"] },
-            "apparmor_enabled": { "type": ["boolean", "null"] },
-            "oci_runtime": { "$ref": "#/$defs/mediumString" },
-            "network_backend": { "$ref": "#/$defs/mediumString" },
-            "rootless_network_command": { "$ref": "#/$defs/mediumString" },
-            "cgroup_version": { "type": ["string", "null"], "maxLength": 32 }
-          }
-        },
-        "crun_version": { "$ref": "#/$defs/mediumString" },
-        "crun_features": { "type": "string", "maxLength": 8192 },
-        "netavark_version": { "$ref": "#/$defs/mediumString" },
-        "aardvark_version": { "$ref": "#/$defs/mediumString" },
-        "pasta_version": { "$ref": "#/$defs/mediumString" },
-        "passt_version": { "$ref": "#/$defs/mediumString" },
-        "uidmap": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "newuidmap",
-            "newgidmap",
-            "subuid",
-            "subgid",
-            "mapping_effective"
-          ],
-          "properties": {
-            "newuidmap": { "type": "string", "maxLength": 4096 },
-            "newgidmap": { "type": "string", "maxLength": 4096 },
-            "subuid": { "$ref": "#/$defs/subordinateIdFact" },
-            "subgid": { "$ref": "#/$defs/subordinateIdFact" },
-            "mapping_effective": { "type": "boolean" }
-          }
-        },
-        "cgroup_version": { "type": "string", "maxLength": 32 },
-        "systemd_version": { "$ref": "#/$defs/mediumString" },
-        "apparmor_host": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "kernel_enabled",
-            "loaded_profiles",
-            "enforcing_profiles"
-          ],
-          "properties": {
-            "kernel_enabled": { "type": "boolean" },
-            "loaded_profiles": { "type": ["integer", "null"], "minimum": 0 },
-            "enforcing_profiles": { "type": ["integer", "null"], "minimum": 0 }
-          }
-        },
-        "systemd_user": {
-          "$ref": "#/$defs/systemdUserFacts"
-        },
-        "quadlet": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "generator_path",
-            "effective_search_paths",
-            "definitions_uid",
-            "definitions_gid",
-            "definitions_mode",
-            "tree_symlinks_present",
-            "service_account_can_write"
-          ],
-          "properties": {
-            "generator_path": { "type": "string", "maxLength": 4096 },
-            "effective_search_paths": { "$ref": "#/$defs/stringArray" },
-            "definitions_uid": { "type": "integer", "minimum": -1 },
-            "definitions_gid": { "type": "integer", "minimum": -1 },
-            "definitions_mode": { "type": "string", "pattern": "^0[0-7]{3}$" },
-            "tree_symlinks_present": { "type": "boolean" },
-            "service_account_can_write": { "type": "boolean" }
-          }
-        },
-        "storage": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["driver", "graphroot", "runroot"],
-          "properties": {
-            "driver": { "$ref": "#/$defs/mediumString" },
-            "graphroot": { "type": "string", "maxLength": 4096 },
-            "runroot": { "type": "string", "maxLength": 4096 }
-          }
-        },
-        "api": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "system_service_active",
-            "system_service_enabled",
-            "system_socket_active",
-            "system_socket_enabled",
-            "user_service_active",
-            "user_service_enabled",
-            "user_socket_active",
-            "user_socket_enabled",
-            "tcp_listener",
-            "unix_listener",
-            "service_process",
-            "process_scan_incomplete",
-            "listener_scan_incomplete",
-            "connection_scan_incomplete",
-            "remote_connection"
-          ],
-          "properties": {
-            "system_service_active": { "type": "boolean" },
-            "system_service_enabled": { "type": "boolean" },
-            "system_socket_active": { "type": "boolean" },
-            "system_socket_enabled": { "type": "boolean" },
-            "user_service_active": { "type": "boolean" },
-            "user_service_enabled": { "type": "boolean" },
-            "user_socket_active": { "type": "boolean" },
-            "user_socket_enabled": { "type": "boolean" },
-            "tcp_listener": { "type": "boolean" },
-            "unix_listener": { "type": "boolean" },
-            "service_process": { "type": "boolean" },
-            "process_scan_incomplete": { "type": "boolean" },
-            "listener_scan_incomplete": { "type": "boolean" },
-            "connection_scan_incomplete": { "type": "boolean" },
-            "remote_connection": { "type": "boolean" }
-          }
-        },
-        "updates": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["auto_update_timer_enabled", "auto_update_timer_active"],
-          "properties": {
-            "auto_update_timer_enabled": { "type": "boolean" },
-            "auto_update_timer_active": { "type": "boolean" }
-          }
-        },
-        "registries": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "ghcr_insecure",
-            "secpal_mirrors",
-            "secpal_location_rewrite"
-          ],
-          "properties": {
-            "ghcr_insecure": { "type": "boolean" },
-            "secpal_mirrors": { "$ref": "#/$defs/stringArray" },
-            "secpal_location_rewrite": { "type": "boolean" }
-          }
-        }
-      }
-    },
-    "workload": { "$ref": "#/$defs/workloadEvidence" }
+    "workload": {
+      "$ref": "#/$defs/workloadEvidence"
+    }
   },
   "$defs": {
+    "workloadTargetSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "workloadInstance": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
+    "workloadHexDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "workloadImageDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "workloadCreatedAt": { "pattern": "^[0-9T:+.Z-]{1,64}$" },
+    "generatedServiceName": {
+      "type": "string",
+      "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
+      "maxLength": 96
+    },
+    "quadletUnitName": {
+      "type": "string",
+      "pattern": "^secpal-int-[0-9a-f]{12}(-[a-z0-9-]+\\.(container|network|volume)|\\.target)$",
+      "maxLength": 96
+    },
+    "quadletSourcePath": {
+      "type": "string",
+      "pattern": "^/etc/containers/systemd/users/20000/secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.(container|network|volume)$",
+      "maxLength": 192
+    },
+    "workloadNetworkNames": { "$ref": "#/$defs/stringArray" },
+    "workloadPublishedPorts": { "$ref": "#/$defs/stringArray" },
+    "cleanupInventoryNames": { "$ref": "#/$defs/stringArray" },
+    "workloadProcessList": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/processFact" }
+    },
     "exitStatus": { "type": "integer", "minimum": 0, "maximum": 255 },
     "invariantArray": {
       "type": "array",
       "uniqueItems": true,
       "maxItems": 128,
       "items": { "type": "string", "pattern": "^[A-Z0-9_]+$" }
-    },
-    "admissionResult": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["result", "failed_admission_invariants"],
-      "properties": {
-        "result": { "enum": ["passed", "failed"] },
-        "failed_admission_invariants": { "$ref": "#/$defs/invariantArray" }
-      }
     },
     "controlResources": {
       "type": "object",
@@ -674,13 +197,9 @@
     "unitFact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "path", "uid", "gid", "mode", "sha256"],
+      "required": ["name", "path", "uid", "gid", "mode", "sha256", "image"],
       "properties": {
-        "name": {
-          "type": "string",
-          "pattern": "^secpal-int-[0-9a-f]{12}(-[a-z0-9-]+\\.(container|network|volume)|\\.target)$",
-          "maxLength": 96
-        },
+        "name": { "$ref": "#/$defs/quadletUnitName" },
         "path": {
           "type": "string",
           "pattern": "^/etc/(containers/systemd/users/20000|systemd/user)/secpal-int-[0-9a-f]{12}",
@@ -689,7 +208,8 @@
         "uid": { "const": 0 },
         "gid": { "const": 0 },
         "mode": { "const": "0644" },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        "sha256": { "$ref": "#/$defs/workloadHexDigest" },
+        "image": { "type": "string", "maxLength": 512 }
       }
     },
     "dropInOwner": {
@@ -731,7 +251,6 @@
           "enum": [
             "secrets-init",
             "postgres",
-            "valkey",
             "migrate",
             "api",
             "worker-general",
@@ -746,11 +265,7 @@
             "postgres-volume"
           ]
         },
-        "unit": {
-          "type": "string",
-          "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
-          "maxLength": 96
-        },
+        "unit": { "$ref": "#/$defs/generatedServiceName" },
         "fragment_path": {
           "type": "string",
           "pattern": "^/run/user/20000/systemd/generator/secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
@@ -759,15 +274,8 @@
         "fragment_uid": { "const": 20000 },
         "fragment_gid": { "const": 20000 },
         "fragment_mode": { "const": "0644" },
-        "fragment_sha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        "source_path": {
-          "type": "string",
-          "pattern": "^/etc/containers/systemd/users/20000/secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.(container|network|volume)$",
-          "maxLength": 192
-        },
+        "fragment_sha256": { "$ref": "#/$defs/workloadHexDigest" },
+        "source_path": { "$ref": "#/$defs/quadletSourcePath" },
         "drop_in_paths": {
           "type": "array",
           "uniqueItems": true,
@@ -786,10 +294,7 @@
         "drop_in_sha256": {
           "type": "array",
           "maxItems": 8,
-          "items": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          }
+          "items": { "$ref": "#/$defs/workloadHexDigest" }
         },
         "environment": {
           "type": "array",
@@ -829,7 +334,6 @@
       "enum": [
         "secrets-init",
         "postgres",
-        "valkey",
         "migrate",
         "api",
         "worker-general",
@@ -939,6 +443,10 @@
         "group_add",
         "effective_caps",
         "bounding_caps",
+        "selinux_process_label",
+        "selinux_mount_label",
+        "effective_process_label",
+        "effective_seccomp_mode",
         "devices_present",
         "mounts",
         "tmpfs",
@@ -951,10 +459,12 @@
         "systemd_unit",
         "container_cgroup",
         "lifecycle_service_invocation",
-        "image"
+        "image",
+        "image_id",
+        "image_digest"
       ],
       "properties": {
-        "id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "id": { "$ref": "#/$defs/workloadHexDigest" },
         "role": { "$ref": "#/$defs/workloadRole" },
         "name": {
           "type": "string",
@@ -1007,6 +517,13 @@
         "group_add": { "$ref": "#/$defs/stringArray" },
         "effective_caps": { "$ref": "#/$defs/stringArray" },
         "bounding_caps": { "$ref": "#/$defs/stringArray" },
+        "selinux_process_label": { "type": "string", "maxLength": 256 },
+        "selinux_mount_label": { "type": "string", "maxLength": 256 },
+        "effective_process_label": { "type": "string", "maxLength": 256 },
+        "effective_seccomp_mode": {
+          "type": "integer",
+          "enum": [-1, 2]
+        },
         "devices_present": { "type": "boolean" },
         "mounts": {
           "type": "array",
@@ -1026,20 +543,18 @@
           "maxItems": 3,
           "items": { "$ref": "#/$defs/containerLifecycleEvent" }
         },
-        "networks": { "$ref": "#/$defs/stringArray" },
-        "published_ports": { "$ref": "#/$defs/stringArray" },
+        "networks": { "$ref": "#/$defs/workloadNetworkNames" },
+        "published_ports": { "$ref": "#/$defs/workloadPublishedPorts" },
         "auto_update": { "type": "boolean" },
-        "systemd_unit": {
-          "type": "string",
-          "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
-          "maxLength": 96
-        },
+        "systemd_unit": { "$ref": "#/$defs/generatedServiceName" },
         "container_cgroup": { "type": "string", "maxLength": 256 },
         "lifecycle_service_invocation": {
           "type": "string",
           "pattern": "^$|^[0-9a-f]{32}$"
         },
-        "image": { "type": "string", "maxLength": 512 }
+        "image": { "type": "string", "maxLength": 512 },
+        "image_id": { "$ref": "#/$defs/workloadImageDigest" },
+        "image_digest": { "$ref": "#/$defs/workloadImageDigest" }
       },
       "allOf": [
         {
@@ -1141,7 +656,7 @@
       "additionalProperties": false,
       "required": ["container_id", "timer", "service", "interval_usec"],
       "properties": {
-        "container_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "container_id": { "$ref": "#/$defs/workloadHexDigest" },
         "timer": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}-(?:0|[1-9a-f][0-9a-f]{0,14}|[1-7][0-9a-f]{15})\\.timer$"
@@ -1211,6 +726,7 @@
       "additionalProperties": false,
       "required": [
         "phase",
+        "target_sha",
         "target_admitted",
         "collector_uid",
         "collector_gid",
@@ -1226,21 +742,18 @@
       ],
       "properties": {
         "phase": { "const": "baseline" },
+        "target_sha": { "$ref": "#/$defs/workloadTargetSha" },
         "target_admitted": { "type": "boolean" },
         "collector_uid": { "const": 20000 },
         "collector_gid": { "const": 20000 },
         "complete": { "type": "boolean" },
         "containers": { "$ref": "#/$defs/stringArray" },
-        "networks": { "$ref": "#/$defs/stringArray" },
+        "networks": { "$ref": "#/$defs/workloadNetworkNames" },
         "volumes": { "$ref": "#/$defs/stringArray" },
         "migration_invocation_count": { "const": 0 },
         "podman_api": { "type": "boolean" },
         "user_work": { "$ref": "#/$defs/userWork" },
-        "processes": {
-          "type": "array",
-          "maxItems": 256,
-          "items": { "$ref": "#/$defs/processFact" }
-        },
+        "processes": { "$ref": "#/$defs/workloadProcessList" },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -1249,6 +762,7 @@
       "additionalProperties": false,
       "required": [
         "phase",
+        "target_sha",
         "target_admitted",
         "collector_uid",
         "collector_gid",
@@ -1271,6 +785,7 @@
       ],
       "properties": {
         "phase": { "const": "live" },
+        "target_sha": { "$ref": "#/$defs/workloadTargetSha" },
         "target_admitted": { "type": "boolean" },
         "collector_uid": { "const": 20000 },
         "collector_gid": { "const": 20000 },
@@ -1279,35 +794,31 @@
         "installed_units": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 16,
+          "maxItems": 15,
           "items": { "$ref": "#/$defs/unitFact" }
         },
         "generated_services": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 15,
+          "maxItems": 14,
           "items": { "$ref": "#/$defs/generatedServiceFact" }
         },
         "containers": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 10,
+          "maxItems": 9,
           "items": { "$ref": "#/$defs/containerFact" }
         },
         "podman_rootless": { "type": "boolean" },
         "oci_runtime": { "$ref": "#/$defs/shortString" },
-        "networks": { "$ref": "#/$defs/stringArray" },
+        "networks": { "$ref": "#/$defs/workloadNetworkNames" },
         "volumes": { "$ref": "#/$defs/stringArray" },
-        "all_containers": { "$ref": "#/$defs/stringArray" },
-        "all_networks": { "$ref": "#/$defs/stringArray" },
-        "all_volumes": { "$ref": "#/$defs/stringArray" },
+        "all_containers": { "$ref": "#/$defs/cleanupInventoryNames" },
+        "all_networks": { "$ref": "#/$defs/cleanupInventoryNames" },
+        "all_volumes": { "$ref": "#/$defs/cleanupInventoryNames" },
         "podman_api": { "type": "boolean" },
         "user_work": { "$ref": "#/$defs/userWork" },
-        "processes": {
-          "type": "array",
-          "maxItems": 256,
-          "items": { "$ref": "#/$defs/processFact" }
-        },
+        "processes": { "$ref": "#/$defs/workloadProcessList" },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -1316,6 +827,7 @@
       "additionalProperties": false,
       "required": [
         "phase",
+        "target_sha",
         "target_admitted",
         "collector_uid",
         "collector_gid",
@@ -1336,18 +848,19 @@
       ],
       "properties": {
         "phase": { "const": "post-cleanup" },
+        "target_sha": { "$ref": "#/$defs/workloadTargetSha" },
         "target_admitted": { "type": "boolean" },
         "collector_uid": { "const": 20000 },
         "collector_gid": { "const": 20000 },
         "complete": { "type": "boolean" },
-        "owned_units": { "$ref": "#/$defs/stringArray" },
+        "owned_units": { "$ref": "#/$defs/cleanupInventoryNames" },
         "generated_services": { "$ref": "#/$defs/stringArray" },
         "containers": { "$ref": "#/$defs/stringArray" },
-        "networks": { "$ref": "#/$defs/stringArray" },
+        "networks": { "$ref": "#/$defs/workloadNetworkNames" },
         "volumes": { "$ref": "#/$defs/stringArray" },
-        "all_containers": { "$ref": "#/$defs/stringArray" },
-        "all_networks": { "$ref": "#/$defs/stringArray" },
-        "all_volumes": { "$ref": "#/$defs/stringArray" },
+        "all_containers": { "$ref": "#/$defs/cleanupInventoryNames" },
+        "all_networks": { "$ref": "#/$defs/cleanupInventoryNames" },
+        "all_volumes": { "$ref": "#/$defs/cleanupInventoryNames" },
         "migration_invocation_count": {
           "type": "integer",
           "minimum": 0,
@@ -1355,11 +868,7 @@
         },
         "podman_api": { "type": "boolean" },
         "user_work": { "$ref": "#/$defs/userWork" },
-        "processes": {
-          "type": "array",
-          "maxItems": 256,
-          "items": { "$ref": "#/$defs/processFact" }
-        },
+        "processes": { "$ref": "#/$defs/workloadProcessList" },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -1368,6 +877,9 @@
       "additionalProperties": false,
       "required": [
         "protocol_version",
+        "claim_scope",
+        "database_scope",
+        "target_sha",
         "instance",
         "result",
         "failed_admission_invariants",
@@ -1377,7 +889,14 @@
       ],
       "properties": {
         "protocol_version": { "const": 1 },
-        "instance": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
+        "claim_scope": {
+          "const": "disposable-rootless-application-integration"
+        },
+        "database_scope": {
+          "const": "disposable-postgresql-18-fixture"
+        },
+        "target_sha": { "$ref": "#/$defs/workloadTargetSha" },
+        "instance": { "$ref": "#/$defs/workloadInstance" },
         "result": { "enum": ["passed", "failed"] },
         "failed_admission_invariants": { "$ref": "#/$defs/invariantArray" },
         "baseline": { "$ref": "#/$defs/baselineObservation" },
@@ -1402,9 +921,9 @@
                     "properties": {
                       "network_present": { "const": true },
                       "volume_present": { "const": true },
-                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "network_id": { "$ref": "#/$defs/workloadHexDigest" },
                       "volume_created_at": {
-                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                        "$ref": "#/$defs/workloadCreatedAt"
                       }
                     }
                   }
@@ -1417,9 +936,9 @@
                   "quadlet_search_paths": {
                     "const": ["/etc/containers/systemd/users/20000"]
                   },
-                  "installed_units": { "minItems": 16, "maxItems": 16 },
-                  "generated_services": { "minItems": 15, "maxItems": 15 },
-                  "containers": { "minItems": 10, "maxItems": 10 },
+                  "installed_units": { "minItems": 15, "maxItems": 15 },
+                  "generated_services": { "minItems": 14, "maxItems": 14 },
+                  "containers": { "minItems": 9, "maxItems": 9 },
                   "networks": { "minItems": 2, "maxItems": 2 },
                   "volumes": { "minItems": 3, "maxItems": 3 },
                   "podman_rootless": { "const": true },
@@ -1429,9 +948,9 @@
                     "properties": {
                       "network_present": { "const": true },
                       "volume_present": { "const": true },
-                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "network_id": { "$ref": "#/$defs/workloadHexDigest" },
                       "volume_created_at": {
-                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                        "$ref": "#/$defs/workloadCreatedAt"
                       }
                     }
                   }
@@ -1452,9 +971,9 @@
                     "properties": {
                       "network_present": { "const": true },
                       "volume_present": { "const": true },
-                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "network_id": { "$ref": "#/$defs/workloadHexDigest" },
                       "volume_created_at": {
-                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                        "$ref": "#/$defs/workloadCreatedAt"
                       }
                     }
                   }
@@ -1488,8 +1007,6 @@
             "manager-environment-set",
             "pre-reload-manager-environment-read",
             "pre-reload-manager-environment-admission",
-            "manager-environment-admission",
-            "user-environment-generator-admission",
             "user-environment-generator-inventory-read",
             "user-environment-generator-inventory-admission",
             "user-environment-generator-presence-admission",
@@ -1503,7 +1020,6 @@
             "target-unit-admission",
             "generated-unit-admission",
             "target-start",
-            "post-manager-environment-read",
             "post-activation-manager-environment-read",
             "post-activation-manager-environment-admission",
             "quadlet-search-path-admission",
@@ -1562,7 +1078,6 @@
         }
       ]
     },
-    "nonNegativeInteger": { "type": "integer", "minimum": 0 },
     "shortString": { "type": "string", "maxLength": 64 },
     "commandArray": {
       "type": "array",
@@ -1574,58 +1089,11 @@
         "pattern": "^[^\\u0000]+$"
       }
     },
-    "mediumString": { "type": "string", "maxLength": 256 },
     "stringArray": {
       "type": "array",
       "uniqueItems": true,
       "maxItems": 128,
       "items": { "type": "string", "maxLength": 4096 }
-    },
-    "packageFact": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["version", "architecture", "origin", "suite"],
-      "properties": {
-        "version": { "$ref": "#/$defs/mediumString" },
-        "architecture": { "$ref": "#/$defs/shortString" },
-        "origin": { "$ref": "#/$defs/mediumString" },
-        "suite": { "$ref": "#/$defs/mediumString" }
-      }
-    },
-    "subordinateIdFact": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["start", "count", "entry_count", "overlap"],
-      "properties": {
-        "start": { "$ref": "#/$defs/nonNegativeInteger" },
-        "count": { "$ref": "#/$defs/nonNegativeInteger" },
-        "entry_count": { "$ref": "#/$defs/nonNegativeInteger" },
-        "overlap": { "type": "boolean" }
-      }
-    },
-    "systemdUserFacts": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "manager_available",
-        "starts_at_boot",
-        "linger_enabled",
-        "dbus_session_available",
-        "runtime_directory",
-        "runtime_directory_uid",
-        "runtime_directory_gid",
-        "runtime_directory_mode"
-      ],
-      "properties": {
-        "manager_available": { "type": "boolean" },
-        "starts_at_boot": { "type": "boolean" },
-        "linger_enabled": { "type": "boolean" },
-        "dbus_session_available": { "type": "boolean" },
-        "runtime_directory": { "type": "string", "maxLength": 4096 },
-        "runtime_directory_uid": { "type": "integer", "minimum": -1 },
-        "runtime_directory_gid": { "type": "integer", "minimum": -1 },
-        "runtime_directory_mode": { "type": "string", "pattern": "^0[0-7]{3}$" }
-      }
     }
   }
 }

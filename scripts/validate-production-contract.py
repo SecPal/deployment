@@ -22,33 +22,56 @@ import yaml
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "ci-cloud"))
+import rocky_preparation_contract as host_provenance
+import postgresql_qualification_contract as native_postgresql
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_SCHEMA_PATH = ROOT / "schemas/production-inventory.schema.json"
 HOST_FACTS_SCHEMA_PATH = ROOT / "schemas/production-host-facts.schema.json"
 MAX_INPUT_BYTES = 1024 * 1024
 REQUIRED_TOOLS = {
+    "ausearch",
     "bash",
     "curl",
     "df",
     "findmnt",
     "getfacl",
     "getent",
+    "getenforce",
     "gh",
     "id",
     "install",
     "loginctl",
+    "matchpathcon",
     "mktemp",
     "newgidmap",
     "newuidmap",
     "podman",
     "python3",
     "realpath",
+    "restorecon",
+    "rpm",
+    "semanage",
     "sha256sum",
     "stat",
     "systemctl",
     "timedatectl",
 }
+NOARCH_RPM_PACKAGE_KEYS = frozenset(
+    {
+        "container_selinux",
+        "policycoreutils_python_utils",
+        "selinux_policy_targeted",
+    }
+)
+RPM_ARCHITECTURES = {
+    "amd64": "x86_64",
+    "arm64": "aarch64",
+}
+QUALIFIED_ROCKY_MINORS = frozenset({"10.2"})
+CERTBOT_PACKAGE_POLICY = ROOT / "config/production/certbot-package-policy.json"
 MANAGED_PATH_ROOTS = {
     "runtime_secrets": PurePosixPath("/run/secpal"),
 }
@@ -206,16 +229,6 @@ CANONICAL_PATHS: dict[str, dict[str, Any]] = {
         "lifecycle": "reconstructable",
         "decision_issue": None,
     },
-    "postgresql_data": {
-        "owner_role": "state-contract",
-        "uid": 100998,
-        "gid": 200998,
-        "container_uid": 999,
-        "container_gid": 999,
-        "mode": "0700",
-        "lifecycle": "persistent",
-        "decision_issue": None,
-    },
     "private_application_storage": {
         "owner_role": "state-contract",
         "uid": 110000,
@@ -233,16 +246,6 @@ CANONICAL_PATHS: dict[str, dict[str, Any]] = {
         "container_uid": 10001,
         "container_gid": 10001,
         "mode": "0750",
-        "lifecycle": "persistent",
-        "decision_issue": None,
-    },
-    "valkey_data": {
-        "owner_role": "state-contract",
-        "uid": 110001,
-        "gid": 210001,
-        "container_uid": 10002,
-        "container_gid": 10002,
-        "mode": "0700",
         "lifecycle": "persistent",
         "decision_issue": None,
     },
@@ -303,10 +306,8 @@ CANONICAL_PATHS: dict[str, dict[str, Any]] = {
 
 HEADROOM_MINIMUMS = {
     "podman_graph_root": (21474836480, 200000),
-    "postgresql_data": (21474836480, 200000),
     "private_application_storage": (10737418240, 100000),
     "public_application_storage": (1073741824, 20000),
-    "valkey_data": (2147483648, 20000),
     "logs": (5368709120, 50000),
     "edge_state": (2147483648, 20000),
     "acme_state": (1073741824, 20000),
@@ -864,6 +865,40 @@ def validate_platform_facts(inventory: dict[str, Any], facts: dict[str, Any]) ->
         raise ContractViolation("host-facts hostname does not match the inventory")
     if facts["architecture"] != inventory["host"]["architecture"]:
         raise ContractViolation("host architecture does not match the inventory")
+    version_id = facts["os"]["version_id"]
+    if version_id not in QUALIFIED_ROCKY_MINORS:
+        raise ContractViolation(
+            "Rocky Linux minor is not in the reviewed qualification allowlist"
+        )
+    validate_tls_package_provenance(
+        facts["os"]["package_provenance"], RPM_ARCHITECTURES[facts["architecture"]]
+    )
+
+    cpu = facts["cpu"]
+    if facts["architecture"] == "amd64":
+        if (
+            cpu["admission_method"] != "glibc-loader-hwcaps"
+            or cpu["x86_64_level"] != "x86-64-v3"
+        ):
+            raise ContractViolation(
+                "amd64 admission requires Rocky's glibc-loader x86-64-v3 result"
+            )
+    elif (
+        cpu["admission_method"] != "rocky-aarch64-native"
+        or cpu["x86_64_level"] is not None
+    ):
+        raise ContractViolation(
+            "arm64 admission requires independent Rocky aarch64 qualification"
+        )
+
+
+def validate_tls_package_provenance(provenance: dict[str, Any], architecture: str) -> None:
+    """Consume the existing host owner; supplied facts remain synthetic-only."""
+    try:
+        policy = json.loads(CERTBOT_PACKAGE_POLICY.read_text(encoding="utf-8"))
+        host_provenance.admit_certbot_exception(provenance, architecture, policy)
+    except (OSError, ValueError, host_provenance.ContractError) as error:
+        raise ContractViolation("TLS-specific Certbot package provenance rejected") from error
 
 
 def validate_kernel_facts(kernel: dict[str, Any], architecture: str) -> None:
@@ -874,7 +909,7 @@ def validate_kernel_facts(kernel: dict[str, Any], architecture: str) -> None:
     )
     if kernel_match is None:
         raise ContractViolation(
-            "host kernel must be the Debian 13 stable Linux 6.12 series"
+            "host kernel must be the Rocky Linux 10 stable Linux 6.12 series"
         )
     kernel_version = tuple(int(kernel_match.group(index)) for index in (1, 2, 3))
     kernel_suffix = kernel_match.group("suffix") or ""
@@ -884,16 +919,23 @@ def validate_kernel_facts(kernel: dict[str, Any], architecture: str) -> None:
         or KERNEL_RELEASE_CANDIDATE_PATTERN.search(kernel_suffix)
     ):
         raise ContractViolation(
-            "host kernel must be the Debian 13 stable Linux 6.12 series"
+            "host kernel must be the Rocky Linux 10 stable Linux 6.12 series"
         )
     if kernel["package_architecture"] != architecture:
         raise ContractViolation(
             "kernel package architecture does not match the admitted host architecture"
         )
-    apparmor = kernel["apparmor"]
-    if apparmor["profiles_in_enforce_mode"] > apparmor["profiles_loaded"]:
+
+
+def validate_selinux_facts(selinux: dict[str, Any]) -> None:
+    workload = selinux["workload"]
+    if workload["process_mcs"] != workload["storage_mcs"]:
         raise ContractViolation(
-            "AppArmor enforcing-profile count exceeds the loaded-profile count"
+            "representative workload process and storage MCS ranges do not match"
+        )
+    if workload["cross_boundary_process_mcs"] == workload["storage_mcs"]:
+        raise ContractViolation(
+            "SELinux negative boundary does not use a distinct MCS range"
         )
 
 
@@ -902,9 +944,27 @@ def validate_runtime_facts(
 ) -> None:
     runtime = facts["runtime"]
     service_account = inventory["service_account"]
+    installation = runtime["installation"]
+    for package_key, package_name in installation["installed_packages"].items():
+        expected_architecture = (
+            "noarch"
+            if package_key in NOARCH_RPM_PACKAGE_KEYS
+            else RPM_ARCHITECTURES[facts["architecture"]]
+        )
+        nevra = installation["installed_nevras"][package_key]
+        if re.fullmatch(
+            rf"{re.escape(package_name)}-(?:[0-9]+:)?"
+            rf"[A-Za-z0-9_.+~^]+-[A-Za-z0-9_.+~^]+\."
+            rf"{re.escape(expected_architecture)}",
+            nevra,
+        ) is None:
+            raise ContractViolation(
+                "installed package NEVRA does not match its package name and "
+                "admitted architecture"
+            )
     podman_version = parse_version(runtime["version"], "host facts.runtime.version")
-    if podman_version < (5, 4, 2) or podman_version >= (6, 0, 0):
-        raise ContractViolation("Podman must be supported 5.x at or above 5.4.2")
+    if podman_version < (5, 8, 2) or podman_version >= (6, 0, 0):
+        raise ContractViolation("Podman must be qualified Rocky 5.x at or above 5.8.2")
     if (
         runtime["owner_uid"] != service_account["uid"]
         or runtime["owner_gid"] != service_account["gid"]
@@ -1201,10 +1261,21 @@ def validate_resource_facts(
         )
 
 
-def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> None:
+def validate_host_facts(
+    inventory: dict[str, Any], facts: dict[str, Any], *, synthetic: bool = True
+) -> None:
     validate_host_facts_schema(facts)
+    if not synthetic:
+        raise ContractViolation(
+            "caller-supplied host facts cannot establish trusted Rocky-native evidence"
+        )
+    if facts["evidence_class"] != "synthetic":
+        raise ContractViolation(
+            "host facts evidence_class must be synthetic in fixture-validation mode"
+        )
     validate_platform_facts(inventory, facts)
     validate_kernel_facts(facts["kernel"], facts["architecture"])
+    validate_selinux_facts(facts["selinux"])
     validate_runtime_facts(inventory, facts)
     validate_service_account_facts(inventory, facts)
     validate_network_facts(inventory, facts["network"])
@@ -1212,6 +1283,18 @@ def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> Non
     validate_tool_facts(facts["tools"])
     validate_filesystem_facts(inventory, facts["filesystems"])
     validate_resource_facts(inventory, facts["resources"])
+    try:
+        native_postgresql.admit_native_storage(facts["native_postgresql"])
+    except native_postgresql.QualificationError:
+        raise ContractViolation("native PostgreSQL data capacity is insufficient or invalid") from None
+    pg_headroom = facts["native_postgresql"]["headroom"]
+    for filesystem_total, host_total in (
+        ("filesystem_total_bytes", "storage_total_bytes"),
+        ("filesystem_total_inodes", "total_inodes"),
+    ):
+        if pg_headroom[filesystem_total] > facts["resources"][host_total]:
+            raise ContractViolation("native PostgreSQL filesystem exceeds host total")
+
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -1239,10 +1322,10 @@ def main() -> int:
         inventory = read_document(arguments.inventory, "inventory")
         validate_inventory(inventory, synthetic=arguments.synthetic)
         host_facts = read_document(arguments.host_facts, "host facts")
-        validate_host_facts(inventory, host_facts)
+        validate_host_facts(inventory, host_facts, synthetic=arguments.synthetic)
     except ContractViolation as exc:
         abort(str(exc))
-    print("Production inventory and supplied host facts satisfy schema version 1.")
+    print("Production inventory v1 and supplied Rocky host facts v2 satisfy admission.")
     return 0
 
 

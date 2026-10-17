@@ -148,15 +148,36 @@ fallbacks; they do not become part of this contract.
 The current provider-specific implementations remain the concrete reference
 examples. They are not wrapped in a new runtime:
 
-| Existing path                  | Portable seam                                                                                                                                     | Existing provider-specific evidence                                                                  |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `infra/ci-cloud/digitalocean/` | reviewed profile selects DigitalOcean; OpenTofu apply creates; outputs and remote evidence inspect; saved exact state drives destroy              | `ci-cloud-evidence.schema.json`, exact OpenTofu state artifact, provider image and machine read-back |
-| `infra/ci-cloud/gcp/`          | reviewed profile selects GCP; OpenTofu apply creates; immutable image/resource outputs inspect; saved exact state drives destroy                  | `ci-cloud-evidence.schema.json`, instance/disk/image outputs, exact OpenTofu state artifact          |
-| `infra/ci-cloud/gcp-rocky/`    | WIF provider context and closed profile authorize create; continuation admission and provider read-back inspect; saved exact state drives destroy | Rocky discovery, continuation, preparation, qualification, and failure schemas                       |
+| Existing path               | Portable seam                                                                                                                                     | Existing provider-specific evidence                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `infra/ci-cloud/gcp-rocky/` | WIF provider context and closed profile authorize create; continuation admission and provider read-back inspect; saved exact state drives destroy | Rocky discovery, continuation, preparation, qualification, and failure schemas |
 
-These qualification paths do not currently expose a rebuild operation. A
-portable invocation against them must therefore treat rebuild as unsupported
-rather than approximating it. Their provider products, fixed regions, and machine
+`infra/ci-cloud/digitalocean/` and `infra/ci-cloud/gcp/` retain only their pinned
+provider configuration and locks for native OpenTofu state-driven destruction.
+They declare no resources or data sources and provide no provisioning path.
+The GCP provider keeps the reviewed `secpal-dev` project and
+`europe-west3-a` zone. These provider configurations preserve cleanup of all
+resource types recorded in authenticated exact-run state, including legacy
+firewalls, networks, subnets, SSH keys and tags that the TTL janitors do not
+cover. They remain OpenTofu-owned dependency manifests for this cleanup purpose.
+
+A state-driven destroy requires separate operator authorization and independent
+verification of resource ownership, retained state and recovery responsibilities.
+No provider operation or state destruction is authorized by source retirement.
+The configurations can be removed only after those responsibilities are
+independently discharged.
+
+The retained legacy DigitalOcean and GCP janitors are cleanup-only capabilities,
+not provisioning adapters. Their ownership, TTL, and exact-resource validation
+remain required until external resource and recovery responsibilities are
+independently discharged. The legacy GCP IAM role remains a reference for that
+authority; removing provisioning source does not authorize live IAM changes.
+The separate `gcp-rocky-janitor.py` remains an active fallback for current Rocky
+qualification resources, with its existing narrow ownership and TTL contract.
+
+The current Rocky qualification path does not expose a rebuild operation. A
+portable invocation against it must therefore treat rebuild as unsupported
+rather than approximating it. Its provider products, fixed regions, and machine
 profiles remain reviewed qualification inputs and evidence, not portable
 architecture vocabulary or production placement policy.
 

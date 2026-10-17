@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Positive, negative-mutation, and synthetic host-fact tests for D.1."""
+"""Positive, negative-mutation, and synthetic production host-fact tests."""
 
 from __future__ import annotations
 
@@ -104,7 +104,9 @@ def assert_schema_objects_are_closed(value: Any, path: tuple[str, ...] = ()) -> 
 def main() -> int:
     for required in (VALIDATOR, SCHEMA, HOST_FACTS_SCHEMA, EXAMPLE):
         if not required.is_file():
-            raise AssertionError(f"required D.1 artifact is missing: {required.relative_to(ROOT)}")
+            raise AssertionError(
+                f"required production contract artifact is missing: {required.relative_to(ROOT)}"
+            )
 
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator.check_schema(schema)
@@ -152,8 +154,8 @@ def main() -> int:
         ("missing-schema-version", lambda d: d.pop("schema_version"), None),
         ("future-schema-version", lambda d: d.update({"schema_version": 2}), None),
         (
-            "relative-postgresql-path",
-            lambda d: set_nested(d, ("paths", "postgresql_data", "path"), "data/postgres"),
+            "relative-public-storage-path",
+            lambda d: set_nested(d, ("paths", "public_application_storage", "path"), "data/public"),
             None,
         ),
         (
@@ -168,16 +170,16 @@ def main() -> int:
             lambda d: set_nested(
                 d,
                 ("paths", "private_application_storage", "path"),
-                d["paths"]["postgresql_data"]["path"],
+                d["paths"]["public_application_storage"]["path"],
             ),
             None,
         ),
         (
-            "service-home-conflicts-with-postgresql",
+            "service-home-conflicts-with-private-storage",
             lambda d: set_nested(
                 d,
                 ("service_account", "home"),
-                d["paths"]["postgresql_data"]["path"],
+                d["paths"]["private_application_storage"]["path"],
             ),
             None,
         ),
@@ -531,10 +533,9 @@ def main() -> int:
         "malformed-kernel-release.yaml",
         "cgroup-v1.yaml",
         "unsupported-os.yaml",
+        "debian-host.yaml",
         "ubuntu-host.yaml",
-        "future-debian-major.yaml",
-        "floating-stable-suite.yaml",
-        "missing-security-suite.yaml",
+        "unqualified-rocky-minor.yaml",
         "security-updates-disabled.yaml",
         "automatic-reboot-enabled.yaml",
         "local-kernel-source.yaml",
@@ -624,7 +625,7 @@ def main() -> int:
             raise AssertionError("duplicate inventory key failure was not deterministic")
 
         nested_inventory = copy.deepcopy(example)
-        nested_path = f'{nested_inventory["paths"]["postgresql_data"]["path"]}/private'
+        nested_path = f'{nested_inventory["paths"]["public_application_storage"]["path"]}/private'
         set_nested(
             nested_inventory,
             ("paths", "private_application_storage", "path"),

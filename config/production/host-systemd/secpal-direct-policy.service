@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+[Unit]
+Description=SecPal private DIRECT PROXY decoder isolation
+Requires=nftables.service secpal-product-backend-policy.service
+After=secpal-product-backend-policy.service nftables.service
+PartOf=nftables.service secpal-product-backend-policy.service
+Before=haproxy.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/secpal/haproxy-direct-policy --activate
+ExecReload=/usr/bin/python3 -I /usr/local/libexec/secpal/haproxy-direct-policy --check
+ExecStartPost=/usr/bin/python3 -I /usr/local/libexec/secpal/haproxy-direct-policy --check
+ExecStopPost=/usr/bin/python3 -I /usr/local/libexec/secpal/haproxy-direct-policy --withdraw
+UMask=0077
+RuntimeDirectory=secpal-direct-policy
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

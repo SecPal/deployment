@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/deployment/schemas/certbot-package-observation.schema.json",
+  "title": "Native Certbot package observations",
+  "description": "Closed target-bound observations; accepted only with independently authenticated native transport and separate Rocky host admission.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_class",
+    "target_sha",
+    "architecture",
+    "package_provenance"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "evidence_class": { "const": "rocky-native" },
+    "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "architecture": { "enum": ["x86_64", "aarch64"] },
+    "package_provenance": {
+      "$ref": "https://github.com/SecPal/deployment/schemas/production-host-facts.schema.json#/properties/os/properties/package_provenance"
+    }
+  }
+}

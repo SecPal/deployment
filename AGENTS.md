@@ -12,29 +12,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - Treat sibling repositories as read-only references by default.
 - Preserve existing worktrees and changes; never overwrite work you do not own.
 - Never use destructive Git commands, force-push, or bypass hooks.
+- `SECPAL_SIGNING_FORMAT: SSH`.
+  Preserve existing SSH keys and signing configuration. GitHub-generated
+  signatures are provider evidence, not SecPal OpenPGP signing authority.
+  Every PR commit must have GitHub `verification.verified == true`.
 - Keep one coherent topic per branch and pull request.
 
-## Canonical work graph
+## Source delivery
 
-- Follow `SecPal/.github/docs/work-graph-contract.md` as the single authority
-  for work-graph, delivery, replanning, and evidence semantics. This repository
-  adds only deployment-specific implementation and security constraints.
-- Follow `SecPal/.github/docs/evidence-architecture-contract.md` as the
-  authoritative companion for evidence-pipeline and external-system
-  architecture. Do not create independent generic definitions of its
-  observation, normalization, admission, assembly, invariant-ownership,
-  diagnosability, or anti-loop rules here. Deployment-specific constraints in
-  this baseline may strengthen those rules at deployment trust boundaries but
-  do not replace their canonical definitions.
-- The native GitHub graph state is authoritative. Human-readable diagrams and
-  prose are explanatory only and must not duplicate native relationship or
-  progress state.
-- A leaf owns one reviewable contract and one primary delivery pull request,
-  linked with `Fixes #<leaf>`. A leaf inside an epic also carries
-  `Part of: #<parent>` as canonical delivery linkage, not graph authority.
-- Promote a leaf to a sub-epic when it needs multiple independently reviewable
-  contracts or delivery pull requests. Preserve parallelism: use dependencies
-  only for genuine prerequisites and native sibling order for preference.
+Use native GitHub issues, relationships, pull requests, reviews, and checks.
+Keep changes reviewable and follow the repository's existing validation.
+
+Follow `SecPal/.github/docs/evidence-architecture-contract.md` for
+external-system evidence. Deployment-specific security constraints below and
+executable repository validators own cloud, host, and conformance admission.
 
 ## Security boundaries
 
@@ -63,9 +54,9 @@ Never print secret values to logs.
 - Behavior-preserving refactors may rely on unchanged behavior tests,
   characterization, structural, source-shape, security, or pinned-equivalence
   evidence. Do not manufacture a failing-first test when behavior is preserved.
-- If a leaf promises a real-system or cloud outcome, repository-authored
+- If a task promises a real-system or cloud outcome, repository-authored
   fixtures cannot replace real-system evidence. Do not require a real-system
-  run when the leaf promises no real-system outcome.
+  run when the task promises no real-system outcome.
 - One scenario or evidence artifact may satisfy several acceptance criteria.
   Stop at the smallest non-redundant evidence set; do not create one test per
   finding or one evidence leaf per seam.
@@ -83,27 +74,6 @@ Never print secret values to logs.
   records the resolved provider image ID and exact installed package versions in
   closed schema-validated evidence, then re-admits the expected distribution
   provenance.
-
-## PR review lifecycle
-
-The canonical review lifecycle authority is
-[SecPal/.github/.agents/skills/secpal-pr-review/references/contract.md](https://github.com/SecPal/.github/blob/main/.agents/skills/secpal-pr-review/references/contract.md).
-The rules below are a subordinate safety net for unavailable skill discovery,
-not a second review contract.
-
-- Review processing is finite. A new commit does not authorize another review,
-  and remediation does not authorize another review. Unless the current
-  explicit operator instruction authorizes one additional bounded review round,
-  agents must not request, trigger, recommend, or wait for another review. A
-  generic review, remediation, review loop is prohibited.
-- After the first explicitly authorized `Draft -> Ready`, Ready is monotonic.
-  Remediation, pushes, CI, findings, metadata changes, and bounded recovery must
-  not cause `Ready -> Draft` or `Ready -> Draft -> Ready`. A later Draft
-  transition requires explicit operator authorization for a separate stated
-  reason.
-- A new explicit operator instruction that stops, narrows, prohibits, or pauses
-  work supersedes unfinished agent and delegated work. The coordinator must stop
-  delegated work when it cannot propagate that instruction reliably.
 
 ## Validator and evidence design
 
