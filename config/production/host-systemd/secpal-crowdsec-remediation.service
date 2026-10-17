@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[Unit]
+Description=Bounded local CrowdSec projection through the SecPal host firewall
+After=crowdsec.service nftables.service
+Wants=crowdsec.service
+
+[Service]
+Type=oneshot
+User=root
+SupplementaryGroups=secpal-crowdsec
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/secpal/crowdsec-host
+LoadCredential=bouncer:/etc/secpal/credentials/crowdsec-bouncer.key
+UMask=0077
+UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH PYTHONPATH PYTHONHOME
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/secpal/host-firewall
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+InaccessiblePaths=-/etc/secpal/credentials -/etc/ssh -/etc/letsencrypt -/etc/pki -/srv/secpal/acme -/etc/haproxy/secpal-viewer.pem -/var/lib/pgsql -/run/docker.sock -/run/podman -/run/user -/srv/secpal/secrets -/srv/secpal/crowdsec -/run/credentials/crowdsec.service
+TimeoutStartSec=120s

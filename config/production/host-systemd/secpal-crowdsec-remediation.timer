@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[Unit]
+Description=Reconcile bounded local CrowdSec decisions
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=secpal-crowdsec-remediation.service
+
+[Install]
+WantedBy=timers.target

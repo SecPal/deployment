@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+type: leaky
+name: secpal/haproxy-auth-v1
+description: Repeated API authentication failures from the canonical client
+filter: evt.Meta.log_type == 'secpal_http' && evt.Parsed.http_status == '401' && evt.Parsed.origin == 'api' && evt.Parsed.security == 'accepted'
+groupby: evt.Meta.source_ip
+capacity: 5
+leakspeed: 10s
+blackhole: 1m
+labels:
+  service: http
+  confidence: 3
+  spoofable: 0
+  remediation: true

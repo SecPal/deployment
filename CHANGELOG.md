@@ -9,6 +9,10 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- Add pinned host-native CrowdSec configuration, authenticated local decision
+  selection and bounded projection through the accepted host firewall, with
+  independent security health and isolated native-process qualification.
+
 - Add the mode-specific native host firewall baseline, preserving specialized
   network barriers and bounded CrowdSec remediation without global ruleset flushes.
 

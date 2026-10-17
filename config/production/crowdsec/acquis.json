@@ -1,0 +1,16 @@
+{
+  "source": "journalctl",
+  "journalctl_filter": [
+    "_SYSTEMD_UNIT=sshd.service",
+    "_UID=0",
+    "+",
+    "_SYSTEMD_UNIT=haproxy.service",
+    "_TRANSPORT=stdout",
+    "--no-pager",
+    "--output=short"
+  ],
+  "labels": {
+    "type": "syslog",
+    "secpal_source": "host-security-v1"
+  }
+}

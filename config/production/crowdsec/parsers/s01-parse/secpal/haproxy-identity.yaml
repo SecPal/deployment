@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: secpal/haproxy-identity-v1
+description: Consume the accepted #220 canonical log producer; never HTTP headers
+filter: evt.Line.Labels.secpal_source == 'host-security-v1' && evt.Parsed.program == 'secpal-haproxy'
+onsuccess: next_stage
+grok:
+  pattern: "^peer=%{IP:network_peer} client=%{IP:canonical_client} request_id=%{NOTSPACE:request_id} method=%{WORD:http_method} origin=%{WORD:origin} backend=%{NOTSPACE:backend} server=%{NOTSPACE:server} status=%{INT:http_status} bytes=%{INT:bytes} duration_ms=%{INT:duration_ms} termination=%{NOTSPACE:termination} security=%{WORD:security}$"
+  apply_on: message
+statics:
+  - meta: source_ip
+    expression: evt.Parsed.canonical_client
+  - meta: network_peer
+    expression: evt.Parsed.network_peer
+  - meta: service
+    value: http
+  - meta: log_type
+    value: secpal_http
