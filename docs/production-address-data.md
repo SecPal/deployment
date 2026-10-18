@@ -11,6 +11,40 @@ new installation or update controller. The API owns source admission, session
 locking, CSV validation, activation and retention; see its
 [address-data contract](https://github.com/SecPal/api/blob/791f14bdc24ee723a05b99a8482c7affab8ec483/docs/ADDRESS_DATA.md).
 
+## Authorization boundary: lifecycle integration blocked
+
+The production inventory gate is binding. Inventory v1 remains valid but
+`features.address_data_imports: false` forbids address downloads, imports and
+activation. The [versioned inventory migration](architecture/production-inventory.md#version-1-to-version-2-mandatory-release-bound-address-reconciliation)
+introduces v2 with mandatory `address_data_imports: true`, leaving unrelated
+policy unchanged. This authorizes release reconciliation only when the selected
+inventory has actually been validated and admitted by the owning lifecycle.
+Online download and offline CSV input require the same authorization; the API
+release still exclusively owns source and checksum admission.
+
+**The current runtime seam does not enforce that inventory decision.** The
+renderer consumes `state-contract.json`, not production inventory. Its existing
+state-ready check validates state and secrets, not feature authorization. The
+inventory validator's host-fact path accepts synthetic fixtures only; it cannot
+serve as production activation authority. Neither the PHP wrapper nor generated
+units currently receive an admitted inventory/release decision. Do not activate
+this seam until #92/#93 implement and qualify that handoff. A compatible API image
+alone does not remove this blocker.
+
+Those owners must validate the complete inventory with the canonical schema and
+semantic admission, require v2 authorization for the selected immutable release,
+bind the admitted decision to that activation/update under their existing lock,
+and enforce it before any deployment database mutation. Missing, invalid, v1 or
+stale authorization must fail the operation before migration/download/import,
+including offline mode. An environment variable, unchecked flag, raw inventory
+mount or self-issued marker is not an accepted substitute. A disabled gate must
+never become a successful skip of required reconciliation. Transport and lifetime
+of the trusted decision belong to those owners, not a second controller in #344.
+
+The P1 authorization finding in PR #345 remains valid and unresolved until that
+execution path is enforceable. The v2 schema and fixture evidence establish only
+the policy contract, not runtime enforcement or production acceptance.
+
 ## Supported execution seam
 
 `scripts/production-migrate.php` bootstraps Laravel once and admits the selected
@@ -51,7 +85,9 @@ systemd does **not** execute it again. Full construction
 update/rollback [#93](https://github.com/SecPal/deployment/issues/93) are open.
 They must consume this seam under their existing deployment/migration lock:
 
-1. Admit the exact selected API artifact, compatible schema/data transition,
+1. Admit the validated v2 inventory's mandatory address authorization together
+   with the exact selected immutable API artifact, and enforce that bound decision
+   before any database mutation as described above. Admit compatible schema/data transition,
    credentials, storage, network policy and current Recovery Set.
 2. Stage the selected immutable artifact and generated declarations. Keep
    incompatible mutable application roles stopped under the owner's maintenance
@@ -78,7 +114,8 @@ needed. Never delete address tables, reset PGDATA or restore a whole customer
 database just to change reference data. Failed/interrupted inactive candidates
 and their eventual pruning remain API-owned.
 
-Managed private rollout automation must implement these same ordered commands,
+Managed private rollout automation must implement the same validated inventory
+authorization before mutation and these ordered commands,
 explicit re-execution, identity/readiness gate, credentials, timeout, session,
 storage and source-policy requirements under its own owner. It is not modified
 here. End-to-end installation, repeated update promotion and rollback remain
@@ -153,7 +190,8 @@ For an approved offline installation/update, stage the exact selected release
 CSV as `/srv/secpal/private-storage/address-data/release.csv`, readable only by
 the mapped application identity (file `0400`, private parent `0700`). It is a
 temporary reference-data handoff, not a customer Object. Render the existing
-units with:
+units with the following preparation command. This does not authorize activation
+or bypass the outstanding lifecycle admission handoff:
 
 ```sh
 python3 scripts/render-production-quadlets.py \

@@ -18,13 +18,63 @@ mechanism.
 
 ## Versioning and migration
 
-Inventory and host-fact schema version 1 are selected by the exact integer
-`schema_version: 1`. Unknown schema versions fail closed. Consumers do not
+Inventory versions 1 and 2 are selected by the exact integer `schema_version`;
+Rocky host facts use their separate version 2 contract. Unknown schema versions
+fail closed. Consumers do not
 coerce old values, ignore new fields, or silently accept a future version. Any
 incompatible schema change requires a reviewed contract change, positive and
 negative fixtures, and reviewed migration notes that state how an operator
 moves an inventory between versions. D.1 provides no implicit inventory
 migration.
+
+### Version 1 to version 2: mandatory release-bound address reconciliation
+
+Version 1 retains `features.address_data_imports: false` and does not authorize
+address downloads, import or activation. Historical v1 inventories and fixtures
+remain valid with their original admission semantics. They cannot authorize the
+release-reconciliation lifecycle introduced by
+[#344](https://github.com/SecPal/deployment/issues/344).
+
+Version 2 changes only that authorization: it requires
+`features.address_data_imports: true`. Address reconciliation is mandatory for
+each admitted release, not an optional installation, customer or tenant feature.
+All other fields and feature restrictions are unchanged. Both online and offline
+CSV input require the same authorization. The selected immutable API release
+exclusively owns the source URL and expected SHA-256; neither belongs in inventory.
+
+To migrate, review a copy of the selected v1 inventory and change exactly:
+
+```diff
+-schema_version: 1
++schema_version: 2
+ features:
+-  address_data_imports: false
++  address_data_imports: true
+```
+
+Validate the complete document with the canonical schema and existing semantic
+validator. Changing just the version or just the gate is invalid. Missing gates,
+non-boolean values, unsupported versions and changes to unrelated disabled gates
+fail admission. There is no automatic conversion or authorization default.
+
+**Lifecycle integration remains blocked.** The fixture validator below does not
+grant Deployment Authority. Construction [#92](https://github.com/SecPal/deployment/issues/92)
+and update/rollback [#93](https://github.com/SecPal/deployment/issues/93) must bind
+the validated v2 inventory and selected immutable release to their activation
+operation under the existing deployment/migration authority. They must enforce
+that decision before any deployment database mutation, and reject absent,
+invalid, v1 or stale authorization with a failed operation, never a successful
+skip. The retained state contract, renderer, an environment variable, an offline
+flag or the PHP one-shot cannot grant themselves that permission. No accepted
+runtime handoff for that decision is implemented here; schema admission alone
+does not make the retained one-shot safe to activate.
+
+Operators must also qualify a compatible publisher-verified API artifact,
+database/session permissions, resources and source egress or offline bytes before
+execution. A rollback must satisfy #93's application/schema/data compatibility
+and recovery gates; reverting inventory to v1 cannot authorize this lifecycle or
+remove existing verified reference data. See the
+[address-data handoff](../production-address-data.md) for the required sequence.
 
 Duplicate YAML mapping keys are malformed input and fail before schema
 validation. A later duplicate cannot replace an unsupported schema version or
@@ -245,6 +295,11 @@ explicit feature gates fixed to `false` in schema version 1. They describe the
 known dependency surface without authorizing it. Enabling any one requires a
 reviewed schema migration after its documented dependency and later
 secret/runtime contract are available; an inventory cannot opt into it early.
+
+The reviewed v2 contract above authorizes only mandatory release-bound address
+reconciliation. In v2, `address_data_imports` must be `true`; all unrelated gates
+retain their v1 values. This is a versioned policy change, not a freely selectable
+feature switch. Its lifecycle enforcement is still owned by #92/#93.
 
 ## Validation
 

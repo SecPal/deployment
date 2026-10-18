@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/SecPal/deployment/schemas/production-inventory.schema.json",
   "title": "SecPal production host inventory",
-  "description": "Version 1 provider-neutral, non-secret production host inputs.",
+  "description": "Versioned provider-neutral, non-secret production host inputs. Version 1 forbids address imports; version 2 requires release-bound address reconciliation.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,7 @@
   "properties": {
     "schema_version": {
       "type": "integer",
-      "const": 1
+      "enum": [1, 2]
     },
     "topology": {
       "const": "single-host"
@@ -350,7 +350,7 @@
           "const": false
         },
         "address_data_imports": {
-          "const": false
+          "type": "boolean"
         },
         "android_push": {
           "const": false
@@ -364,6 +364,33 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": { "const": 1 }
+        }
+      },
+      "then": {
+        "properties": {
+          "features": {
+            "properties": {
+              "address_data_imports": { "const": false }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "features": {
+            "properties": {
+              "address_data_imports": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "accountName": {
       "type": "string",
