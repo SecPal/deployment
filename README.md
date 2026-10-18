@@ -74,6 +74,10 @@ The [PROTECTED shared WAF contract](docs/cloudfront-waf.md) implements the
 distribution-level Anti-DDoS and privacy-minimized logging baseline without
 performing provider mutation.
 
+The [public finding and notification contract](docs/public-findings.md) exposes
+bounded producer evidence and independent Self-Hosted delivery without granting
+detectors, findings or notification adapters production action authority.
+
 The general PROTECTED Sandbox PoC is complete and retired. Portable production
 implementation is separately owned by #209; its native graph is authoritative
 for current delivery state. ADR-019 and Git history retain the durable PoC
