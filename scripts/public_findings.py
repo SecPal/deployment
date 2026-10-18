@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import re
+from threading import Lock
 
 MAX_BYTES = 4096
 
@@ -96,11 +97,12 @@ def accept(raw, *, source, subject_sha256, evidence_sha256, now):
 def tls_finding(observation, *, subject_sha256, evidence_sha256, now):
     """Project #103's actual fact, without duplicating its health decisions.
 
-    The evidence identity binds the canonical observation bytes. The caller
+    The evidence identity binds canonical observation and evaluation-time bytes. The caller
     independently authenticates collection and the opaque technical subject.
     """
     from viewer_tls_contract import health, OBSERVATION_FRESHNESS_SECONDS
-    if hashlib.sha256(_canonical(observation)).hexdigest() != evidence_sha256:
+    context = dict(observation=observation, evaluated_at=now)
+    if hashlib.sha256(_canonical(context)).hexdigest() != evidence_sha256:
         raise ValueError('finding-tls-evidence')
     fact = health(observation, now)
     source = Source(fact['producer'], 'health', fact['capability'],
@@ -138,15 +140,30 @@ def notify(raw, *, source, subject_sha256, evidence_sha256, now, notification_id
 
 
 def stream_adapter(stream):
-    """Representative Self-Hosted binary-stream adapter selected by the operator.
+    """Representative operator-owned binary stream; no other writers allowed.
 
-    Successful write + flush is local transport acknowledgment, not durability
-    or receiver acknowledgment. Broken/partial writes propagate to notify().
+    Short writes complete within the bounded record. After any failed write or
+    flush, the adapter refuses further records: a partial frame must not corrupt
+    subsequent delivery. Reconciliation/new transport is the operator's choice.
+    Write/flush acknowledges neither durability nor receiver acknowledgment.
     """
+    lock = Lock()
+    usable = True
+
     def send(envelope):
-        record = envelope + b'\n'
-        if stream.write(record) != len(record):
-            return False
-        stream.flush()
-        return True
+        nonlocal usable
+        with lock:
+            if not usable:
+                return False
+            usable = False
+            record = envelope + b'\n'
+            offset = 0
+            while offset < len(record):
+                count = stream.write(record[offset:])
+                if type(count) is not int or not 1 <= count <= len(record) - offset:
+                    return False
+                offset += count
+            stream.flush()
+            usable = True
+            return True
     return send

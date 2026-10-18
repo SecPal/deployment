@@ -120,14 +120,52 @@ class Findings(unittest.TestCase):
         with self.assertRaises(ValueError):
             remediation(config, None, '192.0.2.10', ttl=60)
 
-    def test_stream_failure_and_partial_write_are_not_delivery(self):
-        class Short:
-            def write(self, data): return len(data)-1
-            def flush(self): pass
+    def test_adapter_nonacknowledgment_is_not_delivery(self):
         arguments = dict(source=SOURCE, subject_sha256=SUBJECT, evidence_sha256=EVIDENCE,
                          now=NOW, notification_id='f'*64)
-        self.assertEqual(notify(wire(document()), send=stream_adapter(Short()), **arguments)['delivery'], 'FAILED')
         self.assertEqual(notify(wire(document()), send=lambda _: None, **arguments)['delivery'], 'FAILED')
+
+    def test_tls_evaluation_context_changes_evidence_at_time_threshold(self):
+        observation = dict(observed_at=NOW, not_after=NOW+30*86400+1,
+                           served='MATCH', renewal='SUCCESS', renewal_at=NOW)
+        digest = hashlib.sha256(json.dumps(dict(observation=observation, evaluated_at=NOW),
+                                sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        before = json.loads(tls_finding(observation, subject_sha256=SUBJECT,
+                                       evidence_sha256=digest, now=NOW))
+        self.assertEqual(before['condition'], 'HEALTHY')
+        with self.assertRaisesRegex(ValueError, 'finding-tls-evidence'):
+            tls_finding(observation, subject_sha256=SUBJECT, evidence_sha256=digest, now=NOW+2)
+        later_digest = hashlib.sha256(json.dumps(dict(observation=observation, evaluated_at=NOW+2),
+                                      sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        later = json.loads(tls_finding(observation, subject_sha256=SUBJECT,
+                                      evidence_sha256=later_digest, now=NOW+2))
+        self.assertEqual(later['condition'], 'DEGRADED')
+        self.assertNotEqual(before['evidence_sha256'], later['evidence_sha256'])
+
+    def test_short_writes_complete_and_failed_stream_cannot_corrupt_next_record(self):
+        class Short(io.BytesIO):
+            def write(self, data):
+                return super().write(data[:7])
+        class Interrupted(io.BytesIO):
+            def write(self, data):
+                if self.tell():
+                    raise OSError('bounded fixture interruption')
+                return super().write(data[:7])
+        arguments = dict(source=SOURCE, subject_sha256=SUBJECT, evidence_sha256=EVIDENCE,
+                         now=NOW, notification_id='f'*64)
+        stream = Short()
+        adapter = stream_adapter(stream)
+        for _ in range(2):
+            self.assertEqual(notify(wire(document()), send=adapter, **arguments)['delivery'], 'DELIVERED')
+        self.assertEqual([json.loads(line)['finding'] for line in stream.getvalue().splitlines()],
+                         [document(), document()])
+        broken = Interrupted()
+        adapter = stream_adapter(broken)
+        self.assertEqual(notify(wire(document()), send=adapter, **arguments)['delivery'], 'FAILED')
+        prefix = broken.getvalue()
+        self.assertEqual(len(prefix), 7)
+        self.assertEqual(notify(wire(document()), send=adapter, **arguments)['delivery'], 'FAILED')
+        self.assertEqual(broken.getvalue(), prefix, 'failed framing must not accept another record')
 
     def test_tls_consumes_existing_fact_without_changing_health_semantics(self):
         observation = dict(observed_at=NOW, not_after=NOW+100*86400,
@@ -139,7 +177,7 @@ class Findings(unittest.TestCase):
             observed = dict(observation, **delta)
             fact = health(observed, NOW)
             accepted = json.loads(tls_finding(observed, subject_sha256=SUBJECT,
-                                             evidence_sha256=hashlib.sha256(json.dumps(observed, sort_keys=True, separators=(",", ":")).encode()).hexdigest(), now=NOW))
+                                             evidence_sha256=hashlib.sha256(json.dumps(dict(observation=observed, evaluated_at=NOW), sort_keys=True, separators=(",", ":")).encode()).hexdigest(), now=NOW))
             self.assertEqual((accepted['condition'], accepted['reason']), (fact['state'], fact['reason']))
             self.assertEqual(accepted['observed_at'], fact['observed_at'])
             self.assertEqual(accepted['capability'], 'Security')
@@ -147,7 +185,7 @@ class Findings(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'finding-tls-evidence'):
             tls_finding(observation, subject_sha256=SUBJECT, evidence_sha256=EVIDENCE, now=NOW)
         invalid = dict(observation, not_after='invalid')
-        digest = hashlib.sha256(json.dumps(invalid, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        digest = hashlib.sha256(json.dumps(dict(observation=invalid, evaluated_at=NOW), sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         with self.assertRaisesRegex(ValueError, 'admit-tls-health-time'):
             tls_finding(invalid, subject_sha256=SUBJECT, evidence_sha256=digest, now=NOW)
 

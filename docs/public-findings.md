@@ -82,7 +82,10 @@ credentials remain obligations of the owning collector and administrator.
 `tls_finding(observation, subject_sha256=..., evidence_sha256=..., now=...)`
 calls the **existing** `viewer_tls_contract.health()`. Its condition/reason and
 observation time come directly from that function. The evidence digest must
-match the observation serialized with sorted keys and compact JSON separators.
+match `{"observation": observation, "evaluated_at": now}` serialized with sorted
+keys and compact JSON separators. The evaluation time is necessary to reproduce
+time-dependent certificate decisions; the same observation at a later threshold
+has a different evidence identity.
 It preserves the original fact schema, renewal freshness and certificate
 decisions. The full TLS fact remains the evidence; this bounded projection is
 not a replacement for it. Envelope admission may reject an old known fact until
@@ -137,6 +140,12 @@ result = notify(raw, source=source, subject_sha256=subject,
 ```
 
 The stream adapter is a representative transport, not an email/SaaS platform.
+Use an operator-owned stream with no independent writers and appropriate IO
+timeouts. Short writes complete from the returned offset. Calls through one
+adapter serialize entire records. After any write/flush failure or invalid write
+count, it refuses further records, preserving the interrupted frame for explicit
+reconciliation rather than corrupting subsequent notifications. It does not
+automatically reopen a stream, retry a record or claim atomic delivery.
 The consumer retains the original finding/evidence independently of delivery.
 `silent=True` suppresses the attempt only: validation still runs, the result is
 SILENCED and the finding is unchanged. Neither silence nor delivery failure
