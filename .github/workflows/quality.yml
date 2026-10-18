@@ -18,13 +18,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  repository-security:
+    name: Repository Security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      gate-state: ${{ steps.scan.outputs.gate-state }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Scan exact source with organization policy
+        id: scan
+        uses: SecPal/.github/.github/actions/trivy-repository-scan@6a6758681f4ebc46b4a33d442846d33d6b79785c # main
+
+      - name: Require clean source security
+        env:
+          SCAN_RESULT: ${{ steps.scan.outcome }}
+          GATE_STATE: ${{ steps.scan.outputs.gate-state }}
+        run: bash scripts/require-repository-security.sh "$SCAN_RESULT" "$GATE_STATE"
+
   repository-contract:
     name: Repository Contract
+    needs: repository-security
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Require successful source-security admission
+        env:
+          SCAN_RESULT: ${{ needs.repository-security.result }}
+          GATE_STATE: ${{ needs.repository-security.outputs.gate-state }}
+        run: bash scripts/require-repository-security.sh "$SCAN_RESULT" "$GATE_STATE"
 
       - name: Validate repository contract
         run: bash tests/repository-contract.sh

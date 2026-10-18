@@ -9,6 +9,9 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- Require exact-commit organization Trivy repository-security admission before
+  the protected Repository Contract check, rejecting non-CLEAN or missing evidence.
+
 - Add the portable endpoint-switch adapter contract with conditional mutation,
   independent read-back and observation-only recovery; writer authority remains
   owned by the replacement cutover.

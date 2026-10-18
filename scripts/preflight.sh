@@ -121,6 +121,7 @@ bash tests/production-state-native-lifecycle-gate.sh
 bash tests/production-state-native-lifecycle.sh
 bash tests/compose-prohibition-contract.sh
 bash tests/repository-contract.sh
+python3 tests/repository-security.py
 bash tests/production-host-contract.sh
 bash tests/runtime-secret-contract.sh
 bash tests/preflight-origin-contract.sh

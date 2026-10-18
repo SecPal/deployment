@@ -130,6 +130,26 @@ credentials. Security reports follow the organization-wide
 [SecPal security process](https://github.com/SecPal/.github/security/policy).
 The repository contents are not approved for production operation.
 
+Repository Quality runs the immutable organization Trivy repository-scan action
+against the exact checked-out commit before the required Repository Contract
+check can pass. Only a successful CLEAN result is admitted; actionable,
+review-required, unknown/stale, malformed, missing, failed, cancelled and skipped
+evidence cannot authorize source acceptance. The action has only contents-read
+permission and retains bounded, redacted evidence for 14 days.
+
+The shared vulnerability, secret and misconfiguration scanners cover supported
+source formats in the complete immutable Git snapshot. Current inputs include
+OpenTofu modules/provider declarations, the npm lockfile, the integration
+Containerfile and GitHub workflows. Quadlet, systemd, HAProxy, SELinux, shell and
+Python sources remain included in the source/secret scan; their specialized
+semantic validation remains with existing preflight and conformance owners.
+Trivy does not establish semantic coverage for every configuration format.
+No deployment-local scanner policy, exception or ignore mechanism is introduced.
+
+Repository source security is distinct from native runtime security, Rocky
+provider qualification and production acceptance. CLEAN source evidence proves
+none of those outcomes and grants no infrastructure or production authority.
+
 ## Development
 
 Run deterministic repository checks without starting the integration stack:
