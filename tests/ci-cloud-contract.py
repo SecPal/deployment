@@ -1334,15 +1334,49 @@ class CloudCIContractTests(unittest.TestCase):
         )
 
 
-    def cleanup_provider_version(self, directory: str) -> str:
+    def provider_pin(self, directory: str) -> str:
         versions = (ROOT / f"infra/ci-cloud/{directory}/versions.tf").read_text(
             encoding="utf-8"
         )
-        match = re.search(r'^\s*version\s*=\s*"= ([0-9]+\.[0-9]+\.[0-9]+)"',
+        match = re.search(r'^\s*version\s*=\s*"([^"]+)"',
                           versions, re.MULTILINE)
-        self.assertIsNotNone(match, "cleanup provider must declare an exact pin")
+        self.assertIsNotNone(match, "provider must declare a version")
         return match.group(1)
 
+
+    def cleanup_provider_version(self, directory: str) -> str:
+        return self.provider_pin(directory).strip().removeprefix("=").strip()
+
+
+    def test_accepts_equivalent_exact_version_constraints(self) -> None:
+        specification = importlib.util.spec_from_file_location("cloud_validator", VALIDATOR)
+        validator = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(validator)
+        for directory, source in (("digitalocean", "digitalocean/digitalocean"),
+                                  ("gcp", "hashicorp/google"),
+                                  ("gcp-rocky", "hashicorp/google")):
+            with tempfile.TemporaryDirectory(prefix="secpal-provider-pin-") as temporary:
+                fixture = Path(temporary)
+                provider = fixture / "infra/ci-cloud" / directory
+                provider.mkdir(parents=True)
+                for template in ("{}", "= {}", "={}", "  = {}  "):
+                    with self.subTest(directory=directory, template=template):
+                        (provider / "versions.tf").write_text(
+                            f'required_version = "{template.format("1.12.5")}"\n'
+                            f'source  = "{source}"\n'
+                            f'version = "{template.format("8.7.0")}"\n',
+                            encoding="utf-8",
+                        )
+                        (provider / ".terraform.lock.hcl").write_text(
+                            f'provider "registry.opentofu.org/{source}" {{\n'
+                            '  version = "8.7.0"\n'
+                            f'  constraints = "{template.format("8.7.0")}"\n'
+                            '}\n',
+                            encoding="utf-8",
+                        )
+                        self.assertEqual(
+                            "8.7.0", validator.validate_provider_pin(fixture, directory, source)
+                        )
 
     def test_accepts_consistent_cleanup_provider_updates(self) -> None:
         # Static fixtures prove pin agreement, not provider package compatibility.
@@ -1353,8 +1387,8 @@ class CloudCIContractTests(unittest.TestCase):
                 updated = f"{major}.{minor}.{patch + 1}"
                 fixture = self.mutated_root(
                     f"infra/ci-cloud/{directory}/versions.tf",
-                    f'version = "= {version}"',
-                    f'version = "= {updated}"',
+                    f'version = "{self.provider_pin(directory)}"',
+                    f'version = "{updated}"',
                 )
                 lock = fixture / f"infra/ci-cloud/{directory}/.terraform.lock.hcl"
                 document, count = re.subn(
@@ -1406,7 +1440,7 @@ class CloudCIContractTests(unittest.TestCase):
                 version = self.cleanup_provider_version(directory)
                 self.assert_mutation_rejected(
                     f"infra/ci-cloud/{directory}/versions.tf",
-                    f'version = "= {version}"',
+                    f'version = "{self.provider_pin(directory)}"',
                     f'version = "~> {version}"',
                 )
 
