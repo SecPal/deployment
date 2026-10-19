@@ -183,24 +183,31 @@ def validate_janitor_workflow(root: Path) -> None:
     validate_action_pins(document, relative)
 
 
+def exact_version(constraint: str) -> str | None:
+    """OpenTofu treats a bare version and an explicit equality identically."""
+    match = re.fullmatch(r"(?:=\s*)?([0-9]+\.[0-9]+\.[0-9]+)", constraint.strip())
+    return match.group(1) if match else None
+
+
 def validate_provider_pin(root: Path, directory: str, source: str) -> str:
     """versions.tf owns the pin; each readonly lock must agree with it."""
     versions = read(root, f"infra/ci-cloud/{directory}/versions.tf")
     lock = read(root, f"infra/ci-cloud/{directory}/.terraform.lock.hcl")
     label = "Rocky" if directory == "gcp-rocky" else "cleanup"
-    require('required_version = "= 1.12.5"' in versions, "OpenTofu version must be exact")
+    tofu_versions = re.findall(r'^\s*required_version\s*=\s*"([^"]*)"', versions, re.MULTILINE)
+    require(len(tofu_versions) == 1 and exact_version(tofu_versions[0]) == "1.12.5",
+            "OpenTofu version must be exact")
     require(f'source  = "{source}"' in versions, f"{label} provider source changed")
     provider_versions = re.findall(r'^\s*version\s*=\s*"([^"]*)"', versions, re.MULTILINE)
     require(len(provider_versions) == 1, f"{label} provider must declare one version")
-    pin = re.fullmatch(r"= ([0-9]+\.[0-9]+\.[0-9]+)", provider_versions[0])
-    require(pin is not None, f"{label} provider version must be exact")
-    version = pin.group(1)
+    version = exact_version(provider_versions[0])
+    require(version is not None, f"{label} provider version must be exact")
     require("~>" not in versions and ">=" not in versions, "mutable provider constraints are forbidden")
     require(f'provider "registry.opentofu.org/{source}"' in lock
             and re.search(r'version\s*=\s*"' + re.escape(version) + r'"', lock),
             f"{label} provider lock must match the pinned provider")
-    require(re.search(r'^\s*constraints\s*=\s*"' + re.escape(version) + r'"\s*$',
-                      lock, re.MULTILINE),
+    constraints = re.findall(r'^\s*constraints\s*=\s*"([^"]*)"\s*$', lock, re.MULTILINE)
+    require(len(constraints) == 1 and exact_version(constraints[0]) == version,
             f"{label} provider lock constraints must match the pinned provider")
     return version
 

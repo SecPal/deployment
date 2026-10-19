@@ -75,7 +75,7 @@ class TransportContract(unittest.TestCase):
         version = contract.schema()['properties']['google_provider_version']['const']
         root = ROOT/'infra/ci-cloud/gcp-rocky'
         self.assertRegex((root/'versions.tf').read_text(),
-                         r'version\s*=\s*"= ' + re.escape(version) + r'"')
+                         r'version\s*=\s*"\s*(?:=\s*)?' + re.escape(version) + r'\s*"')
         lock = (root/'.terraform.lock.hcl').read_bytes()
         self.assertEqual(hashlib.sha256(lock).hexdigest(), observer.GOOGLE_LOCK_SHA256)
         self.assertIn(f'/hashicorp/google/{version}/linux_amd64', str(observer.GOOGLE_INSTALL))
