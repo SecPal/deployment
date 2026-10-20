@@ -41,8 +41,8 @@ SAMPLE_INTERVAL = 0.2
 # The signed, lock-admitted package installs this exact filename and content.
 GOOGLE_INSTALL = Path(f'.terraform/providers/registry.opentofu.org/hashicorp/google/{contract.GOOGLE_PROVIDER_VERSION}/linux_amd64')
 GOOGLE_EXECUTABLE = 'terraform-provider-google'
-GOOGLE_EXECUTABLE_SHA256 = 'cbf6f96fdb795e6e7efc265bfcc92697236ac41e33f3af2cfce0db60fd4b1369'
-GOOGLE_LOCK_SHA256 = '488a9a5be05418dadf3eaa0f08a3723ff808e2b18359a8b394cfd6ee72028806'
+GOOGLE_EXECUTABLE_SHA256 = 'e42a86cfc670cfbfa560ef37777f7cf4fc7df192e66eaf3022a9343ce8efc4b0'
+GOOGLE_LOCK_SHA256 = '3642e1e619336b583fa55fc072bff1a9d146266ad18aa575db9b76946a8106dd'
 
 
 def file_identity(metadata):

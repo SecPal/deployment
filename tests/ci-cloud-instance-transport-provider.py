@@ -47,7 +47,7 @@ CONFIG = '''terraform {
   required_providers {
     google = {
       source = "hashicorp/google"
-      version = "= @GOOGLE_PROVIDER_VERSION@"
+      version = "@GOOGLE_PROVIDER_VERSION@"
     }
   }
 }

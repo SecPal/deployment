@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-PIN = "6a6758681f4ebc46b4a33d442846d33d6b79785c"
+PIN = "8eb0f61dc784d6954ae2d5043fce7f73870659be"
 ACTION = "SecPal/.github/.github/actions/trivy-repository-scan@" + PIN
 CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 GATE = ROOT / "scripts/require-repository-security.sh"
