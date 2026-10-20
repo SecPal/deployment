@@ -335,6 +335,32 @@ locals {
         self.assertLess(admit, workflow.index('      - name: Authenticate trusted provisioning through OIDC'))
         self.assertLess(admit, workflow.index('          tofu apply --auto-approve --input=false'))
 
+    def test_missing_or_invalid_run_inputs_cannot_plan_resource_operations(self):
+        # Native OpenTofu characterization of the existing input authority.
+        # Authored fixture values prove rejection only, never cloud admission.
+        valid = self.variables()
+        valid["postgresql_candidate_json"] = ""
+        required = set(valid) - {"postgresql_candidate_json"}
+        invalid = {
+            "runner_ipv4": ("0.0.0.0/0", "runner_ipv4 must be one IPv4 address"),
+            "ssh_public_key": ("ssh-ed25519 invalid other-run", "ssh_public_key must be"),
+            "trusted_control_sha": ("main", "trusted_control_sha must be"),
+            "target_sha": ("main", "target_sha must be"),
+            "exact_image_self_link": ("https://example.invalid/image", "exact_image_self_link must"),
+            "expires_at": (valid["created_at"], "expires_at must bind"),
+        }
+        for name in sorted(required):
+            with self.subTest(missing=name):
+                variables = dict(valid)
+                del variables[name]
+                (self.module / "run.auto.tfvars.json").write_text(json.dumps(variables))
+                self.assert_rejected_before_provisioning("No value for required variable")
+        for name, (value, message) in invalid.items():
+            with self.subTest(invalid=name):
+                variables = {**valid, name: value}
+                (self.module / "run.auto.tfvars.json").write_text(json.dumps(variables))
+                self.assert_rejected_before_provisioning(message)
+
     def test_candidate_ceiling_counts_utf8_bytes(self):
         bundle = json.loads(fixture('amd64')['candidate_json'])
         bundle['growth'] = ''
