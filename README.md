@@ -130,6 +130,44 @@ credentials. Security reports follow the organization-wide
 [SecPal security process](https://github.com/SecPal/.github/security/policy).
 The repository contents are not approved for production operation.
 
+Repository Quality runs the immutable organization Trivy repository-scan action
+against the exact checked-out commit before the required Repository Contract
+check can pass. Only a successful CLEAN result is admitted; actionable,
+review-required, unknown/stale, malformed, missing, failed, cancelled and skipped
+evidence cannot authorize source acceptance. The action has only contents-read
+permission and retains bounded, redacted evidence for 14 days.
+
+The shared vulnerability, secret and misconfiguration scanners cover supported
+source formats in the complete immutable Git snapshot. Current inputs include
+OpenTofu modules/provider declarations, the npm lockfile, the integration
+Containerfile and GitHub workflows. Quadlet, systemd, HAProxy, SELinux, shell and
+Python sources remain included in the source/secret scan; their specialized
+semantic validation remains with existing preflight and conformance owners.
+Trivy does not establish semantic coverage for every configuration format.
+No deployment-local scanner policy, exception or ignore mechanism is introduced.
+
+The accepted organization v4 contract qualifies only the exact reviewed ephemeral
+module and existing control sources. Its evidence explicitly reports
+REPOSITORY_STATIC coverage and REQUIRED_NOT_EXECUTED run-bound controls.
+Actual run inputs, exact-peer management access, cloud-identity removal and
+bounded lifetime/cleanup remain mandatory in the existing trusted-control path.
+A source scan supplies no fabricated Terraform values and authorizes no cloud
+operation.
+
+[Shared #1236](https://github.com/SecPal/.github/issues/1236) preserves the eight
+configuration observations under exact source-qualified central dispositions
+that expire on 2026-10-27 at 00:00 UTC. Public-IP exposure, disabled OS Login,
+provider-managed disk encryption and absent packet-flow logging remain explicit
+architectural risks or decisions. Gateway health remains owned by Quadlet/systemd;
+Private Google Access is assessed against the actual external-IP topology.
+Changed control sources, extra Terraform modules, invalid diagnostics, missing
+proof, stale databases or expiry fail closed. The action and closed v4 schema
+come from the same immutable shared revision; no finding is declared unaffected.
+
+Repository source security is distinct from native runtime security, Rocky
+provider qualification and production acceptance. CLEAN source evidence proves
+none of those outcomes and grants no infrastructure or production authority.
+
 ## Development
 
 Run deterministic repository checks without starting the integration stack:
