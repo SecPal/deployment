@@ -35,7 +35,7 @@ jobs:
 
       - name: Scan exact source with organization policy
         id: scan
-        uses: SecPal/.github/.github/actions/trivy-repository-scan@2d6a7f7c42d961f6850c10c3dbc69421d361d9df # main
+        uses: SecPal/.github/.github/actions/trivy-repository-scan@e89bf9b04bd90bd29b6909994bb7431b56ce5aa2 # main
 
       - name: Require clean source security
         env:
@@ -88,7 +88,7 @@ jobs:
 
   reuse:
     name: REUSE Compliance
-    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@4b1bd8f1e71274aa4dc11e550d57939eb496d1ca # main
+    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@35b064b1df08f4fd02fb982117dadac3e4edc36d # main
 
   markdown-shell:
     name: Markdown and Shell
