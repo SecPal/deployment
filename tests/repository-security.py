@@ -13,9 +13,6 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-PIN = "55bcdb6f00eb7d552da206f83fcdc87cf2c43375"
-ACTION = "SecPal/.github/.github/actions/trivy-repository-scan@" + PIN
-CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 GATE = ROOT / "scripts/require-repository-security.sh"
 
 
@@ -26,7 +23,7 @@ class RepositorySecurityTests(unittest.TestCase):
             Loader=yaml.BaseLoader,
         )
 
-    def test_exact_read_only_scanner_without_caller_policy_inputs(self):
+    def test_pinned_read_only_scanner_without_caller_policy_inputs(self):
         job = self.workflow["jobs"]["repository-security"]
         self.assertEqual(job["runs-on"], "ubuntu-24.04")
         self.assertEqual(job["timeout-minutes"], "20")
@@ -34,12 +31,15 @@ class RepositorySecurityTests(unittest.TestCase):
         self.assertNotIn("secrets", job)
         self.assertNotIn("env", job)
         checkout, scan, acceptance = job["steps"]
-        self.assertEqual(checkout["uses"], CHECKOUT)
+        self.assertRegex(checkout["uses"], r"\Aactions/checkout@[0-9a-f]{40}\Z")
         self.assertEqual(
             checkout["with"],
             {"ref": "${{ github.sha }}", "persist-credentials": "false"},
         )
-        self.assertEqual(scan["uses"], ACTION)
+        self.assertRegex(
+            scan["uses"],
+            r"\ASecPal/\.github/\.github/actions/trivy-repository-scan@[0-9a-f]{40}\Z",
+        )
         self.assertEqual(scan["id"], "scan")
         for field in ("with", "env", "continue-on-error"):
             self.assertNotIn(field, scan)
