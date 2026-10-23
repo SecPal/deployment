@@ -51,6 +51,9 @@ Mount=type=bind,source=/run/secpal/secrets/api/tenant-kek,target=/run/secpal/sec
 Mount=type=bind,source=/run/secpal/secrets/migration/postgres-username,target=/run/secpal/secrets/database/postgres-username,ro=true
 Mount=type=bind,source=/run/secpal/secrets/migration/postgres-password,target=/run/secpal/secrets/database/postgres-password,ro=true
 Mount=type=bind,source=/run/secpal/secrets/migration/postgres-ca.crt,target=/run/secpal/secrets/database/postgres-ca.crt,ro=true
+Mount=type=bind,source=/run/secpal/secrets/runtime/postgres-username,target=/run/secpal/secrets/import/postgres-username,ro=true
+Mount=type=bind,source=/run/secpal/secrets/runtime/postgres-password,target=/run/secpal/secrets/import/postgres-password,ro=true
+Mount=type=bind,source=/run/secpal/secrets/runtime/postgres-ca.crt,target=/run/secpal/secrets/import/postgres-ca.crt,ro=true
 Mount=type=bind,source=/srv/secpal/config/runtime/production-migrate.php,target=/run/secpal/bootstrap/production-migrate.php,ro=true
 Mount=type=bind,source=/srv/secpal/private-storage,target=/app/storage/app/private,rw=true
 Mount=type=bind,source=/srv/secpal/public-storage,target=/app/storage/app/public,rw=true
@@ -62,6 +65,7 @@ Mount=type=tmpfs,destination=/app/storage/framework/sessions,tmpfs-size=32m,tmpf
 Mount=type=tmpfs,destination=/app/storage/framework/views,tmpfs-size=32m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
 Mount=type=tmpfs,destination=/app/storage/logs,tmpfs-size=32m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
 Mount=type=tmpfs,destination=/app/bootstrap/cache,tmpfs-size=16m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
+Mount=type=tmpfs,destination=/app/storage/app/private/address-data/tmp,tmpfs-size=128m,tmpfs-mode=0700,U=true,nosuid=true,nodev=true,noexec=true
 Network=pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1
 AddHost=db.secpal.internal:169.254.81.1
 [Service]
@@ -69,4 +73,4 @@ Type=oneshot
 ExecStartPre=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.json --validate-namespace --require-secrets
 RemainAfterExit=yes
 Restart=no
-TimeoutStartSec=300
+TimeoutStartSec=3600
