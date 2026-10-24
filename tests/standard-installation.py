@@ -30,6 +30,7 @@ class FixtureNative(phase.Native):
         self.has_account = False
         self.has_subids = False
         self.manager = False
+        self.manager_dirs = None
         self.firewall = False
         self.label_rule = False
         self.storage_labeled = False
@@ -37,6 +38,13 @@ class FixtureNative(phase.Native):
         self.nft_active = False
         self.masks = set()
         self.commands = []
+
+    def assert_manager_query(self, arguments):
+        expected = phase.direct_user_show_environment(
+            self.desired["account"]["name"], self.desired["account"]["uid"],
+            self.desired["account"]["home"])
+        if arguments != expected:
+            raise AssertionError("manager query is not the canonical direct transport")
 
     def platform(self, desired):
         phase.admit_platform("ID=rocky\nVERSION_ID=10.2\n", "x86_64", "Enforcing", desired["inventory"])
@@ -69,6 +77,10 @@ class FixtureNative(phase.Native):
     def run(self, operation, arguments, *, user=None, accepted=(0,), timeout=60):
         self.commands.append(tuple(arguments))
         executable = arguments[0]
+        if executable == "runuser":
+            self.assert_manager_query(arguments)
+            return 0, ("PATH=/usr/bin\nQUADLET_UNIT_DIRS=" + self.manager_dirs
+                       if self.manager_dirs is not None else "PATH=/usr/bin")
         if executable == "rpm":
             if "--qf" in arguments:
                 name = arguments[-1]
@@ -104,6 +116,7 @@ class FixtureNative(phase.Native):
                     self.nft_active = True
                 else:
                     self.manager = True
+                    self.manager_dirs = self.desired["inventory"]["paths"]["quadlet_definitions"]["path"]
             return 0, ""
         if executable == "python3":
             if arguments[-1] == "--apply":
@@ -371,6 +384,31 @@ class InstallationContract(unittest.TestCase):
                 with self.assertRaises(phase.Error):
                     native.storage_labels(desired, install=True)
                 self.assertEqual(native.changes, 0)
+
+    def test_planned_home_agrees_with_canonical_path_access_owner(self):
+        desired = self.plan()
+        facts = phase.inventory_owner.read_document(
+            ROOT / "tests/fixtures/production-host/valid-amd64.yaml", "host facts")
+        access = copy.deepcopy(facts["path_access"])
+        uid, gid, mode = desired["directories"][desired["account"]["home"]]
+        access["service_account_home"].update(uid=uid, gid=gid, mode=f"{mode:04o}")
+        phase.inventory_owner.validate_path_access_facts(self.inventory, access)
+
+    def test_stale_active_manager_never_passes_install_or_verify(self):
+        desired = self.plan()
+        with tempfile.TemporaryDirectory() as directory:
+            native = FixtureNative(Path(directory), desired)
+            phase.install_public_base(native, desired)
+            for dirs in (None, "/home/runtime/.config/containers/systemd",
+                         "/etc/containers/systemd/users/20000:/home/runtime/quadlets"):
+                with self.subTest(dirs=dirs):
+                    native.manager_dirs = dirs
+                    native.changes = 0
+                    with self.assertRaises((phase.Error, phase.inventory_owner.ContractViolation)):
+                        phase.verify_public_base(native, desired)
+                    with self.assertRaises((phase.Error, phase.inventory_owner.ContractViolation)):
+                        phase.install_public_base(native, desired)
+                    self.assertEqual(native.changes, 0)
 
     def test_masked_but_active_user_socket_is_rejected(self):
         desired = self.plan()

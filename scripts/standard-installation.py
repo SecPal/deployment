@@ -72,6 +72,7 @@ import haproxy_direct_contract as direct  # noqa: E402
 import host_firewall_contract as firewall_owner  # noqa: E402
 from haproxy_base_contract import Listener, Routing  # noqa: E402
 from host_enrollment import _ready, EnrollmentError  # noqa: E402
+from runtime_user_systemd import direct_user_show_environment  # noqa: E402
 
 
 class Error(ValueError):
@@ -139,7 +140,8 @@ def plan(inventory, firewall, *, synthetic=False):
         target = "host-firewall" if name == "host-firewall.py" else name
         files["/usr/local/libexec/secpal/" + target] = (ROOT / "scripts" / name).read_text()
     directories = {
-        home: (0, 0, 0o755),
+        # #80 validate_path_access_facts owns the home metadata.
+        home: (0, gid, 0o750),
         f"{home}/.config": (0, 0, 0o755),
         f"{home}/.config/containers": (0, 0, 0o755),
         f"{home}/.config/systemd": (0, 0, 0o755),
@@ -523,6 +525,16 @@ class Native:
     def runtime(self, desired, packages):
         account = desired["account"]
         uid, user = account["uid"], account["name"]
+        environment = self.run("observe-effective-quadlet-search",
+            direct_user_show_environment(user, uid, account["home"]))[1]
+        # Match the exact single-key observation used by #80's native harness.
+        # Private manager output is never emitted in diagnostics or evidence.
+        paths = [line.partition("=")[2] for line in environment.splitlines()
+                 if line.startswith("QUADLET_UNIT_DIRS=")]
+        try:
+            inventory_owner.validate_quadlet_search_paths(desired["inventory"], paths)
+        except inventory_owner.ContractViolation:
+            raise Error("effective-quadlet-search-conflict") from None
         data = rocky.normalize_podman(self.run("observe-runtime", ["podman", "info", "--format=json"], user=user)[1])
         state = self.run("observe-user-manager", ["systemctl", "is-active", f"user@{uid}.service"])[1]
         socket = self.path(f"/run/user/{uid}/podman/podman.sock")

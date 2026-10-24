@@ -105,13 +105,18 @@ are inspected through metadata; expected public configuration is compared byte
 for byte. A partial public-file write is a conflict
 requiring administrator review, never a silent replacement.
 
-The runtime home and configuration ancestry are root-owned. The declared
+The runtime home follows #80: root-owned, service primary GID and mode
+`0750`. Configuration ancestry is root-owned. The declared
 graphroot, cache and user systemd directory are runtime-writable. The storage
 configuration uses the inventory graphroot; its effective value is verified
 through rootless Podman. Existing state is verified without adopting unrelated
 accounts or workloads. Reconcile incompatible platforms or foreign
 firewall/update policies through existing operator procedures before retrying.
-The installer never requests a reboot.
+The installer never requests a reboot. The running user manager must expose
+exactly the reviewed Quadlet search path through the existing direct
+show-environment query. A stale active manager is rejected; a system-level
+daemon-reload does not repair its inherited environment. Reconciliation of an
+existing manager requires its own operator-controlled procedure.
 
 For the inventory graphroot, native SELinux equivalence uses the installed
 container-selinux policy for `/var/lib/containers/storage`. This follows the
