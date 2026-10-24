@@ -88,6 +88,10 @@ See the [roadmap](docs/roadmap.md) for delivery ownership and
 [architecture scope](docs/architecture/scope.md) for navigation. Those documents
 do not replace ADR-019, the owning delivery contracts, or their native graphs.
 
+The [Phase-1 public host-base procedure](docs/standard-installation.md) implements
+explicit installation and verification for #92. Independent native/OCI admission
+remains required before Host Enrollment.
+
 ## Architecture principles
 
 - Public and managed installations use the same reviewed product images.

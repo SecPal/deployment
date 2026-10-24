@@ -939,6 +939,14 @@ def validate_selinux_facts(selinux: dict[str, Any]) -> None:
         )
 
 
+def validate_quadlet_search_paths(inventory: dict[str, Any], paths: list[str]) -> None:
+    """Canonical effective search authority, shared with explicit installation."""
+    if paths != [inventory["paths"]["quadlet_definitions"]["path"]]:
+        raise ContractViolation(
+            "effective Quadlet search path is not restricted to the reviewed tree"
+        )
+
+
 def validate_runtime_facts(
     inventory: dict[str, Any], facts: dict[str, Any]
 ) -> None:
@@ -993,12 +1001,7 @@ def validate_runtime_facts(
             )
 
     expected_runtime_directory = f"/run/user/{service_account['uid']}"
-    expected_quadlet_path = inventory["paths"]["quadlet_definitions"]["path"]
-    quadlet = runtime["quadlet"]
-    if quadlet["effective_search_paths"] != [expected_quadlet_path]:
-        raise ContractViolation(
-            "effective Quadlet search path is not restricted to the reviewed tree"
-        )
+    validate_quadlet_search_paths(inventory, runtime["quadlet"]["effective_search_paths"])
 
     storage = runtime["storage"]
     if storage["graphroot"] != inventory["paths"]["podman_graph_root"]["path"]:
