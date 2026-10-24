@@ -40,9 +40,9 @@ generic #241 enrollment client; Phase 1 never invokes its identity operations.
 
 ## Authorized target procedure
 
-These are operator instructions for a separately approved fresh target.
-No command below was executed against a test host or the development server
-for this delivery.
+These are operator instructions for a separately approved target. The corrected
+XDG path below has not yet been executed on CX33: fresh exact-source scanner
+qualification and independent review are prerequisites for further mutations.
 
 1. Confirm Rocky 10.2, the selected native architecture and SELinux Enforcing.
    The static hostname must match the canonical inventory.
@@ -106,11 +106,34 @@ for byte. A partial public-file write is a conflict
 requiring administrator review, never a silent replacement.
 
 The runtime home follows #80: root-owned, service primary GID and mode
-`0750`. Configuration ancestry is root-owned. The declared
-graphroot, cache and user systemd directory are runtime-writable. The storage
-configuration uses the inventory graphroot; its effective value is verified
-through rootless Podman. Existing state is verified without adopting unrelated
-accounts or workloads. Reconcile incompatible platforms or foreign
+`0750`. Podman 5.8.2 requires the runtime identity to own its XDG configuration
+directory. Its `.config`, `.cache` and `.local` directories are therefore
+service-owned, mode `0700`. The installer retains the unchanged root-only
+ancestry checks in `Native.directory`, `trusted` and `publish` for administrative
+files. It never publishes administrative configuration below these writable
+directories.
+
+The sole storage configuration is `/etc/secpal/host-base/storage.conf`, under
+root-owned ancestry. A bounded command running as the service identity creates
+and verifies the native `.config/containers/storage.conf` symlink to it and the
+XDG data directory. It does not introduce another environment/configuration
+source. A changed link or ownership is rejected. The runtime identity can
+replace its own link but cannot modify the administrative file; every
+verification still compares the effective Podman graphroot with the inventory.
+The root-owned Quadlet search path and #80 home contract are unchanged.
+Existing state is verified without adopting unrelated accounts or workloads.
+
+For the failed `f50333a` bootstrap only, installation recognizes the exact old
+root-owned `.config`, `containers` and `systemd` directory metadata, the exact
+public storage bytes, and the two existing service-owned `/dev/null` Podman masks.
+Unexpected entries, ownership, modes, file types or contents reject the repair
+before installation mutations. After preserving and verifying the public
+storage bytes at the protected path, the installer removes only that verified
+old public file and individually transfers those three directories to the
+service UID/GID with mode `0700`. The mask inodes remain unchanged. All root
+writes finish before the parent becomes runtime-writable; subsequent XDG writes
+run unprivileged. There is no recursive ownership change, data cleanup or OS
+reinstallation. Repetition verifies this resulting state without changing it. Reconcile incompatible platforms or foreign
 firewall/update policies through existing operator procedures before retrying.
 The installer never requests a reboot. The running user manager must expose
 exactly the reviewed Quadlet search path through the existing direct
@@ -173,10 +196,18 @@ simulated OS commands: first installation, unchanged repetition, conflicts,
 canonical runtime rejection and the independent-admission boundary.
 These are source-level regression results.
 
-**NOT EXECUTED:** fresh Rocky installation, real unchanged repetition, native
-negative probes, native systemd/Quadlet acceptance, reboot and terminal
-`READY_FOR_ENROLLMENT` admission for this entry point. The bounded non-production
-[#248](https://github.com/SecPal/deployment/issues/248) evidence retains its original scope and does not qualify this new path.
+The first native CX33 run of `f50333a57c49598584fddd7e3039953dade2e6fa`
+on freshly installed Rocky 10.2 failed closed at `podman info`: root-owned
+`.config` is incompatible with Podman 5.8.2. Plan execution and five native
+negative input cases passed; installation and public verification failed.
+This evidence establishes the regression, not successful host conformance.
+
+**NOT EXECUTED for this corrected source:** native repair/installation, unchanged
+repetition, Podman/systemd/Quadlet acceptance, reboot and terminal
+`READY_FOR_ENROLLMENT` admission. Source tests cannot replace those observations.
+The bounded non-production
+[#248](https://github.com/SecPal/deployment/issues/248) evidence retains its
+original scope and does not qualify this corrected path.
 
 Current API/frontend publication acceptance remains an external admission
 blocker. This implementation does not assert production readiness.
