@@ -232,6 +232,12 @@ class InstallationContract(unittest.TestCase):
                 self.assertTrue(any(isinstance(item, ast.Call)
                                     and isinstance(item.func, ast.Name) and item.func.id == "diagnostic"
                                     for item in method.decorator_list), method.name)
+        # Native #80 composition has its own real source/trace coverage owner.
+        native_spec = importlib.util.spec_from_file_location(
+            "_native_host_inventory", ROOT / "tests/native-host-qualification.py")
+        native_inventory = importlib.util.module_from_spec(native_spec)
+        native_spec.loader.exec_module(native_inventory)
+        operations.update(native_inventory.native_operations())
         entries = document["external_operations"]
         self.assertEqual({row["id"] for row in entries}, operations)
         self.assertEqual(len(entries), len(operations))

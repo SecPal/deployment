@@ -267,6 +267,476 @@
       }
     },
     {
+      "id": "native-administrator-owned-source-required",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-administrator-owned-source-required",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-audit-correlation",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-audit-correlation",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-execution-binding",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-execution-binding",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-fixture-digests",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-fixture-digests",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-harness-result",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-harness-result",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-harness-source",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-harness-source",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-invocation-binding",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-invocation-binding",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-least-authority",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-least-authority",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-live-quadlet-authority",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-live-quadlet-authority",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-native-evidence",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-native-evidence",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-observed-quadlet-authority",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-observed-quadlet-authority",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-observed-selinux-isolation",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-observed-selinux-isolation",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-admit-runtime-identity",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-admit-runtime-identity",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-collect-qualification",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-collect-qualification",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-create-working-directory",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-create-working-directory",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-execute-harness",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-execute-harness",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-normalize-harness-observations",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-normalize-harness-observations",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-architecture",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-architecture",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-audit-checkpoint",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-audit-checkpoint",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-audit-events",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-audit-events",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-boot-identity",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-boot-identity",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-cleanup-containers",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-cleanup-containers",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-cleanup-paths",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-cleanup-paths",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-cleanup-units",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-cleanup-units",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-fixture-digests",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-fixture-digests",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-fixture-presence",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-fixture-presence",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-live-quadlet",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-live-quadlet",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-native-packages",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-native-packages",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-quadlet-pid",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-quadlet-pid",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-quadlet-properties",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-quadlet-properties",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-runtime-identity",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-runtime-identity",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-observe-workload-process",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-observe-workload-process",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-prepare-anonymous-registry-auth",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-prepare-anonymous-registry-auth",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-prepare-control-hook",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-prepare-control-hook",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-prepare-harness-trace",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-prepare-harness-trace",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-publish-native-evidence",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-publish-native-evidence",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-read-generated-quadlet-observation",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-read-generated-quadlet-observation",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-read-harness-diagnostic-capture",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-read-harness-diagnostic-capture",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-read-harness-diagnostic-source",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-read-harness-diagnostic-source",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-read-live-observation",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-read-live-observation",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-record-live-observation",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-record-live-observation",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-record-workload-status",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-record-workload-status",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-stage-fixture",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-stage-fixture",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-verify-public-base",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-verify-public-base",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-verify-public-base-after-qualification",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-verify-public-base-after-qualification",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-verify-public-base-after-staging",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-verify-public-base-after-staging",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-write-admission-material",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-write-admission-material",
+        "kind": "semantic"
+      }
+    },
+    {
       "id": "observe-architecture",
       "reachable": true,
       "fallible": true,
@@ -547,6 +1017,236 @@
       }
     },
     {
+      "id": "qualification-harness",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualification-harness",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-administrator-execution",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-administrator-execution",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-avc-correlation",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-avc-correlation",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-cgroup",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-cgroup",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-fixture-presence",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-fixture-presence",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-fixture-reference",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-fixture-reference",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-fixture-setup",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-fixture-setup",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-host-identity",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-host-identity",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-native-architecture",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-native-architecture",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-quadlet-active-state",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-quadlet-active-state",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-quadlet-authority",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-quadlet-authority",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-quadlet-daemon-reload",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-quadlet-daemon-reload",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-quadlet-start",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-quadlet-start",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-rootless-runtime",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-rootless-runtime",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-runtime-fallback-absence",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-runtime-fallback-absence",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-seccomp",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-seccomp",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-selinux-host",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-selinux-host",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-selinux-policy-restoration",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-selinux-policy-restoration",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-selinux-storage",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-selinux-storage",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-selinux-storage-directory-create",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-selinux-storage-directory-create",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-service-account",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-service-account",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-workload-primary",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-workload-primary",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "qualify-workload-secondary",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "qualify-workload-secondary",
+        "kind": "semantic"
+      }
+    },
+    {
       "id": "read-public-firewall",
       "reachable": true,
       "fallible": true,
@@ -657,6 +1357,16 @@
       }
     },
     {
+      "id": "rpm-query-architecture",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "rpm-query-architecture",
+        "kind": "semantic"
+      }
+    },
+    {
       "id": "rpm-query-effective-identities",
       "reachable": true,
       "fallible": true,
@@ -683,6 +1393,16 @@
       "trusted": true,
       "diagnostic_identity": {
         "id": "rpm-query-sudo-authority",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "rpm-read-os-release",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "rpm-read-os-release",
         "kind": "semantic"
       }
     },

@@ -152,9 +152,10 @@ Repeated execution verifies policy and actual labels without relabeling.
 ## Architecture dispatch for this Phase-1 path
 
 The versioned `.secpal/evidence-architecture.json` declares this CLI's reachable,
-trusted, fallible operations. It is source material, not an ignored approval
-file or persisted PASS. It does not authorize other cloud, migration,
-enrollment, activation or workload tools.
+trusted, fallible operations and the narrowly scoped native #80 qualification
+composition described below. It is source material, not an ignored approval
+file or persisted PASS. Other cloud, migration, enrollment, activation and
+product-workload tools remain outside this dispatch scope.
 
 Run the accepted maintained governance executable against the **actual active
 deployment worktree**, followed by the existing repository enforcement:
@@ -163,6 +164,7 @@ deployment worktree**, followed by the existing repository enforcement:
 python3 -I "$SECPAL_GOVERNANCE_CHECKOUT/scripts/secpal-evidence-architecture.py" \
   --repository-root "$PWD" --repository SecPal/deployment --dispatch
 python3 tests/standard-installation.py
+python3 tests/native-host-qualification.py
 python3 tests/rocky-evidence-architecture.py
 scripts/validate-rocky-evidence-architecture.py
 ```
@@ -196,7 +198,8 @@ the RPM observer's operation enum; it redacts foreign exception text.
 Filesystem failures identify the inspected/published material. Legacy storage
 removal, mode restriction and ownership transfer have distinct identities.
 Runtime-user lookup now lies inside the existing command-observation boundary.
-No package, host mutation, runtime command or security decision is added.
+The public-base diagnostic adapter does not add package or host mutations.
+The bounded native qualification operations below have their own declared scope.
 
 The central expression evaluator cannot execute the real multi-statement
 Python owners below. The canonical companion's supported **broader
@@ -265,6 +268,86 @@ Remaining native work requires separate target authorization:
 
 The PostgreSQL qualifier creates test database authority and is excluded.
 The GCP bootstrap is not invoked.
+
+## Native #80 qualification on the existing Phase-1 host
+
+Owner #364 composes the existing #80 owners without changing the GCP qualification
+target or its control/schema-v4 binding. The harness remains byte-identical:
+SHA-256 `436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac`.
+
+Before privileged execution, independently authenticate protected deployment and
+control commits, successful required security/contract CI, canonical dispatch
+against the actual source, the existing provider resource/Primary IP identities,
+both protection flags and the previously authenticated SSH host key. Export only
+the exact accepted public source; verify every exported file against that Git
+source before executing it. The CLI's SHA arguments record these independently
+obtained bindings; they cannot authenticate source or create execution authority.
+
+Run `scripts/qualify-native-host.py` explicitly as the existing administrator,
+first with `--stage-fixture`, then with `--qualify`. Both calls require:
+
+- `--inventory` and `--firewall`: the existing public Phase-1 inputs.
+- `--source-sha` and `--control-sha`: complete, independently accepted commit IDs.
+- `--host-identity hetzner:163717938`: the independently authenticated CX33 resource.
+- `--execution-id`: a fresh numeric operator-run identity, recorded before execution
+  (for example UTC epoch microseconds); this is **not** a GitHub Actions run ID.
+- `--output`: a new file in an existing administrator-owned private evidence directory.
+
+Both modes verify the public base before and after their operation. Staging
+pulls only the canonical digest-bound Alpine fixture under `secpal-deploy`,
+with an empty public authentication file and certificate directory, TLS
+verification and explicit platform. This nonsecret temporary material lives
+below trusted `/run` ancestry, traversable by the service account; private
+qualification observations instead live below the administrator's protected
+evidence directory. Canonical ancestry checks are not relaxed.
+The existing `rocky_preparation_contract.admit_fixture_repo_digests` admits the
+complete bounded `RepoDigests` set and exact architecture child; singular
+`Digest`, tags, registry fallback and arbitrary image selection are absent.
+A correctly staged image is verified without another pull. No store contents
+are removed. The GCP preparer is never invoked.
+
+Qualification collects current signed-RPM observations through the existing
+collector, executes the unchanged harness and uses its existing numeric failure
+trace and explicit-message classifier/semantic line mapping. Combined stdout/
+stderr stays bounded and private; only closed operation/reason identities are
+published on failure. The TERM-first 45-minute deadline allows the existing
+cleanup traps 180 seconds before KILL; the outer capture deadline is longer. A root-owned control hook independently observes
+the generated Quadlet properties before start, then the actual runtime identity
+and workload process status after successful start and before returning to
+target assertions. The canonical pre-start authority contract is not applied to
+systemd's changed execution timestamps/PID after start. Effective least authority is rechecked by the
+existing harness predicate, not a second UID/capability/seccomp policy.
+Fresh AVC records are independently re-normalized through
+`selinux_isolation_contract.admit_selinux_isolation`; effective Quadlet
+properties use `quadlet_authority_contract.admit_quadlet_authority`.
+Both the pre-run and post-run qualification resource sets must be empty. The
+harness owns exact cleanup; control never prunes or deletes pre-existing state.
+
+Output is `NATIVE_EVIDENCE_COLLECTED; INDEPENDENT_ADMISSION_REQUIRED`, never
+readiness. The trusted operator retrieves the observations over the authenticated
+SSH channel and executes `qualify-native-host.py:admit_execution` from the
+independently accepted control source, supplying **separately obtained** expected
+source/control/harness/host/architecture/boot/execution bindings. It must not
+derive expected bindings from the returned envelope. The API re-executes the
+real SELinux/Quadlet/least-authority owners and
+`rocky-control.py:validate_operator_native_qualification` against those
+observations. The latter scopes the existing closed v4 schema to the trusted
+operator's exact source without changing the historical GCP schema or CLI.
+Unknown fields, missing/changed bindings, unsigned RPM facts, conflicting AVC/
+Quadlet observations, weakened process state and incomplete cleanup fail closed.
+
+The versioned dispatch inventory includes the actual composition call sites,
+reachable package-observer closure and the existing immutable harness semantic
+line mapping. `tests/native-host-qualification.py` supplies executable
+source/coverage and real-owner positive/negative representation tests, including
+first staging and unchanged repetition. The existing broader repository-specific
+architecture enforcement route applies; no expression wrapper or stored agreement
+PASS is introduced. Independent architecture review remains mandatory.
+
+**Native status for this extension: NOT EXECUTED until its exact source, reviews,
+scanner qualification and CI are accepted.** Representation tests are not native
+MCS/AVC evidence. API/frontend OCI admission, enrollment, activation and production
+acceptance remain separate. No product image is selected or started here.
 
 ## Evidence status
 
