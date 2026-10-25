@@ -130,7 +130,7 @@ def plan(inventory, firewall, *, synthetic=False):
             (ROOT / "config/production/host-systemd/nftables.service.d/secpal-host.conf").read_text(),
         f"/etc/systemd/system/user@{uid}.service.d/50-secpal-quadlet.conf":
             f"[Service]\nEnvironment=QUADLET_UNIT_DIRS=/etc/containers/systemd/users/{uid}\n",
-        f"{home}/.config/containers/storage.conf":
+        "/etc/secpal/host-base/storage.conf":
             '[storage]\ndriver = "overlay"\ngraphroot = ' + json.dumps(graphroot) + "\n",
     }
     # Stage only the public #81 subset. Never install or execute roles.sql.
@@ -142,11 +142,9 @@ def plan(inventory, firewall, *, synthetic=False):
     directories = {
         # #80 validate_path_access_facts owns the home metadata.
         home: (0, gid, 0o750),
-        f"{home}/.config": (0, 0, 0o755),
-        f"{home}/.config/containers": (0, 0, 0o755),
-        f"{home}/.config/systemd": (0, 0, 0o755),
-        f"{home}/.config/systemd/user": (uid, gid, 0o700),
+        f"{home}/.config": (uid, gid, 0o700),
         f"{home}/.cache": (uid, gid, 0o700),
+        f"{home}/.local": (uid, gid, 0o700),
         graphroot: (uid, gid, 0o700),
         f"/etc/containers/systemd/users/{uid}": (0, 0, 0o755),
         "/var/lib/secpal/host-firewall": (0, 0, 0o700),
@@ -162,6 +160,38 @@ def plan(inventory, firewall, *, synthetic=False):
     packages.append(f"haproxy-{haproxy_supply.VERSION}-{haproxy_supply.RELEASE}.{architecture}")
     return {"account": account, "inventory": inventory, "firewall": firewall,
             "packages": packages, "files": files, "directories": directories}
+
+
+# Run only as the service identity: privileged publication never enters XDG.
+# Native Podman discovers the root-protected storage file through this link.
+XDG_SETUP = r"""
+import os, stat, sys
+from pathlib import Path
+home, storage, mode = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+changed = False
+try:
+    for relative in (".config", ".config/containers", ".local", ".local/share"):
+        path = home / relative
+        if mode == "install" and not path.exists() and not path.is_symlink():
+            path.mkdir(mode=0o700)
+            changed = True
+        info = path.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode))
+                != (os.geteuid(), os.getegid(), 0o700)):
+            raise ValueError
+    link = home / ".config/containers/storage.conf"
+    if mode == "install" and not link.exists() and not link.is_symlink():
+        link.symlink_to(storage)
+        changed = True
+    info = link.lstat()
+    if (not stat.S_ISLNK(info.st_mode) or info.st_uid != os.geteuid()
+            or info.st_gid != os.getegid() or os.readlink(link) != storage):
+        raise ValueError
+except (OSError, ValueError):
+    sys.exit(1)
+print("changed" if changed else "unchanged")
+"""
 
 
 class Native:
@@ -270,6 +300,68 @@ class Native:
             # A partial file remains a conflict, never silently rewritten.
             raise
         self.changes += 1
+        return True
+
+    def xdg(self, desired, *, install=False):
+        account = desired["account"]
+        _, result = self.run("configure-rootless-xdg" if install else "verify-rootless-xdg",
+            ["python3", "-I", "-c", XDG_SETUP, str(self.path(account["home"])),
+             str(self.path("/etc/secpal/host-base/storage.conf")),
+             "install" if install else "verify"], user=account["name"])
+        if result not in {"changed", "unchanged"} or (not install and result != "unchanged"):
+            raise Error("rootless-xdg-conflict")
+        self.changes += result == "changed"
+
+    def legacy_xdg(self, desired, *, repair=False):
+        """Recognize only the exact failed #361 public layout, never arbitrary data.
+
+        All privileged changes precede transfer of the XDG parent to the user.
+        No privileged publication or recursive ownership change enters user paths.
+        """
+        account = desired["account"]
+        home = account["home"]
+        config = self.path(home + "/.config")
+        if not config.exists() or config.is_symlink():
+            return False
+        info = config.lstat()
+        if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (*self.owner, 0o755):
+            return False
+        self.directory(home, 0, account["gid"], 0o750, create=False)
+        for suffix in ("", "/containers", "/systemd"):
+            self.directory(home + "/.config" + suffix, create=False)
+        for suffix, names in (("", {"containers", "systemd"}),
+                              ("/containers", {"storage.conf"}), ("/systemd", {"user"})):
+            if {p.name for p in self.path(home + "/.config" + suffix).iterdir()} != names:
+                raise Error("legacy-xdg-conflict")
+        user = config / "systemd/user"
+        info = user.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode))
+                != (account["uid"], account["gid"], 0o700)):
+            raise Error("legacy-xdg-conflict")
+        if {p.name for p in user.iterdir()} != {"podman.service", "podman.socket"}:
+            raise Error("legacy-xdg-conflict")
+        for name in ("podman.service", "podman.socket"):
+            link = user / name
+            info = link.lstat()
+            if (not stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
+                    or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode))
+                    != (account["uid"], account["gid"], 0o777)
+                    or os.readlink(link) != "/dev/null"):
+                raise Error("legacy-xdg-conflict")
+        storage = config / "containers/storage.conf"
+        text = desired["files"]["/etc/secpal/host-base/storage.conf"]
+        self.public_file(home + "/.config/containers/storage.conf", text)
+        if repair:
+            # Revalidated immediately before mutation; the original ancestors
+            # remain root-owned until all root writes have finished.
+            self.public_file("/etc/secpal/host-base/storage.conf", text)
+            storage.unlink()  # Exact verified public bytes already preserved above.
+            self.changes += 1
+            for path in (config / "containers", config / "systemd", config):
+                path.chmod(0o700)
+                os.chown(path, account["uid"], account["gid"], follow_symlinks=False)
+                self.changes += 1
         return True
 
     def no_authority(self, desired):
@@ -560,6 +652,7 @@ def verify_public_base(native, desired):
         native.public_file(name, text)
     for name, (uid, gid, mode) in desired["directories"].items():
         native.directory(name, uid, gid, mode, create=False)
+    native.xdg(desired)
     for unit in ("postgresql.service", "haproxy.service", "podman.service", "podman.socket"):
         native.unit(unit)
     for unit in ("podman.service", "podman.socket"):
@@ -578,12 +671,15 @@ def verify_public_base(native, desired):
 def install_public_base(native, desired):
     native.platform(desired)
     native.dormant(desired)
+    legacy = native.legacy_xdg(desired)
     # Detect public-file conflicts before installing anything.
     for name, text in desired["files"].items():
         path = native.path(name)
         if path.exists() or path.is_symlink():
             native.public_file(name, text)
     for name, (uid, gid, mode) in desired["directories"].items():
+        if legacy and name == desired["account"]["home"] + "/.config":
+            continue
         path = native.path(name)
         if path.exists() or path.is_symlink():
             native.directory(name, uid, gid, mode, create=False)
@@ -599,9 +695,13 @@ def install_public_base(native, desired):
     native.subids(desired, install=True)
     changed = native.changes
     for name, (uid, gid, mode) in desired["directories"].items():
-        native.directory(name, uid, gid, mode)
+        if not (legacy and name == desired["account"]["home"] + "/.config"):
+            native.directory(name, uid, gid, mode)
     for name, text in desired["files"].items():
         native.publish(name, text)
+    if legacy:
+        native.legacy_xdg(desired, repair=True)
+    native.xdg(desired, install=True)
     if native.changes != changed:
         native.change("reload-systemd", ["systemctl", "daemon-reload"])
     native.storage_labels(desired, install=True)

@@ -35,7 +35,7 @@ jobs:
 
       - name: Scan exact source with organization policy
         id: scan
-        uses: SecPal/.github/.github/actions/trivy-repository-scan@94f4b7279e2a0f72fe29a9eaa6fa3a41d31721ac # main
+        uses: SecPal/.github/.github/actions/trivy-repository-scan@744964a0fa7dd6887fe617431f77d52622f0d2c7 # main
 
       - name: Require clean source security
         env:

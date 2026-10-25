@@ -8,6 +8,7 @@ import importlib.util
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import tomllib
 import unittest
@@ -77,6 +78,12 @@ class FixtureNative(phase.Native):
     def run(self, operation, arguments, *, user=None, accepted=(0,), timeout=60):
         self.commands.append(tuple(arguments))
         executable = arguments[0]
+        if operation in {"configure-rootless-xdg", "verify-rootless-xdg"}:
+            # Real unprivileged temporary filesystem operation, not Podman/host acceptance.
+            result = subprocess.run(arguments, capture_output=True, text=True)
+            if result.returncode:
+                raise phase.Error(operation + "-command-failed")
+            return 0, result.stdout.strip()
         if executable == "runuser":
             self.assert_manager_query(arguments)
             return 0, ("PATH=/usr/bin\nQUADLET_UNIT_DIRS=" + self.manager_dirs
@@ -169,7 +176,7 @@ class InstallationContract(unittest.TestCase):
         self.assertFalse(any("roles.sql" in name for name in plan["files"]))
         self.assertFalse(any("CREATE ROLE" in text or "CREATE DATABASE" in text
                              for text in plan["files"].values()))
-        storage = tomllib.loads(plan["files"]["/var/lib/secpal/.config/containers/storage.conf"])
+        storage = tomllib.loads(plan["files"]["/etc/secpal/host-base/storage.conf"])
         self.assertEqual(storage["storage"]["graphroot"],
                          self.inventory["paths"]["podman_graph_root"]["path"])
         self.assertNotIn("image", plan)
@@ -177,6 +184,127 @@ class InstallationContract(unittest.TestCase):
         self.assertIn("postgresql18-server-18.6-1.el10_2.x86_64", plan["packages"])
         self.assertIn("/etc/containers/systemd/users/20000", plan["directories"])
         self.assertFalse(any(name.endswith(".container") for name in plan["files"]))
+
+    def test_xdg_root_is_user_owned_and_admin_storage_stays_outside_it(self):
+        desired = self.plan()
+        account = desired["account"]
+        home = account["home"]
+        self.assertEqual(desired["directories"][home], (0, account["gid"], 0o750))
+        for suffix in (".config", ".cache", ".local"):
+            self.assertEqual(desired["directories"][home + "/" + suffix],
+                             (account["uid"], account["gid"], 0o700))
+        self.assertFalse(any(name.startswith(home + "/.config/") for name in desired["files"]))
+        self.assertIn("/etc/secpal/host-base/storage.conf", desired["files"])
+        for name in desired["files"]:
+            for parent, (uid, _, _) in desired["directories"].items():
+                if Path(parent) in Path(name).parents:
+                    self.assertEqual(uid, 0, name)
+
+    def legacy_fixture(self, directory):
+        desired = self.plan()
+        # Model root/service ownership with this unprivileged test UID. Separate
+        # UID rejection below executes the helper against contradictory facts.
+        desired["account"] = dict(desired["account"], uid=os.getuid(), gid=os.getgid())
+        native = FixtureNative(Path(directory), desired)
+        home = desired["account"]["home"]
+        native.directory(home, 0, os.getgid(), 0o750)
+        for suffix in ("", "/containers", "/systemd"):
+            native.directory(home + "/.config" + suffix)
+        native.directory(home + "/.config/systemd/user", os.getuid(), os.getgid(), 0o700)
+        native.publish(home + "/.config/containers/storage.conf",
+                       desired["files"]["/etc/secpal/host-base/storage.conf"])
+        for name in ("podman.service", "podman.socket"):
+            native.path(home + "/.config/systemd/user/" + name).symlink_to("/dev/null")
+        native.changes = 0
+        return native, desired
+
+    def test_exact_failed_layout_is_repaired_once_without_replacing_masks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native, desired = self.legacy_fixture(directory)
+            home = desired["account"]["home"]
+            masks = [native.path(home + "/.config/systemd/user/" + name)
+                     for name in ("podman.service", "podman.socket")]
+            original = [path.lstat().st_ino for path in masks]
+            phase.install_public_base(native, desired)
+            self.assertEqual([path.lstat().st_ino for path in masks], original)
+            storage = native.path(home + "/.config/containers/storage.conf")
+            self.assertTrue(storage.is_symlink())
+            self.assertEqual(storage.resolve(),
+                             native.path("/etc/secpal/host-base/storage.conf"))
+            self.assertEqual(desired["directories"][home][0], 0)
+            native.changes = 0
+            phase.install_public_base(native, desired)
+            self.assertEqual(native.changes, 0)
+
+    def test_legacy_repair_rejects_drift_before_any_mutation(self):
+        for change in ("contents", "extra-file", "directory-mode", "mask-target", "storage-link"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                native, desired = self.legacy_fixture(directory)
+                config = native.path(desired["account"]["home"] + "/.config")
+                storage = config / "containers/storage.conf"
+                if change == "contents":
+                    storage.write_text("foreign configuration")
+                elif change == "extra-file":
+                    (config / "containers/foreign.conf").touch()
+                elif change == "directory-mode":
+                    (config / "containers").chmod(0o775)
+                elif change == "mask-target":
+                    (config / "systemd/user/podman.socket").unlink()
+                    (config / "systemd/user/podman.socket").symlink_to("/tmp/foreign")
+                else:
+                    storage.unlink()
+                    storage.symlink_to("/tmp/foreign")
+                before = {str(path): (path.lstat().st_ino, path.lstat().st_mtime_ns)
+                          for path in config.rglob("*")}
+                with self.assertRaises(phase.Error):
+                    phase.install_public_base(native, desired)
+                self.assertEqual(native.changes, 0)
+                self.assertEqual(before, {str(path): (path.lstat().st_ino, path.lstat().st_mtime_ns)
+                                          for path in config.rglob("*")})
+                self.assertFalse(native.installed)
+
+    def test_legacy_repair_rejects_conflicting_owner_before_any_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native, desired = self.legacy_fixture(directory)
+            target = native.path(desired["account"]["home"] + "/.config/containers")
+            original = Path.lstat
+            def wrong_owner(path):
+                info = original(path)
+                if path == target:
+                    fields = list(info)
+                    fields[4] = os.getuid() + 1
+                    return os.stat_result(fields)
+                return info
+            with patch.object(Path, "lstat", wrong_owner):
+                with self.assertRaises(phase.Error):
+                    phase.install_public_base(native, desired)
+            self.assertEqual(native.changes, 0)
+            self.assertFalse(native.installed)
+
+    def test_user_xdg_rejects_wrong_owner_mode_and_storage_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            desired = self.plan()
+            native = FixtureNative(Path(directory), desired)
+            phase.install_public_base(native, desired)
+            home = desired["account"]["home"]
+            # Same executable helper and real filesystem, with a contradictory
+            # effective identity; never claim this as native Podman acceptance.
+            arguments = ["fixture", str(native.path(home)),
+                         str(native.path("/etc/secpal/host-base/storage.conf")), "verify"]
+            with patch.object(sys, "argv", arguments), patch.object(os, "geteuid", return_value=os.getuid() + 1):
+                with self.assertRaises(SystemExit):
+                    exec(compile(phase.XDG_SETUP, "<xdg-owner-test>", "exec"), {})
+            config = native.path(home + "/.config")
+            config.chmod(0o755)
+            with self.assertRaises(phase.Error):
+                native.xdg(desired)
+            config.chmod(0o700)
+            link = config / "containers/storage.conf"
+            link.unlink()
+            link.symlink_to("/tmp/foreign-storage.conf")
+            with self.assertRaises(phase.Error):
+                native.xdg(desired, install=True)
+            self.assertEqual(link.readlink(), Path("/tmp/foreign-storage.conf"))
 
     def test_direct_configuration_is_preview_only_and_loopback_only(self):
         plan = self.plan()
@@ -432,16 +560,21 @@ class InstallationContract(unittest.TestCase):
             native = FixtureNative(Path(directory), desired)
             phase.install_public_base(native, desired)
             original = native.run
-            def conflicting(operation, arguments, **kwargs):
-                status, output = original(operation, arguments, **kwargs)
-                if operation == "observe-runtime":
-                    data = phase.json.loads(output)
-                    data["host"]["security"]["rootless"] = False
-                    output = phase.json.dumps(data)
-                return status, output
-            native.run = conflicting
-            with self.assertRaises(phase.rocky.ContractError):
-                phase.verify_public_base(native, desired)
+            for case in ("rootless", "graphroot"):
+                with self.subTest(case=case):
+                    def conflicting(operation, arguments, **kwargs):
+                        status, output = original(operation, arguments, **kwargs)
+                        if operation == "observe-runtime":
+                            data = phase.json.loads(output)
+                            if case == "rootless":
+                                data["host"]["security"]["rootless"] = False
+                            else:
+                                data["store"]["graphRoot"] = "/tmp/foreign-store"
+                            output = phase.json.dumps(data)
+                        return status, output
+                    native.run = conflicting
+                    with self.assertRaises((phase.rocky.ContractError, phase.Error)):
+                        phase.verify_public_base(native, desired)
 
 
 if __name__ == "__main__":
