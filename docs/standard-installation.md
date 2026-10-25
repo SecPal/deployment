@@ -149,6 +149,82 @@ Existing local file-context rules must match this one managed equivalence;
 foreign rules, a populated unadmitted store or label drift require review.
 Repeated execution verifies policy and actual labels without relabeling.
 
+## Architecture dispatch for this Phase-1 path
+
+The versioned `.secpal/evidence-architecture.json` declares this CLI's reachable,
+trusted, fallible operations. It is source material, not an ignored approval
+file or persisted PASS. It does not authorize other cloud, migration,
+enrollment, activation or workload tools.
+
+Run the accepted maintained governance executable against the **actual active
+deployment worktree**, followed by the existing repository enforcement:
+
+```sh
+python3 -I "$SECPAL_GOVERNANCE_CHECKOUT/scripts/secpal-evidence-architecture.py" \
+  --repository-root "$PWD" --repository SecPal/deployment --dispatch
+python3 tests/standard-installation.py
+python3 tests/rocky-evidence-architecture.py
+scripts/validate-rocky-evidence-architecture.py
+```
+
+`SECPAL_GOVERNANCE_CHECKOUT` denotes the existing accepted checkout, not a new
+installer or host configuration source. Record its exact commit and executable
+identities with the run. Implementation qualification uses shared commit
+`744964a0fa7dd6887fe617431f77d52622f0d2c7`, executable blob
+`7df49235acd15250609bf2c2d2189dc32cb3480c`.
+
+Standalone `--repository-root` is the supported invocation for this explicit
+operator-run CLI. Managed API dispatch additionally requires its actual
+maintained managed scope and `--managed-worktree deployment=ABSOLUTE_ACTIVE_WORKTREE`.
+Do not invent a scope, substitute another clone, or use self-check/baseline-only
+success as dispatch admission. No Polyscope configuration or runtime change
+is required for this standalone procedure.
+
+### Completeness, diagnostics and authoritative owners
+
+The inventory contains the named process operations, filesystem/host-material
+boundaries and six reachable #80 RPM-observer operations. Every entry is
+reachable, fallible and trusted, with a unique semantic diagnostic.
+`tests/standard-installation.py` compares the inventory to actual diagnostic,
+run and change calls, traces used RPM-observer methods, and rejects missing
+operations, false flags, opaque/duplicate diagnostics, unlisted calls and
+unprotected Native methods.
+
+The small diagnostic adapter preserves existing closed security failures and
+the RPM observer's operation enum; it redacts foreign exception text.
+Filesystem failures identify the inspected/published material. Legacy storage
+removal, mode restriction and ownership transfer have distinct identities.
+Runtime-user lookup now lies inside the existing command-observation boundary.
+No package, host mutation, runtime command or security decision is added.
+
+The central expression evaluator cannot execute the real multi-statement
+Python owners below. The canonical companion's supported **broader
+repository-specific enforcement path** applies. No simplified predicate or
+wrapper substitutes for production code. Generic `pure_surfaces` and
+`invariant_declarations` are therefore empty; the central report has zero
+generic agreement executions. This does not claim an absence of invariants.
+
+| Invariant/role                                    | Existing owner and executable evidence                                                                                                                                                                                                                   |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Protected ancestry and single-link public files   | `scripts/host-firewall.py:trusted` owns the invariant; `Native.trusted` independently enforces it. The existing root-path agreement test executes both real functions on the same accepting/rejecting POSIX metadata and asserts each expected decision. |
+| Root-owned home and Quadlet search                | `validate-production-contract.py` path/search validators; the existing planned-home agreement and stale-manager tests execute those owners.                                                                                                              |
+| OS/RPM, signer, subordinate IDs, rootless runtime | Existing #80 normalization/admission functions are called directly. Existing Rocky architecture validator/suites enforce purity and layer boundaries.                                                                                                    |
+| PostgreSQL and DIRECT public rendering            | Existing #81 and #219/#220 renderers; existing equivalence tests bind actual output bytes. Plan composition observes reviewed public source material and is not declared pure.                                                                           |
+| Firewall and boot restoration                     | Existing #104 owner and byte-identical helper; existing firewall suites and native read-back remain required.                                                                                                                                            |
+| Readiness and OCI admission                       | Existing #241 trusted callbacks; absent/rejected/raw/expired-admission tests remain binding. CLI success cannot supply callbacks.                                                                                                                        |
+
+These metadata agreement cases are representation evidence, not native Podman
+acceptance. No `evidence-agreement-results.json` claims unsupported generic
+execution. Fresh real agreement tests, repository coverage, canonical dispatch
+validation and independent architecture review together qualify the broader
+path. Central validation alone can accept an incomplete nonempty inventory;
+the repository completeness tests must also pass.
+
+Independent architecture review must confirm scope, semantic grouping, actual
+owners, broader-surface enforcement and absence of undeclared or opaque
+reachable boundaries. Exact-source security qualification and required CI
+remain mandatory. The declaration grants no native, OCI or production admission.
+
 ## Independent admission through READY_FOR_ENROLLMENT
 
 Installation success cannot grant `READY_FOR_ENROLLMENT`. No CLI flag,
