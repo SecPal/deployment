@@ -3,7 +3,11 @@
 # SPDX-License-Identifier: MIT
 
 """Source-level installation contracts; never native host acceptance."""
+import ast
+import contextlib
 import copy
+import io
+import json
 import importlib.util
 import os
 from pathlib import Path
@@ -166,6 +170,163 @@ class InstallationContract(unittest.TestCase):
     def plan(self):
         # Only canonical documentation fixtures may use synthetic inventory admission.
         return phase.plan(self.inventory, self.firewall, synthetic=True)
+
+    def assert_dispatch_declaration(self, document=None, source=None):
+        if document is None:
+            document = json.loads((ROOT / ".secpal/evidence-architecture.json").read_text())
+        tree = ast.parse(source if source is not None else
+                         (ROOT / "scripts/standard-installation.py").read_text())
+        # Root source-authority observation runs before the CLI and before the
+        # adapter is defined; its existing fixed diagnostic is also reachable.
+        source_diagnostic = "FAIL: phase-one:administrator-owned-source-required"
+        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                            and node.func.id == "print" and node.args
+                            and isinstance(node.args[0], ast.Constant)
+                            and node.args[0].value == source_diagnostic for node in ast.walk(tree)))
+        operations = {"administrator-owned-source-required"}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            name = (node.func.id if isinstance(node.func, ast.Name) else
+                    node.func.attr if isinstance(node.func, ast.Attribute) else None)
+            if name == "diagnostic" or (name in {"run", "change"}
+                    and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in {"self", "native"}):
+                argument = node.args[0]
+                values = [argument.body, argument.orelse] if isinstance(argument, ast.IfExp) else [argument]
+                for value in values:
+                    if isinstance(value, ast.Name) and value.id == "operation":
+                        continue  # run/change forward their already identified operation.
+                    self.assertIsInstance(value, ast.Constant)
+                    self.assertIsInstance(value.value, str)
+                    operations.add(value.value)
+        # Trace only the actually used #80 observer methods and their self calls.
+        observer_tree = ast.parse((ROOT / "scripts/ci-cloud/collect-rocky-preparation.py").read_text())
+        observer = next(node for node in observer_tree.body
+                        if isinstance(node, ast.ClassDef) and node.name == "Observer")
+        methods = {node.name: node for node in observer.body if isinstance(node, ast.FunctionDef)}
+        pending = [node.func.attr for node in ast.walk(tree)
+                   if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                   and ast.unparse(node.func.value) in {"observer", "rpm_observer.Observer()"}]
+        seen = set()
+        while pending:
+            name = pending.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            for node in ast.walk(methods[name]):
+                if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                        and node.value.id == "ObservationOperation"):
+                    operations.add("rpm-" + getattr(phase.rpm_observer.ObservationOperation, node.attr).value)
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
+                        and node.func.attr in methods):
+                    pending.append(node.func.attr)
+        native = next(node for node in tree.body
+                      if isinstance(node, ast.ClassDef) and node.name == "Native")
+        for method in native.body:
+            if not isinstance(method, ast.FunctionDef):
+                continue
+            if method.name not in {"__init__", "path", "run", "change", "xdg"}:
+                self.assertTrue(any(isinstance(item, ast.Call)
+                                    and isinstance(item.func, ast.Name) and item.func.id == "diagnostic"
+                                    for item in method.decorator_list), method.name)
+        entries = document["external_operations"]
+        self.assertEqual({row["id"] for row in entries}, operations)
+        self.assertEqual(len(entries), len(operations))
+        for row in entries:
+            self.assertEqual(row, {"id": row["id"], "reachable": True, "fallible": True,
+                                  "trusted": True,
+                                  "diagnostic_identity": {"id": row["id"], "kind": "semantic"}})
+
+    def test_dispatch_declaration_covers_executable_diagnostics_exactly(self):
+        self.assert_dispatch_declaration()
+
+    def test_dispatch_completeness_rejects_missing_contradictory_and_opaque_evidence(self):
+        original = json.loads((ROOT / ".secpal/evidence-architecture.json").read_text())
+        for kind in ("missing-operation", "empty", "false-fallible", "false-trusted",
+                     "false-reachable", "missing-diagnostic", "duplicate-diagnostic"):
+            with self.subTest(kind=kind):
+                document = copy.deepcopy(original)
+                row = document["external_operations"][0]
+                if kind == "missing-operation":
+                    document["external_operations"].pop()
+                elif kind == "empty":
+                    document["external_operations"] = []
+                elif kind.startswith("false-"):
+                    row[kind.removeprefix("false-")] = False
+                elif kind == "missing-diagnostic":
+                    row["diagnostic_identity"] = None
+                else:
+                    row["diagnostic_identity"] = document["external_operations"][1]["diagnostic_identity"]
+                with self.assertRaises(AssertionError):
+                    self.assert_dispatch_declaration(document)
+
+    def test_dispatch_completeness_rejects_new_unlisted_or_unprotected_source_operation(self):
+        source = (ROOT / "scripts/standard-installation.py").read_text()
+        changes = [source + '\ndef fixture(native):\n    native.run("unlisted-command", ["true"])\n',
+                   source.replace('    @diagnostic("inspect-public-path")\n', "", 1)]
+        for changed in changes:
+            with self.assertRaises(AssertionError):
+                self.assert_dispatch_declaration(source=changed)
+
+    def test_rpm_owner_operation_survives_adapter_and_change_failure_is_not_counted(self):
+        with self.assertRaisesRegex(phase.Error, "^rpm-resolve-package-repository$"):
+            with phase.diagnostic("admit-native-packages"):
+                raise phase.rpm_observer.ObservationError(
+                    phase.rpm_observer.ObservationOperation.PACKAGE_REPOSITORY,
+                    "command-failed", "PRIVATE_FIXTURE")
+        native = phase.Native()
+        with patch.object(native, "run", side_effect=phase.Error("reload-systemd-command-failed")):
+            with self.assertRaisesRegex(phase.Error, "^reload-systemd-command-failed$"):
+                native.change("reload-systemd", ["systemctl", "daemon-reload"])
+        self.assertEqual(native.changes, 0)
+
+    def test_actual_runtime_normalizer_depth_failure_is_bounded_and_redacted(self):
+        desired = self.plan()
+        native = phase.Native()
+        payload = "[" * 100000 + "0" + "]" * 100000
+        self.assertEqual(len(payload), 200001)  # Below both command/observer limits.
+        def observe(operation, arguments, **kwargs):
+            if operation == "observe-effective-quadlet-search":
+                return 0, "QUADLET_UNIT_DIRS=" + desired["inventory"]["paths"]["quadlet_definitions"]["path"]
+            self.assertEqual(operation, "observe-runtime")
+            return 0, payload
+        with patch.object(native, "run", side_effect=observe):
+            with self.assertRaisesRegex(phase.Error, "^admit-native-runtime$"):
+                # Real Native.runtime and canonical json.loads normalization;
+                # no synthetic exception replaces the reviewed representation.
+                native.runtime(desired, [])
+
+    def test_native_user_lookup_failure_retains_command_operation(self):
+        with patch.object(phase.pwd, "getpwnam", side_effect=KeyError("PRIVATE_FIXTURE")):
+            with self.assertRaisesRegex(phase.Error, "^observe-runtime-observation-failed$"):
+                phase.Native().run("observe-runtime", ["podman", "info"], user="fixture")
+
+    def test_filesystem_failure_is_semantic_and_redacted(self):
+        with patch.object(Path, "lstat", side_effect=OSError("PRIVATE_FIXTURE")):
+            with self.assertRaisesRegex(phase.Error, "^inspect-public-path$"):
+                phase.Native().trusted(Path("/etc/secpal/example.conf"))
+
+    def test_cli_input_observation_failure_is_locatable(self):
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["fixture", "--plan", "--inventory", "/fixture/inventory",
+                                      "--firewall", "/fixture/firewall"]), \
+                patch.object(os, "geteuid", return_value=1000), \
+                patch.object(phase.inventory_owner, "read_document",
+                             side_effect=OSError("PRIVATE_FIXTURE")), \
+                contextlib.redirect_stderr(output):
+            self.assertEqual(phase.main(), 1)
+        self.assertEqual(output.getvalue(), "FAIL: phase-one:read-public-inventory\n")
+
+    def test_diagnostic_adapter_never_uses_foreign_exception_text(self):
+        with self.assertRaisesRegex(phase.Error, "^inspect-public-path$"):
+            with phase.diagnostic("inspect-public-path"):
+                raise ValueError("PRIVATE_FIXTURE")
+        with self.assertRaisesRegex(phase.Error, "^graphroot-conflict$"):
+            with phase.diagnostic("admit-native-runtime"):
+                raise phase.Error("graphroot-conflict")
 
     def test_public_plan_reuses_postgresql_renderer_and_has_no_state_authority(self):
         plan = self.plan()
@@ -432,7 +593,8 @@ class InstallationContract(unittest.TestCase):
                             accepted.append(True)
                         except (phase.Error, ValueError):
                             accepted.append(False)
-                self.assertEqual(accepted[0], accepted[1])
+                expected = mode == 0o100644 and uid == 0 and links == 1
+                self.assertEqual(accepted, [expected, expected])
 
     def test_native_command_failure_never_exposes_untrusted_output(self):
         native = phase.Native()

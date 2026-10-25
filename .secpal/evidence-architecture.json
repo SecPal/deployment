@@ -1,0 +1,802 @@
+{
+  "schema": "secpal-evidence-architecture/v1",
+  "repository": "SecPal/deployment",
+  "runtime_baseline": {
+    "delegation": "direct",
+    "generic_authorities": ["docs/evidence-architecture-contract.md"]
+  },
+  "external_operations": [
+    {
+      "id": "administrator-owned-source-required",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "administrator-owned-source-required",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "admit-host-platform",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "admit-host-platform",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "admit-native-packages",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "admit-native-packages",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "admit-native-runtime",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "admit-native-runtime",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "admit-postgresql-declaration",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "admit-postgresql-declaration",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "admit-public-firewall-input",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "admit-public-firewall-input",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "allocate-subids",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "allocate-subids",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "apply-host-firewall",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "apply-host-firewall",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "configure-rootless-xdg",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "configure-rootless-xdg",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "configure-storage-label-policy",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "configure-storage-label-policy",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "create-runtime-account",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "create-runtime-account",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "create-runtime-group",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "create-runtime-group",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "enable-host-firewall",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "enable-host-firewall",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "enable-runtime-linger",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "enable-runtime-linger",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "inspect-dormant-host-services",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "inspect-dormant-host-services",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "inspect-legacy-xdg",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "inspect-legacy-xdg",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "inspect-premature-authority",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "inspect-premature-authority",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "inspect-public-install-state",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "inspect-public-install-state",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "inspect-public-path",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "inspect-public-path",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "inspect-required-packages",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "inspect-required-packages",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "inspect-runtime-account",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "inspect-runtime-account",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "inspect-runtime-unit",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "inspect-runtime-unit",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "inspect-subordinate-ids",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "inspect-subordinate-ids",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "install-public-packages",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "install-public-packages",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "label-empty-storage",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "label-empty-storage",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "mask-dormant-unit",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "mask-dormant-unit",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-architecture",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-architecture",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-automatic-update-active-state",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-automatic-update-active-state",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-automatic-update-enable-state",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-automatic-update-enable-state",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-cgroup",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-cgroup",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-containers",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-containers",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-cpu",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-cpu",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-dormant-service",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-dormant-service",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-effective-quadlet-search",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-effective-quadlet-search",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-file-contexts",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-file-contexts",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-foreign-firewall-enable-state",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-foreign-firewall-enable-state",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-haproxy-features",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-haproxy-features",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-haproxy-rpm",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-haproxy-rpm",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-host-firewall",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-host-firewall",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-hostname",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-hostname",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-installed-package",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-installed-package",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-nftables-active-state",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-nftables-active-state",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-nftables-enable-state",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-nftables-enable-state",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-pinned-package",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-pinned-package",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-repositories",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-repositories",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-runtime",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-runtime",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-selinux",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-selinux",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-selinux-policy",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-selinux-policy",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-storage-label",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-storage-label",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-unit-active-state",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-unit-active-state",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-unit-enable-state",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-unit-enable-state",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "observe-user-manager",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "observe-user-manager",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "prepare-public-directory",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "prepare-public-directory",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "publish-public-file",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "publish-public-file",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "read-public-firewall",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "read-public-firewall",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "read-public-inventory",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "read-public-inventory",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "read-reviewed-public-source",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "read-reviewed-public-source",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "reload-systemd",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "reload-systemd",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "remove-verified-legacy-storage",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "remove-verified-legacy-storage",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "render-direct-public-preview",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "render-direct-public-preview",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "render-postgresql-public-base",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "render-postgresql-public-base",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "render-public-plan",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "render-public-plan",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "restrict-legacy-xdg-mode",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "restrict-legacy-xdg-mode",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "rpm-inspect-installed-signed-header",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "rpm-inspect-installed-signed-header",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "rpm-inspect-rocky-signing-key",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "rpm-inspect-rocky-signing-key",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "rpm-query-effective-identities",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "rpm-query-effective-identities",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "rpm-query-package-nevra",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "rpm-query-package-nevra",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "rpm-query-sudo-authority",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "rpm-query-sudo-authority",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "rpm-resolve-package-repository",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "rpm-resolve-package-repository",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "start-host-firewall",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "start-host-firewall",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "start-user-manager",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "start-user-manager",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "transfer-legacy-xdg-owner",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "transfer-legacy-xdg-owner",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "verify-firewall-persistence",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "verify-firewall-persistence",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "verify-haproxy-preview",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "verify-haproxy-preview",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "verify-host-firewall",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "verify-host-firewall",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "verify-public-file",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "verify-public-file",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "verify-rootless-xdg",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "verify-rootless-xdg",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "verify-storage-label",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "verify-storage-label",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "verify-storage-label-policy",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "verify-storage-label-policy",
+        "kind": "semantic"
+      }
+    }
+  ],
+  "pure_surfaces": [],
+  "invariant_declarations": []
+}

@@ -12,6 +12,7 @@ following host_enrollment._ready, never a caller-authored JSON or CLI assertion.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import grp
 import hashlib
 import importlib.util
@@ -79,6 +80,26 @@ class Error(ValueError):
     """Bounded semantic diagnostic, never command output or secret content."""
 
 
+@contextmanager
+def diagnostic(operation):
+    """Locate an external failure without publishing foreign exception text.
+
+    Existing closed security decisions retain their own identity. The existing
+    RPM observer already owns a closed operation enum; retain that identity
+    rather than flattening its failures into a bootstrap phase.
+    """
+    try:
+        yield
+    except Error:
+        raise
+    except rpm_observer.ObservationError as error:
+        identity = rpm_observer.ObservationOperation(error.operation).value
+        raise Error("rpm-" + identity) from None
+    except (ValueError, OSError, KeyError, RecursionError, inventory_owner.ContractViolation,
+            rocky.ContractError, postgresql.QualificationError):
+        raise Error(operation) from None
+
+
 def admit_environment():
     names = set(os.environ)  # Names only; never read credential values.
     forbidden = {"APP_KEY", "DB_PASSWORD", "DATABASE_URL", "GH_TOKEN", "GITHUB_TOKEN",
@@ -102,6 +123,7 @@ def admit_platform(release, architecture, enforcing, inventory):
         raise Error("unsupported-host")
 
 
+@diagnostic("render-public-plan")
 def plan(inventory, firewall, *, synthetic=False):
     """Render public output from existing inputs/owners; no host observation."""
     try:
@@ -109,25 +131,32 @@ def plan(inventory, firewall, *, synthetic=False):
         inventory_owner.validate_inventory(inventory, synthetic=synthetic)
     except inventory_owner.ContractViolation:
         raise Error("admit-public-inventory") from None
-    firewall = firewall_owner.configuration(firewall)
+    with diagnostic("admit-public-firewall-input"):
+        firewall = firewall_owner.configuration(firewall)
     if firewall["edge_mode"] != "DIRECT":
         raise Error("phase-one-direct-only")
     account = inventory["service_account"]
     uid, gid, home = account["uid"], account["gid"], account["home"]
     architecture = inventory_owner.RPM_ARCHITECTURES[inventory["host"]["architecture"]]
-    declaration = postgresql.parse_declaration(
-        (ROOT / postgresql.CANDIDATE_PATH).read_text())
-    rendered_pg = postgresql.render_configuration(declaration, uid)
-    rendered_direct = direct.render(direct.Direct(
-        Routing(urlsplit(inventory["origins"]["frontend"]).hostname,
-                urlsplit(inventory["origins"]["api"]).hostname),
-        (direct.ViewerListener(Listener("127.0.0.1", 18085), "http"),)))
+    def public_source(relative):
+        with diagnostic("read-reviewed-public-source"):
+            return (ROOT / relative).read_text()
+
+    with diagnostic("admit-postgresql-declaration"):
+        declaration = postgresql.parse_declaration(public_source(postgresql.CANDIDATE_PATH))
+    with diagnostic("render-postgresql-public-base"):
+        rendered_pg = postgresql.render_configuration(declaration, uid)
+    with diagnostic("render-direct-public-preview"):
+        rendered_direct = direct.render(direct.Direct(
+            Routing(urlsplit(inventory["origins"]["frontend"]).hostname,
+                    urlsplit(inventory["origins"]["api"]).hostname),
+            (direct.ViewerListener(Listener("127.0.0.1", 18085), "http"),)))
     graphroot = inventory["paths"]["podman_graph_root"]["path"]
     files = {
         "/etc/secpal/host-firewall.json": json.dumps(firewall, sort_keys=True) + "\n",
         "/etc/secpal/host-base/haproxy.cfg": rendered_direct,
         "/etc/systemd/system/nftables.service.d/secpal-host.conf":
-            (ROOT / "config/production/host-systemd/nftables.service.d/secpal-host.conf").read_text(),
+            public_source("config/production/host-systemd/nftables.service.d/secpal-host.conf"),
         f"/etc/systemd/system/user@{uid}.service.d/50-secpal-quadlet.conf":
             f"[Service]\nEnvironment=QUADLET_UNIT_DIRS=/etc/containers/systemd/users/{uid}\n",
         "/etc/secpal/host-base/storage.conf":
@@ -138,7 +167,7 @@ def plan(inventory, firewall, *, synthetic=False):
         files["/etc/secpal/host-base/" + name] = rendered_pg[name]
     for name in ("host-firewall.py", "host_firewall_contract.py", "cloudfront-origin-prefix-lkg.py"):
         target = "host-firewall" if name == "host-firewall.py" else name
-        files["/usr/local/libexec/secpal/" + target] = (ROOT / "scripts" / name).read_text()
+        files["/usr/local/libexec/secpal/" + target] = public_source("scripts/" + name)
     directories = {
         # #80 validate_path_access_facts owns the home metadata.
         home: (0, gid, 0o750),
@@ -209,12 +238,12 @@ class Native:
         return self.root / str(path).lstrip("/")
 
     def run(self, operation, arguments, *, user=None, accepted=(0,), timeout=60):
-        if user is not None:
-            account = pwd.getpwnam(user)
-            arguments = ["runuser", "--user", user, "--", "env",
-                         "HOME=" + account.pw_dir, f"XDG_RUNTIME_DIR=/run/user/{account.pw_uid}",
-                         f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{account.pw_uid}/bus", *arguments]
         try:
+            if user is not None:
+                account = pwd.getpwnam(user)
+                arguments = ["runuser", "--user", user, "--", "env",
+                             "HOME=" + account.pw_dir, f"XDG_RUNTIME_DIR=/run/user/{account.pw_uid}",
+                             f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{account.pw_uid}/bus", *arguments]
             with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
                 result = subprocess.run(arguments, stdout=out, stderr=err, timeout=timeout,
                                         env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}, cwd="/")
@@ -224,13 +253,14 @@ class Native:
             if result.returncode not in accepted or len(raw) > 1048576 or len(diagnostic) > 65536:
                 raise Error(operation + "-command-failed")
             return result.returncode, raw.decode("utf-8").strip()
-        except (OSError, UnicodeError, subprocess.SubprocessError):
+        except (OSError, KeyError, UnicodeError, subprocess.SubprocessError):
             raise Error(operation + "-observation-failed") from None
 
     def change(self, operation, arguments, **kwargs):
         self.run(operation, arguments, **kwargs)
         self.changes += 1
 
+    @diagnostic("inspect-public-path")
     def trusted(self, path, *, directory=False):
         """Independent enforcement of #104 host-firewall.trusted; agreement-tested."""
         for entry in (path, *path.parents):
@@ -247,6 +277,7 @@ class Native:
         elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise Error("untrusted-public-file")
 
+    @diagnostic("prepare-public-directory")
     def directory(self, name, uid=0, gid=0, mode=0o755, *, create=True):
         path = self.path(name)
         if not path.parent.exists():
@@ -271,6 +302,7 @@ class Native:
         self.changes += 1
         return True
 
+    @diagnostic("verify-public-file")
     def public_file(self, name, text):
         path = self.path(name)
         self.trusted(path)
@@ -279,6 +311,7 @@ class Native:
                 or path.stat().st_size != len(text.encode()) or path.read_bytes() != text.encode()):
             raise Error("public-file-conflict")
 
+    @diagnostic("publish-public-file")
     def publish(self, name, text):
         path = self.path(name)
         if path.exists() or path.is_symlink():
@@ -312,6 +345,7 @@ class Native:
             raise Error("rootless-xdg-conflict")
         self.changes += result == "changed"
 
+    @diagnostic("inspect-legacy-xdg")
     def legacy_xdg(self, desired, *, repair=False):
         """Recognize only the exact failed #361 public layout, never arbitrary data.
 
@@ -356,14 +390,18 @@ class Native:
             # Revalidated immediately before mutation; the original ancestors
             # remain root-owned until all root writes have finished.
             self.public_file("/etc/secpal/host-base/storage.conf", text)
-            storage.unlink()  # Exact verified public bytes already preserved above.
+            with diagnostic("remove-verified-legacy-storage"):
+                storage.unlink()  # Exact public bytes already preserved above.
             self.changes += 1
             for path in (config / "containers", config / "systemd", config):
-                path.chmod(0o700)
-                os.chown(path, account["uid"], account["gid"], follow_symlinks=False)
+                with diagnostic("restrict-legacy-xdg-mode"):
+                    path.chmod(0o700)
+                with diagnostic("transfer-legacy-xdg-owner"):
+                    os.chown(path, account["uid"], account["gid"], follow_symlinks=False)
                 self.changes += 1
         return True
 
+    @diagnostic("inspect-premature-authority")
     def no_authority(self, desired):
         """Metadata only: no database, key, credential or existing data is read."""
         forbidden = [row["path"] for name, row in desired["inventory"]["paths"].items()
@@ -393,6 +431,7 @@ class Native:
                         r"secret|credential|enrollment|activation|\.key$", child.name, re.I):
                     raise Error("premature-authority")
 
+    @diagnostic("admit-host-platform")
     def platform(self, desired):
         admit_environment()
         admit_platform(self.path("/etc/os-release").read_text(),
@@ -436,6 +475,7 @@ class Native:
                     "inactive", "unknown", "failed"}:
                 raise Error("automatic-update-policy-conflict")
 
+    @diagnostic("inspect-dormant-host-services")
     def dormant(self, desired):
         for unit in ("postgresql.service", "haproxy.service", "podman.service", "podman.socket",
                      "firewalld.service"):
@@ -464,6 +504,7 @@ class Native:
         if quadlets.is_symlink() or (quadlets.exists() and any(quadlets.iterdir())):
             raise Error("premature-workload-authority")
 
+    @diagnostic("inspect-runtime-account")
     def account(self, desired, *, install=False):
         spec = desired["account"]
         try:
@@ -503,6 +544,7 @@ class Native:
             raise Error("runtime-sudo-authority")
         return account
 
+    @diagnostic("inspect-subordinate-ids")
     def subids(self, desired, *, install=False):
         spec = desired["account"]
         ids = rpm_observer.Observer().effective_ids()
@@ -530,6 +572,7 @@ class Native:
             if not entries:
                 self.change("allocate-subids", ["usermod", option, f"{start}-{start + count - 1}", spec["name"]])
 
+    @diagnostic("inspect-required-packages")
     def package_requirements(self, desired):
         missing = []
         for item in desired["packages"]:
@@ -545,6 +588,7 @@ class Native:
                     raise Error("pinned-package-conflict")
         return missing
 
+    @diagnostic("admit-native-packages")
     def packages(self, desired):
         architecture = inventory_owner.RPM_ARCHITECTURES[desired["inventory"]["host"]["architecture"]]
         observer = rpm_observer.Observer()
@@ -568,6 +612,7 @@ class Native:
             haproxy_supply.normalize_features(self.run("observe-haproxy-features", ["haproxy", "-vv"])[1]))
         return admitted
 
+    @diagnostic("verify-storage-label-policy")
     def storage_labels(self, desired, *, install=False):
         """#80 persistent labels, using the installed container-selinux policy.
 
@@ -600,6 +645,7 @@ class Native:
             self.change("label-empty-storage", ["restorecon", "-F", graphroot])
             self.run("verify-storage-label", ["matchpathcon", "-V", graphroot])
 
+    @diagnostic("inspect-runtime-unit")
     def unit(self, unit, *, user=None, install=False):
         status, active = self.run("observe-unit-active-state",
                                  ["systemctl", *(["--user"] if user else []), "is-active", unit],
@@ -614,6 +660,7 @@ class Native:
             raise Error("unit-mask-conflict")
         self.change("mask-dormant-unit", ["systemctl", *(["--user"] if user else []), "mask", unit], user=user)
 
+    @diagnostic("admit-native-runtime")
     def runtime(self, desired, packages):
         account = desired["account"]
         uid, user = account["uid"], account["name"]
@@ -668,6 +715,7 @@ def verify_public_base(native, desired):
     native.run("verify-haproxy-preview", ["haproxy", "-c", "-f", "/etc/secpal/host-base/haproxy.cfg"])
 
 
+@diagnostic("inspect-public-install-state")
 def install_public_base(native, desired):
     native.platform(desired)
     native.dormant(desired)
@@ -763,8 +811,11 @@ def main():
         if os.geteuid() == 0:
             for document in (args.inventory, args.firewall):
                 native.trusted(native.path(str(document.absolute())))
-        desired = plan(inventory_owner.read_document(args.inventory, "inventory"),
-                       inventory_owner.read_document(args.firewall, "firewall"))
+        with diagnostic("read-public-inventory"):
+            inventory = inventory_owner.read_document(args.inventory, "inventory")
+        with diagnostic("read-public-firewall"):
+            firewall = inventory_owner.read_document(args.firewall, "firewall")
+        desired = plan(inventory, firewall)
         if args.plan:
             print(json.dumps(desired, sort_keys=True, indent=2))
             return 0
