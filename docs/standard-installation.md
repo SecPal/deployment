@@ -182,7 +182,8 @@ is required for this standalone procedure.
 
 ### Completeness, diagnostics and authoritative owners
 
-The inventory contains the named process operations, filesystem/host-material
+The inventory includes the existing pre-CLI source-authority guard, named
+process operations, filesystem/host-material
 boundaries and six reachable #80 RPM-observer operations. Every entry is
 reachable, fallible and trusted, with a unique semantic diagnostic.
 `tests/standard-installation.py` compares the inventory to actual diagnostic,

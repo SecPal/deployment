@@ -176,7 +176,14 @@ class InstallationContract(unittest.TestCase):
             document = json.loads((ROOT / ".secpal/evidence-architecture.json").read_text())
         tree = ast.parse(source if source is not None else
                          (ROOT / "scripts/standard-installation.py").read_text())
-        operations = set()
+        # Root source-authority observation runs before the CLI and before the
+        # adapter is defined; its existing fixed diagnostic is also reachable.
+        source_diagnostic = "FAIL: phase-one:administrator-owned-source-required"
+        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                            and node.func.id == "print" and node.args
+                            and isinstance(node.args[0], ast.Constant)
+                            and node.args[0].value == source_diagnostic for node in ast.walk(tree)))
+        operations = {"administrator-owned-source-required"}
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not node.args:
                 continue

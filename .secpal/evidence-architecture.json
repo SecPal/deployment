@@ -7,6 +7,16 @@
   },
   "external_operations": [
     {
+      "id": "administrator-owned-source-required",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "administrator-owned-source-required",
+        "kind": "semantic"
+      }
+    },
+    {
       "id": "admit-host-platform",
       "reachable": true,
       "fallible": true,
