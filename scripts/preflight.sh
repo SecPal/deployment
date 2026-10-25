@@ -97,6 +97,7 @@ bash tests/ci-cloud-init-retry.sh
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py
 python3 tests/standard-installation.py
+python3 tests/native-host-qualification.py
 python3 tests/native-postgresql-production-contract.py
 python3 tests/certbot-package-provenance.py
 python3 tests/production-state-contract.py

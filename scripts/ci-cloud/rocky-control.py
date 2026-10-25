@@ -636,6 +636,52 @@ def validate_native_qualification(
         raise ControlError(
             "native qualification differs from its authenticated controller binding"
         )
+    validate_native_qualification_facts(document, stdout_path)
+
+
+def operator_qualification_schema(target_sha: str) -> dict[str, Any]:
+    """Scope the unchanged v4 invariants to a trusted operator's exact target.
+
+    This is not source authorization. The caller authenticates protected source,
+    control and host independently; the GCP CLI keeps its historical schema.
+    """
+    if SHA.fullmatch(target_sha) is None:
+        raise ControlError("operator qualification target is not an exact commit")
+    schema = load_object(SCHEMAS["qualification"])
+    schema["properties"]["schema_version"] = {"const": 4}
+    schema["properties"]["target_sha"] = {"const": target_sha}
+    schema["properties"]["native_observation"]["properties"]["target_sha"] = {"const": target_sha}
+    current = schema["allOf"][1]["then"]["properties"]
+    current["target_sha"] = {"const": target_sha}
+    current["native_observation"]["properties"]["target_sha"] = {"const": target_sha}
+    return schema
+
+
+def validate_operator_native_qualification(
+    path: Path, stdout_path: Path, native_observation_path: Path, *,
+    target_sha: str, control_sha: str, execution_id: str,
+) -> None:
+    """Trusted operator API only; no new CLI acceptance or readiness authority."""
+    if (SHA.fullmatch(control_sha) is None
+            or RUN_ID.fullmatch(execution_id) is None):
+        raise ControlError("operator qualification control/execution identity is invalid")
+    document = load_object(path)
+    schema = operator_qualification_schema(target_sha)
+    if list(Draft202012Validator(schema).iter_errors(document)):
+        raise ControlError("operator qualification violates exact-source schema v4")
+    observed = load_object(native_observation_path)
+    if document["native_observation"] != observed:
+        raise ControlError("operator qualification package observation differs")
+    bindings = {"target_sha": target_sha, "trusted_control_sha": control_sha,
+                "qualification_run_id": execution_id, "qualification_run_attempt": "1"}
+    if any(observed[k] != value for k, value in bindings.items()):
+        raise ControlError("operator qualification is not bound to this execution")
+    validate_authenticated_package_semantics(
+        observed["packages"], observed["host"]["architecture"], observed["podman_version"])
+    validate_native_qualification_facts(document, stdout_path)
+
+
+def validate_native_qualification_facts(document: dict[str, Any], stdout_path: Path) -> None:
     try:
         stdout = stdout_path.read_bytes()
     except OSError as error:
