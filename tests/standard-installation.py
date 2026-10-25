@@ -283,6 +283,22 @@ class InstallationContract(unittest.TestCase):
                 native.change("reload-systemd", ["systemctl", "daemon-reload"])
         self.assertEqual(native.changes, 0)
 
+    def test_actual_runtime_normalizer_depth_failure_is_bounded_and_redacted(self):
+        desired = self.plan()
+        native = phase.Native()
+        payload = "[" * 100000 + "0" + "]" * 100000
+        self.assertEqual(len(payload), 200001)  # Below both command/observer limits.
+        def observe(operation, arguments, **kwargs):
+            if operation == "observe-effective-quadlet-search":
+                return 0, "QUADLET_UNIT_DIRS=" + desired["inventory"]["paths"]["quadlet_definitions"]["path"]
+            self.assertEqual(operation, "observe-runtime")
+            return 0, payload
+        with patch.object(native, "run", side_effect=observe):
+            with self.assertRaisesRegex(phase.Error, "^admit-native-runtime$"):
+                # Real Native.runtime and canonical json.loads normalization;
+                # no synthetic exception replaces the reviewed representation.
+                native.runtime(desired, [])
+
     def test_native_user_lookup_failure_retains_command_operation(self):
         with patch.object(phase.pwd, "getpwnam", side_effect=KeyError("PRIVATE_FIXTURE")):
             with self.assertRaisesRegex(phase.Error, "^observe-runtime-observation-failed$"):

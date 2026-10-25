@@ -95,7 +95,7 @@ def diagnostic(operation):
     except rpm_observer.ObservationError as error:
         identity = rpm_observer.ObservationOperation(error.operation).value
         raise Error("rpm-" + identity) from None
-    except (ValueError, OSError, KeyError, inventory_owner.ContractViolation,
+    except (ValueError, OSError, KeyError, RecursionError, inventory_owner.ContractViolation,
             rocky.ContractError, postgresql.QualificationError):
         raise Error(operation) from None
 
