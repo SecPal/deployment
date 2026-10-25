@@ -295,7 +295,11 @@ first with `--stage-fixture`, then with `--qualify`. Both calls require:
 
 Both modes verify the public base before and after their operation. Staging
 pulls only the canonical digest-bound Alpine fixture under `secpal-deploy`,
-with an empty public authentication file, TLS verification and explicit platform.
+with an empty public authentication file and certificate directory, TLS
+verification and explicit platform. This nonsecret temporary material lives
+below trusted `/run` ancestry, traversable by the service account; private
+qualification observations instead live below the administrator's protected
+evidence directory. Canonical ancestry checks are not relaxed.
 The existing `rocky_preparation_contract.admit_fixture_repo_digests` admits the
 complete bounded `RepoDigests` set and exact architecture child; singular
 `Digest`, tags, registry fallback and arbitrary image selection are absent.
@@ -304,9 +308,14 @@ are removed. The GCP preparer is never invoked.
 
 Qualification collects current signed-RPM observations through the existing
 collector, executes the unchanged harness and uses its existing numeric failure
-trace/semantic line mapping. A root-owned control hook independently observes
-the live Quadlet properties, runtime identity and workload process status before
-returning to target assertions. Effective least authority is rechecked by the
+trace and explicit-message classifier/semantic line mapping. Combined stdout/
+stderr stays bounded and private; only closed operation/reason identities are
+published on failure. The TERM-first 45-minute deadline allows the existing
+cleanup traps 180 seconds before KILL; the outer capture deadline is longer. A root-owned control hook independently observes
+the generated Quadlet properties before start, then the actual runtime identity
+and workload process status after successful start and before returning to
+target assertions. The canonical pre-start authority contract is not applied to
+systemd's changed execution timestamps/PID after start. Effective least authority is rechecked by the
 existing harness predicate, not a second UID/capability/seccomp policy.
 Fresh AVC records are independently re-normalized through
 `selinux_isolation_contract.admit_selinux_isolation`; effective Quadlet

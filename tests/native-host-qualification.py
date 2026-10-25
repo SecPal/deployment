@@ -25,8 +25,7 @@ def native_operations(source=None):
     module = load("_native_host_coverage", "scripts/qualify-native-host.py")
     text = source if source is not None else (ROOT / "scripts/qualify-native-host.py").read_text()
     tree = ast.parse(text)
-    operations = {"native-administrator-owned-source-required",
-                  "native-harness-diagnostic-unavailable"}
+    operations = {"native-administrator-owned-source-required"}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not node.args:
             continue
@@ -37,6 +36,7 @@ def native_operations(source=None):
             assert isinstance(node.args[0], ast.Constant)
             operations.add(node.args[0].value)
     operations.update(row[2] for row in module.classifier.LINE_RULES)
+    operations.update(row[1] for row in module.classifier.EXPLICIT_RULES)
     collector_tree = ast.parse((ROOT / "scripts/ci-cloud/collect-rocky-preparation.py").read_text())
     collector = next(n for n in collector_tree.body if isinstance(n, ast.FunctionDef)
                      and n.name == "collect_native_package_admission")
@@ -266,7 +266,11 @@ class NativeHostTests(unittest.TestCase):
             output = Path(temporary) / "live.json"
             native = Native()
             module.unit_observation(native, envelope["live"]["unit"] + ".service", output)
+            self.assertNotIn("workload_status", json.loads(output.read_text()))
+            module.unit_observation(native, envelope["live"]["unit"] + ".service", output, runtime=True)
             self.assertEqual(envelope["live"], json.loads(output.read_text()))
+            self.assertEqual(1, sum(op == "native-observe-quadlet-properties"
+                                    for op, _, _ in native.calls))
             self.assertTrue(any(op == "native-admit-runtime-identity" for op, _, _ in native.calls))
             self.assertTrue(any(op == "native-admit-least-authority" for op, _, _ in native.calls))
         for bad in ("unrelated.service", "../secpal-host-qualification-Ab12Cd.service"):
@@ -274,6 +278,105 @@ class NativeHostTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temporary, self.assertRaises(ValueError):
                 module.unit_observation(native, bad, Path(temporary) / "live.json")
             self.assertEqual([], native.calls)
+
+    def test_real_generated_hook_orders_observations_and_never_hides_failure(self):
+        import os, subprocess, tempfile
+        module = load("_native_host", "scripts/qualify-native-host.py")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); hook = root / "hook"; live = root / "live.json"
+            module.write_control_hook(hook, live)
+            subprocess.run(["bash", "-n", str(hook)], check=True)
+            observer = root / "observer"; runtime = root / "runuser"
+            observer.write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$LOG"\n'
+                                '[ "$1" != "$FAIL_PHASE" ]\n')
+            runtime.write_text('#!/bin/sh\nprintf "runuser\\n" >> "$LOG"\nexit "$RUNTIME_STATUS"\n')
+            observer.chmod(0o700); runtime.chmod(0o700)
+            instrumented = hook.read_text().replace("/usr/sbin/runuser", str(runtime)).replace(
+                "/usr/bin/python3 -I " + str(ROOT / "scripts/qualify-native-host.py"), str(observer))
+            hook.write_text(instrumented)
+            for failure, runtime_status, expected, success in (
+                    ("none", "0", ["--observe-unit", "runuser", "--observe-runtime"], True),
+                    ("--observe-unit", "0", ["--observe-unit"], False),
+                    ("--observe-runtime", "0", ["--observe-unit", "runuser", "--observe-runtime"], False),
+                    ("none", "1", ["--observe-unit", "runuser"], False)):
+                log = root / "log"; log.write_text("")
+                env = {"PATH": "/usr/bin:/bin", "LOG": str(log),
+                       "FAIL_PHASE": failure, "RUNTIME_STATUS": runtime_status}
+                args = ["--user", "secpal-deploy", "--", "env", "-u", "CONTAINER_HOST",
+                        "-u", "CONTAINER_CONNECTION", "HOME=/var/lib/secpal",
+                        "XDG_RUNTIME_DIR=/run/user/20000",
+                        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus",
+                        "systemctl", "--user", "start", "secpal-host-qualification-Ab12Cd.service"]
+                c = subprocess.run(["bash", "-c", 'source "$1"; shift; runuser "$@"',
+                                    "test-owner", str(hook), *args], env=env,
+                                   capture_output=True, text=True)
+                with self.subTest(failure=failure, runtime_status=runtime_status):
+                    self.assertEqual(success, c.returncode == 0, c.stderr)
+                    self.assertEqual(expected, log.read_text().splitlines())
+
+    def test_real_path_owner_admits_only_trusted_working_directory_ancestry(self):
+        import os, tempfile
+        module = load("_native_host", "scripts/qualify-native-host.py")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); (root / "run").mkdir(); (root / "private").mkdir()
+            (root / "var").mkdir(); (root / "var/tmp").mkdir(mode=0o1777)
+            (root / "var/tmp").chmod(0o1777)
+            native = module.phase.Native(root=root, owner=(os.geteuid(), os.getegid()))
+            output = root / "private/evidence.json"
+            with module.working_directory(native, output, staging=False) as actual:
+                self.assertEqual(output.parent, Path(actual).parent)
+                native.trusted(Path(actual), directory=True)
+            with module.working_directory(native, output, staging=True) as actual:
+                self.assertEqual(root / "run", Path(actual).parent)
+                native.trusted(Path(actual), directory=True)
+            with self.assertRaises(module.phase.Error):
+                native.trusted(root / "var/tmp", directory=True)
+
+    def test_every_existing_explicit_harness_rejection_has_its_semantic_owner(self):
+        module = load("_native_host", "scripts/qualify-native-host.py")
+        for prefix, operation, reason in module.classifier.EXPLICIT_RULES:
+            with self.subTest(prefix=prefix):
+                self.assertEqual((operation, reason), module.diagnose_harness(
+                    (prefix + " private variable suffix\n").encode(), b"", 1))
+        self.assertEqual(("qualification-harness", "timeout"),
+                         module.diagnose_harness(b"", b"", 124))
+        self.assertEqual(("qualification-harness", "unclassified-target-failure"),
+                         module.diagnose_harness(b"private unknown message\n", b"", 1))
+
+    def test_harness_timeout_is_term_first_with_real_cleanup_and_outer_grace(self):
+        import subprocess, tempfile
+        from unittest import mock
+        module, envelope, binding = self.envelope()
+        class Captured(Exception):
+            pass
+        class Native:
+            def run(self, operation, arguments, **options):
+                if operation == "native-observe-audit-checkpoint":
+                    return 0, "10/25/26 16:00:00"
+                if operation == "native-execute-harness":
+                    self.command, self.options = arguments, options
+                    raise Captured
+                return 0, ""
+        native = Native()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.object(module, "snapshot",
+                    return_value={"containers": [], "units": "", "paths": []}), mock.patch.object(
+                    module.phase.rpm_observer, "collect_native_package_admission",
+                    return_value=envelope["packages"]):
+                with self.assertRaises(Captured):
+                    module.qualify(native, {"name": "secpal-deploy"}, binding, root)
+            self.assertEqual(["timeout", "--signal=TERM", "--kill-after=180s", "45m"],
+                             native.command[:4])
+            self.assertGreater(native.options["timeout"], 2700 + 180)
+            self.assertIn("2>&1", native.command[6])
+            # Exercise the same TERM-first primitive on a harmless local fixture.
+            marker = root / "cleaned"
+            c = subprocess.run(["timeout", native.command[1], "--kill-after=2s", "0.2s",
+                "bash", "-c", 'trap \'printf cleaned > "$1"; exit 0\' TERM; while :; do sleep 1; done',
+                "test-owner", str(marker)], text=True, capture_output=True, timeout=5)
+            self.assertEqual(124, c.returncode)
+            self.assertEqual("cleaned", marker.read_text())
 
 if __name__ == "__main__":
     unittest.main()

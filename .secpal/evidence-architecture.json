@@ -407,22 +407,22 @@
       }
     },
     {
+      "id": "native-create-working-directory",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-create-working-directory",
+        "kind": "semantic"
+      }
+    },
+    {
       "id": "native-execute-harness",
       "reachable": true,
       "fallible": true,
       "trusted": true,
       "diagnostic_identity": {
         "id": "native-execute-harness",
-        "kind": "semantic"
-      }
-    },
-    {
-      "id": "native-harness-diagnostic-unavailable",
-      "reachable": true,
-      "fallible": true,
-      "trusted": true,
-      "diagnostic_identity": {
-        "id": "native-harness-diagnostic-unavailable",
         "kind": "semantic"
       }
     },
@@ -623,6 +623,36 @@
       "trusted": true,
       "diagnostic_identity": {
         "id": "native-publish-native-evidence",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-read-generated-quadlet-observation",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-read-generated-quadlet-observation",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-read-harness-diagnostic-capture",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-read-harness-diagnostic-capture",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "native-read-harness-diagnostic-source",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "native-read-harness-diagnostic-source",
         "kind": "semantic"
       }
     },

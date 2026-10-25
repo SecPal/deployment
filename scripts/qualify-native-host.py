@@ -147,20 +147,30 @@ def empty_cleanup(value):
         raise ValueError("qualification resources remain or pre-existed")
 
 
-def unit_observation(native, unit, output):
-    """A root control hook observes the live Quadlet before target assertions."""
+def unit_observation(native, unit, output, *, runtime=False):
+    """Observe generated authority before start and actual process state after it."""
     unit = unit.removesuffix(".service")
     if re.fullmatch(r"secpal-host-qualification-[A-Za-z0-9]{6}", unit) is None:
         raise ValueError("unknown fixture unit")
     account = {"name": "secpal-deploy", "uid": 20000, "gid": 20000}
-    _, properties = native.run("native-observe-quadlet-properties",
-        ["systemctl", "--user", "show", unit + ".service", "--property=FragmentPath",
-         "--property=SourcePath", "--property=DropInPaths", "--property=ExecStart"],
-        user=account["name"])
-    with diagnostic("admit-live-quadlet-authority"):
-        normalized = authority.admit_quadlet_authority(properties,
-        f"/run/user/{account['uid']}/systemd/generator/{unit}.service",
-        f"/etc/containers/systemd/users/{account['uid']}/{unit}.container")
+    if not runtime:
+        _, properties = native.run("native-observe-quadlet-properties",
+            ["systemctl", "--user", "show", unit + ".service", "--property=FragmentPath",
+             "--property=SourcePath", "--property=DropInPaths", "--property=ExecStart"],
+            user=account["name"])
+        with diagnostic("admit-live-quadlet-authority"):
+            normalized = authority.admit_quadlet_authority(properties,
+                f"/run/user/{account['uid']}/systemd/generator/{unit}.service",
+                f"/etc/containers/systemd/users/{account['uid']}/{unit}.container")
+        with diagnostic("record-live-observation"):
+            with output.open("x") as stream:
+                json.dump({"unit": unit, "properties": properties, "authority": normalized}, stream)
+            output.chmod(0o600)
+        return
+    with diagnostic("read-generated-quadlet-observation"):
+        live = json.loads(output.read_text())
+        if set(live) != {"unit", "properties", "authority"} or live["unit"] != unit:
+            raise ValueError("generated/live unit continuity is missing")
     _, pid = native.run("native-observe-quadlet-pid",
         ["systemctl", "--user", "show", unit + ".service", "--property=MainPID", "--value"],
         user=account["name"])
@@ -180,10 +190,10 @@ def unit_observation(native, unit, output):
     native.run("native-admit-least-authority", ["bash", "-c",
         'source "$1"; least_authority_process_admitted "$2" 65532 65532',
         "native-owner", str(HARNESS), str(status_path)])
+    live["workload_status"] = status
     with diagnostic("record-live-observation"):
-        with output.open("x") as stream:
-            json.dump({"unit": unit, "properties": properties, "authority": normalized,
-                       "workload_status": status}, stream)
+        with output.open("w") as stream:
+            json.dump(live, stream)
         output.chmod(0o600)
 
 
@@ -238,6 +248,45 @@ def admit_execution(document, expected, directory):
         execution_id=expected["execution_id"])
 
 
+def write_control_hook(hook, live_path):
+    with diagnostic("prepare-control-hook"):
+        hook.write_text(
+            "source " + shlex.quote(str(ROOT / "scripts/ci-cloud/rocky-target-qualification-trace.sh")) + "\n"
+            "runuser() {\n"
+            "  local status start=false\n"
+            "  if [[ $# -eq 15 && $1 == --user && $2 == secpal-deploy && "
+            "$3 == -- && ${12} == systemctl && ${13} == --user && ${14} == start ]]; then\n"
+            "    start=true\n"
+            "    /usr/bin/python3 -I " + shlex.quote(str(Path(__file__).resolve())) +
+            " --observe-unit \"${15}\" --output " + shlex.quote(str(live_path)) + " || return $?\n"
+            "  fi\n"
+            "  if /usr/sbin/runuser \"$@\"; then status=0; else return $?; fi\n"
+            "  if [[ $start == true ]]; then\n"
+            "    /usr/bin/python3 -I " + shlex.quote(str(Path(__file__).resolve())) +
+            " --observe-runtime \"${15}\" --output " + shlex.quote(str(live_path)) + " || return $?\n"
+            "  fi\n"
+            "  return \"$status\"\n"
+            "}\n")
+        hook.chmod(0o600)
+
+
+def working_directory(native, output, *, staging):
+    """Use canonical trusted ancestry; only nonsecret staging is user-readable."""
+    parent = native.path("/run") if staging else output.parent
+    native.trusted(parent, directory=True)
+    with diagnostic("create-working-directory"):
+        return tempfile.TemporaryDirectory(prefix="secpal-native-qualification-", dir=parent)
+
+
+def diagnose_harness(stdout, trace, exit_status):
+    with diagnostic("read-harness-diagnostic-source"):
+        bound = hashlib.sha256(HARNESS.read_bytes()).hexdigest() == HARNESS_SHA256
+    return classifier.classify_failure(
+        stdout, trace, exit_status, target_bound=bound,
+        representation_invalid=(len(stdout) > classifier.MAX_STDOUT_BYTES
+                                or len(trace) > classifier.MAX_TRACE_BYTES))
+
+
 def qualify(native, account, binding, directory):
     """Compose existing observations and owners; no GCP preparation is invoked."""
     with diagnostic("admit-harness-source"):
@@ -254,39 +303,26 @@ def qualify(native, account, binding, directory):
     hook = directory / "control-hook.sh"
     # No predicate is replaced. Successful start is observed before returning
     # control to the target. The existing immutable ERR trace owns localization.
-    with diagnostic("prepare-control-hook"):
-        hook.write_text(
-            "source " + shlex.quote(str(ROOT / "scripts/ci-cloud/rocky-target-qualification-trace.sh")) + "\n"
-            "runuser() {\n"
-            "  local status\n"
-            "  if /usr/sbin/runuser \"$@\"; then status=0; else return $?; fi\n"
-            "  if [[ $# -eq 15 && $1 == --user && $2 == secpal-deploy && "
-            "$3 == -- && ${12} == systemctl && ${13} == --user && ${14} == start ]]; then\n"
-            "    /usr/bin/python3 -I " + shlex.quote(str(Path(__file__).resolve())) +
-            " --observe-unit \"${15}\" --output " + shlex.quote(str(live_path)) + "\n"
-            "  fi\n"
-            "  return \"$status\"\n"
-            "}\n")
-        hook.chmod(0o600)
+    write_control_hook(hook, live_path)
     _, baseline = native.run("native-observe-audit-checkpoint", ["date", "-u", "+%m/%d/%y %H:%M:%S"])
     # Native.run bounds capture and emits only semantic failures. A private
     # fd 3 carries the existing numeric trace, never command/environment values.
     with diagnostic("prepare-harness-trace"):
         trace_path.touch(mode=0o600, exist_ok=False)
         trace_path.chmod(0o600)
-    command = ["bash", "-c", 'exec 3>"$1"; export BASH_ENV="$2"; exec bash "$3" --image "$4" --service-account "$5"',
+    command = ["timeout", "--signal=TERM", "--kill-after=180s", "45m", "bash", "-c", 'exec 3>"$1"; export BASH_ENV="$2"; exec bash "$3" --image "$4" --service-account "$5" 2>&1',
                "native-owner", str(trace_path), str(hook), str(HARNESS),
                preparation.FIXTURE, account["name"]]
     status, stdout = native.run("native-execute-harness", command,
-                               accepted=tuple(range(256)), timeout=2700)
+                               accepted=tuple(range(256)), timeout=3000)
     after = snapshot(native, account)
     with diagnostic("admit-harness-result"):
         if status:
-            trace = trace_path.read_text()
-            operations, valid = classifier.trace_operations(trace, status)
-            if not valid or not operations:
-                raise phase.Error("native-harness-diagnostic-unavailable")
-            raise phase.Error("native-harness:" + ",".join(sorted(operations)))
+            with diagnostic("read-harness-diagnostic-capture"):
+                with trace_path.open("rb") as capture:
+                    trace = capture.read(classifier.MAX_TRACE_BYTES + 1)
+            operation, reason = diagnose_harness(stdout.encode(), trace, status)
+            raise phase.Error("native-harness:" + operation + ":" + reason)
         empty_cleanup(after)
     with diagnostic("normalize-harness-observations"):
         facts = {}
@@ -327,6 +363,7 @@ def main():
     modes.add_argument("--stage-fixture", action="store_true")
     modes.add_argument("--qualify", action="store_true")
     modes.add_argument("--observe-unit")
+    modes.add_argument("--observe-runtime")
     parser.add_argument("--inventory", type=Path)
     parser.add_argument("--firewall", type=Path)
     parser.add_argument("--source-sha")
@@ -343,9 +380,12 @@ def main():
             raise ValueError("unreviewed harness")
     native = phase.Native()
     native.trusted(args.output.parent, directory=True)
-    if args.observe_unit:
+    if args.observe_unit or args.observe_runtime:
+        if args.observe_runtime:
+            native.trusted(args.output)
         with diagnostic("observe-live-quadlet"):
-            unit_observation(native, args.observe_unit, args.output)
+            unit_observation(native, args.observe_unit or args.observe_runtime, args.output,
+                             runtime=bool(args.observe_runtime))
         return 0
     if any(x is None for x in (args.inventory, args.firewall, args.source_sha,
                                args.control_sha, args.host_identity, args.execution_id)):
@@ -367,7 +407,7 @@ def main():
                "architecture": architecture, "boot_id": boot, "execution_id": args.execution_id}
     with diagnostic("admit-invocation-binding"):
         admit_binding(binding, binding)
-    with tempfile.TemporaryDirectory(prefix="secpal-native-qualification-", dir="/var/tmp") as temporary:
+    with working_directory(native, args.output, staging=args.stage_fixture) as temporary:
         directory = Path(temporary)
         if args.stage_fixture:
             directory.chmod(0o711)
