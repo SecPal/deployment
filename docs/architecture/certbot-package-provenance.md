@@ -37,13 +37,46 @@ glibc-minimal-langpack, pcre2, pcre2-syntax and python3-urllib3 advance to the
 current 10.2 security updates. Every current RPM was independently acquired and
 its metadata digest, signature, signed header and payload digest authenticated.
 
-This is **supply evidence only**. The native installation/runtime qualifications
-recorded below apply to the previous closure and do not qualify the eight changed
-identities. Do not activate or accept this refresh until both native architecture
-qualifications, exact installed payload checks and protected-main acceptance
-have been renewed. Existing development-host ACME renewal remains in service
-during that separate qualification; no downgrade or EPEL authority expansion is
-authorized by this candidate.
+On 2026-10-28, the operator authorized fresh provisioning of the existing Hetzner
+CX23 (163965414), CX33 (163717938) and CAX21 (169716995), without deleting or
+returning any instance. Their identities and public addresses remain unchanged.
+The native package qualifications use the CX23 (x86_64) and CAX21 (aarch64),
+updated and rebooted into Rocky 10.2 with Enforcing SELinux. SSH is authenticated
+through the existing NetBird management plane and pinned host keys; both the
+provider firewall and the host prevent public SSH. Delete and rebuild protections
+are restored on all three instances. The development server is not rebuilt.
+
+Both native administrators independently authenticated all 106 reference RPMs
+and resolved the real installed-system transaction. Each transaction added
+exactly 16 missing packages, with no upgrade, removal or downgrade. Required RPM
+scriptlets and signature verification ran with transaction-local signing keys;
+the EPEL key was not imported globally. Only BaseOS, AppStream and Extras remain
+enabled. A qualification preset kept the packaged renewal timer disabled and
+inactive. Its service has no execution timestamp, and no account or certificate
+state was created. No listener, certificate issuance or renewal was performed.
+
+Unprivileged probes at signed candidate
+`017082a85d7fee5a7577927fc7e002ee6a036652` verified every installed signed header
+and protected executable/module/library payload against the authenticated RPMs.
+Both native runtimes import the dependency family and load the standalone plugin
+under Python 3.12.15 and Certbot 4.2.0. The administrator read broker admits only
+the three existing protected baseline package-name/RPM-digest pairs; an incorrect
+digest is denied. Candidate code has no general root or provider authority.
+Accepted control code at `b4b0500b74ee879d548b9add95797235d19065a7`
+independently revalidates the selected candidate schemas, policy and observations
+through the authenticated host transport. The retained observation SHA-256 values
+are `600631c74ef4599fadb68674df640059b15ee566ddcfbe1f122517a46f9e12ea`
+(x86_64) and
+`057dc942162251f2d7a0f349d05ae80808cdd3c3e3607ebbd5242f5b858256ab`
+(aarch64).
+
+These are genuine native client/package results for that exact candidate, not
+full #80 host admission or #103 certificate-lifecycle qualification. Historical
+observations below remain historical and do not qualify the refreshed bytes.
+Final signed-head observations, independent source/control requalification and
+protected-main acceptance remain required before activating this refresh.
+Existing development-host ACME renewal remains in service; no downgrade or EPEL
+authority expansion is authorized by this candidate.
 
 ## Contradiction being corrected
 
