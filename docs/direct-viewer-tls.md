@@ -17,9 +17,11 @@ PROTECTED Origin certificates have separate authorities.
 The only package owner is the accepted
 [Certbot provenance contract](architecture/certbot-package-provenance.md) and
 `config/production/certbot-package-policy.json`, policy
-`certbot-epel-10.2-4.2.0-1`. Reuse its native CX23 x86_64 and CAX21 aarch64
+`certbot-epel-10.2-4.2.0-1-20261028`. Renew the native CX23 x86_64 and CAX21 aarch64
 qualification, signatures, dependency identities and Certbot 4.2.0 standalone
-execution. This leaf changes no package identity or update authority. EPEL stays
+execution before accepting that refresh. Earlier native receipts qualify only
+the previous closure; the supply-only candidate is not activation authority.
+This TLS lifecycle leaf changes no package identity or update authority. EPEL stays
 disabled, its key remains transaction-scoped, and the packaged
 `certbot-renew.timer` must remain disabled/inactive. No automatic upgrade,
 repository expansion, pip, snap, sidecar or installer fallback exists.

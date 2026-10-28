@@ -27,6 +27,24 @@ publication, TLS lifecycle, a production installer, public routing or DNS.
 Loading the installed standalone plugin during qualification performs no ACME
 operation, starts no listener and creates no certificate or account state.
 
+## 2026-10-28 security-closure refresh candidate
+
+The candidate policy is now `certbot-epel-10.2-4.2.0-1-20261028`.
+Fresh official metadata resolves the same 106-package strong closure and the same
+nine EPEL packages on both architectures. Certbot and its EPEL supply are unchanged.
+The Rocky identities for ca-certificates, expat, glibc, glibc-common,
+glibc-minimal-langpack, pcre2, pcre2-syntax and python3-urllib3 advance to the
+current 10.2 security updates. Every current RPM was independently acquired and
+its metadata digest, signature, signed header and payload digest authenticated.
+
+This is **supply evidence only**. The native installation/runtime qualifications
+recorded below apply to the previous closure and do not qualify the eight changed
+identities. Do not activate or accept this refresh until both native architecture
+qualifications, exact installed payload checks and protected-main acceptance
+have been renewed. Existing development-host ACME renewal remains in service
+during that separate qualification; no downgrade or EPEL authority expansion is
+authorized by this candidate.
+
 ## Contradiction being corrected
 
 At protected deployment/main
