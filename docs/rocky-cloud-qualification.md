@@ -804,7 +804,7 @@ retained-state fixture records the exact source identities and supporting
 provider IDs; it contains no startup payload or candidate body.
 
 Those historical runs used Google provider `7.40.0` and OpenTofu `1.12.5`.
-The current provider pin is `8.7.0`; OpenTofu remains `1.12.5`. The following
+The current provider pin is `8.8.1`; OpenTofu remains `1.12.5`. The following
 analysis describes the historical provider, not a new cloud qualification.
 The root sets no `request_timeout`. The historical provider's
 [synchronous HTTP client](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/transport/config.go)

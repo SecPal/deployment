@@ -13,7 +13,7 @@ provider authority and accepted protected-main control.
 
 ## Mechanism and design decision
 
-The actual producer uses OpenTofu 1.12.5, hashicorp/google 8.7.0 and
+The actual producer uses OpenTofu 1.12.5, hashicorp/google 8.8.1 and
 `tofu apply --auto-approve --input=false`. Its arguments, working directory,
 environment and standard streams are inherited unchanged. Observation neither
 reads nor changes proxy configuration, DNS, TLS trust, HTTP selection, timeout,
