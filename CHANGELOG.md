@@ -7,6 +7,12 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Unreleased
 
+### Fixed
+
+- Complete the Google 8.8.1 Rocky provider update with matching lock constraints,
+  transport schema/version, authenticated lock and executable identities. Preserve
+  exact source-security admission and separate cloud-run authorization.
+
 ### Added
 
 - Require exact-commit organization Trivy repository-security admission before

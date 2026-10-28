@@ -116,7 +116,7 @@
               ],
               "properties": {
                 "policy_id": {
-                  "const": "certbot-epel-10.2-4.2.0-1"
+                  "const": "certbot-epel-10.2-4.2.0-1-20261028"
                 },
                 "host_architecture": {
                   "enum": ["x86_64", "aarch64"]

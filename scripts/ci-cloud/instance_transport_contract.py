@@ -17,7 +17,7 @@ from jsonschema import Draft202012Validator
 RESPONSIBILITY = 'normalization,admission,assembly'
 # Independent transport enforcement of the versions.tf provider pin. Preflight
 # checks agreement before dispatch; schema and assembly share this definition.
-GOOGLE_PROVIDER_VERSION = '8.7.0'
+GOOGLE_PROVIDER_VERSION = '8.8.1'
 MAX_DOCUMENT_BYTES = 131072
 MAX_CONNECTIONS = 64
 MAX_WINDOW_NS = 3600_000_000_000
