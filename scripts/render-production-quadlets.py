@@ -139,7 +139,9 @@ def service(*, oneshot: bool = False, backend: bool = False) -> str:
                 validation,
                 "RemainAfterExit=yes",
                 "Restart=no",
-                "TimeoutStartSec=300",
+                # 30s HEAD + 600s GET, migrations, parsing ~1.2M rows and DML.
+                # Qualification must measure this bounded one-hour budget.
+                "TimeoutStartSec=3600",
             ],
         )
     return section(
@@ -198,10 +200,17 @@ def api_secret_mounts(contract: dict, role: str) -> list[str]:
         f"target=/run/secpal/secrets/database/{name},ro=true"
         for name in database['files']
     )
+    if role == 'migrate':
+        runtime = contract['secret_delivery']['runtime']
+        mounts.extend(
+            f"Mount=type=bind,source={runtime['directory']}/{name},"
+            f"target=/run/secpal/secrets/import/{name},ro=true"
+            for name in runtime['files']
+        )
     return mounts
 
 
-def api_container(contract: dict, role: str) -> str:
+def api_container(contract: dict, role: str, *, offline_address_data: bool = False) -> str:
     private = contract["objects"]["private_application_storage"]["location"]
     public = contract["objects"]["public_application_storage"]["location"]
     execution = role_execution_spec(role)
@@ -214,6 +223,9 @@ def api_container(contract: dict, role: str) -> str:
     )
     lines = common_container(contract, role, API_IMAGE)
     lines.extend(APPLICATION_ENVIRONMENT)
+    if role == 'migrate' and offline_address_data:
+        lines.append('Environment=ADDRESS_DATA_SETUP_SOURCE_PATH='
+                     '/app/storage/app/private/address-data/release.csv')
     execution_command = (
         ("php", "/run/secpal/bootstrap/production-migrate.php")
         if role == "migrate"
@@ -238,6 +250,11 @@ def api_container(contract: dict, role: str) -> str:
             f"Mount=type=bind,source={private},target=/app/storage/app/private,rw=true",
             f"Mount=type=bind,source={public},target=/app/storage/app/public,rw=true",
             *role_tmpfs,
+            # One private CSV snapshot (~55 MB), bounded and discarded when
+            # the one-shot container is removed, including interrupted runs.
+            *(("Mount=type=tmpfs,destination=/app/storage/app/private/address-data/tmp,"
+               "tmpfs-size=128m,tmpfs-mode=0700,U=true,nosuid=true,nodev=true,noexec=true",)
+              if role == "migrate" else ()),
             "Network=pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1",
             "AddHost=db.secpal.internal:169.254.81.1",
         )
@@ -253,7 +270,7 @@ def api_container(contract: dict, role: str) -> str:
     ) + section("Container", lines) + service(oneshot=role == "migrate", backend=role == "api")
 
 
-def build_units(contract: dict) -> dict[str, str]:
+def build_units(contract: dict, *, offline_address_data: bool = False) -> dict[str, str]:
     units: dict[str, str] = {}
 
     units["secpal-edge.network"] = unit(
@@ -268,7 +285,8 @@ def build_units(contract: dict) -> dict[str, str]:
     )
 
     for role in API_ROLES:
-        units[f"secpal-{role}.container"] = api_container(contract, role)
+        units[f"secpal-{role}.container"] = api_container(
+            contract, role, offline_address_data=offline_address_data)
 
     frontend = common_container(contract, "frontend", FRONTEND_IMAGE)
     frontend.extend(
@@ -349,6 +367,8 @@ def main() -> int:
     parser.add_argument("--quadlet-output", type=Path, required=True)
     parser.add_argument("--systemd-output", type=Path, required=True)
     parser.add_argument("--host-systemd-output", type=Path)
+    parser.add_argument('--offline-address-data', action='store_true',
+                        help='use the reviewed release.csv in private storage; API checksum still applies')
     args = parser.parse_args()
     contract = load_contract(args.contract)
     # Admit caller-supplied roots and ancestry before resolve() erases links.
@@ -358,7 +378,7 @@ def main() -> int:
     quadlet_output = args.quadlet_output.resolve()
     systemd_output = args.systemd_output.resolve()
     outputs: dict[Path, dict[str, str]] = {}
-    for name, content in build_units(contract).items():
+    for name, content in build_units(contract, offline_address_data=args.offline_address_data).items():
         output = systemd_output if name.endswith((".service", ".target")) else quadlet_output
         outputs.setdefault(output, {})[name] = content
     if args.host_systemd_output is not None:
