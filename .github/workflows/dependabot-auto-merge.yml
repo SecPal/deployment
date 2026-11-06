@@ -5,7 +5,6 @@ name: Dependabot Auto-Merge
 on:
   # Run only the accepted immutable callee, never PR-controlled source.
   pull_request_target:
-    branches: [main]
     types:
       [
         opened,
@@ -17,18 +16,20 @@ on:
         edited,
         converted_to_draft,
       ]
-cache-mode: none
 
+# The accepted immutable callee disables cache access.
 permissions:
   contents: write
   pull-requests: write
+  checks: read
+  statuses: read
 concurrency:
   group: ${{ github.repository }}-dependabot-auto-merge-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   auto-merge:
     # yamllint disable-line rule:line-length
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@d9d0bd62cb8b895b1b7784bf7d1a4d7c051638c5 # main
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@cab90e4575c15a116afce584082b5830ca68102d # main
     with:
       phase: "1"
       merge-method: squash

@@ -13,12 +13,11 @@ class EnrollmentContract(unittest.TestCase):
         self.assertTrue(path.is_file(), 'native immutable caller must exist')
         workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
         trigger = workflow['on']['pull_request_target']
-        self.assertEqual(trigger['branches'], ['main'])
+        self.assertNotIn('branches', trigger)
         for event in ['opened', 'synchronize', 'reopened', 'ready_for_review',
                       'labeled', 'unlabeled', 'edited', 'converted_to_draft']:
             self.assertIn(event, trigger['types'])
         self.assertNotIn('pull_request', workflow['on'])
-        self.assertEqual(workflow['cache-mode'], 'none')
         self.assertEqual(workflow['concurrency']['cancel-in-progress'], 'true')
         job = workflow['jobs']['auto-merge']
         for key in ['if', 'steps', 'secrets']:
@@ -32,7 +31,7 @@ class EnrollmentContract(unittest.TestCase):
             '.github/workflows/local-integration.yml',
             '.github/workflows/rocky-evidence-architecture.yml',
         ])
-        self.assertEqual(workflow['permissions'], {'contents': 'write', 'pull-requests': 'write'})
+        self.assertEqual(workflow['permissions'], {'contents': 'write', 'pull-requests': 'write', 'checks': 'read', 'statuses': 'read'})
 
 
 if __name__ == '__main__':
