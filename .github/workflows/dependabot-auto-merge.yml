@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+---
+name: Dependabot Auto-Merge
+on:
+  # Run only the accepted immutable callee, never PR-controlled source.
+  pull_request_target:
+    branches: [main]
+    types:
+      [
+        opened,
+        synchronize,
+        reopened,
+        ready_for_review,
+        labeled,
+        unlabeled,
+        edited,
+        converted_to_draft,
+      ]
+cache-mode: none
+
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: ${{ github.repository }}-dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  auto-merge:
+    # yamllint disable-line rule:line-length
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@d9d0bd62cb8b895b1b7784bf7d1a4d7c051638c5 # main
+    with:
+      phase: "1"
+      merge-method: squash
+      allowed-ecosystems: github_actions
+      workflow-paths: >-
+        [".github/workflows/quality.yml",".github/workflows/local-integration.yml",".github/workflows/rocky-evidence-architecture.yml"]

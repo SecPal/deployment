@@ -59,6 +59,7 @@ php -l scripts/phase-b-runtime-probe.php
 php -l scripts/ci-cloud/postgresql-application-bootstrap.php
 php -l scripts/ci-cloud/postgresql-application-probe.php
 php -l scripts/ci-cloud/product-backend-http-fixture.php
+python3 tests/dependabot-ci-enrollment.py
 python3 tests/capacity-capability-contract.py
 python3 tests/image-consumption-evidence-contract.py
 python3 tests/integration-current-topology.py
