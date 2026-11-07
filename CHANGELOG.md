@@ -13,6 +13,10 @@ SPDX-License-Identifier: CC0-1.0
   default, matching the canonical Quadlet role. Build the local fixture with
   Podman's Docker image format so the healthcheck is retained rather than dropped.
 
+- Adopt the accepted organization v5 scanner to bind current Terraform/OpenTofu
+  sources to native evaluation without expiring source enrollment. Preserve all
+  findings, unchanged central policy and separate concrete cloud-run admission.
+
 - Complete the Google 8.8.1 Rocky provider update with matching lock constraints,
   transport schema/version, authenticated lock and executable identities. Preserve
   exact source-security admission and separate cloud-run authorization.
@@ -21,8 +25,8 @@ SPDX-License-Identifier: CC0-1.0
 
 - Require exact-commit organization Trivy repository-security admission before
   the protected Repository Contract check, rejecting non-CLEAN or missing evidence.
-  Adopt source-qualified v4 static coverage and centrally reviewed, expiring
-  ephemeral-architecture dispositions; concrete run admission remains mandatory.
+  Concrete run admission remains mandatory; source evidence does not authorize
+  cloud operations.
 
 - Add the portable endpoint-switch adapter contract with conditional mutation,
   independent read-back and observation-only recovery; writer authority remains
