@@ -401,22 +401,6 @@ class RockyCloudControlTests(unittest.TestCase):
                 0, subprocess.run(command, check=False, capture_output=True).returncode
             )
 
-    def test_access_request_contract_has_one_owner_before_resume_oidc(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        canonical_call = "rocky-control.py validate-access-request"
-        self.assertEqual(2, workflow.count(canonical_call))
-        self.assertNotIn(
-            'keys == ["runner_ipv4", "run_attempt", "run_id", "ssh_public_key", "target_sha"]',
-            workflow,
-        )
-        resume = workflow.index("Wait for the uncredentialed target runner access request")
-        resume_validation = workflow.index(canonical_call, resume)
-        resume_oidc = workflow.index("google-github-actions/auth@", resume_validation)
-        self.assertLess(resume_validation, resume_oidc)
-        producer = workflow.index("Generate runner-local SSH key and public access request")
-        producer_validation = workflow.index(canonical_call, producer)
-        producer_upload = workflow.index("Upload only the public access request", producer)
-        self.assertLess(producer_validation, producer_upload)
 
     def test_inactive_systemd_user_state_reaches_runtime_admission(self) -> None:
         collector = load_rocky_preparation_collector()
@@ -518,15 +502,6 @@ class RockyCloudControlTests(unittest.TestCase):
             completed.stderr,
         )
 
-    def test_rocky_bootstrap_preserves_fixed_guest_entrypoints(self) -> None:
-        # Exact rendering/size/Bash/integrity evidence lives in
-        # ci-cloud-rocky-metadata.py, using the pinned provider renderer.
-        template = (ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl").read_text()
-        self.assertIn("decode_script 'target_failure_classifier' "
-                      "/usr/local/sbin/secpal-classify-rocky-target-failure", template)
-        self.assertIn("decode_script 'target_replay_verifier' "
-                      "/usr/local/sbin/secpal-verify-rocky-target-replay", template)
-        self.assertIn('install -o root -g root -m 0700 --', template)
 
     def test_profile_is_one_closed_reviewed_arm64_contract(self) -> None:
         profile = json.loads(PROFILE.read_text(encoding="utf-8"))
@@ -601,24 +576,11 @@ class RockyCloudControlTests(unittest.TestCase):
 
     def test_workflow_has_only_closed_operations_and_profile(self) -> None:
         document = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
-        workflow = WORKFLOW.read_text(encoding="utf-8")
         inputs = document["on"]["workflow_dispatch"]["inputs"]
-        self.assertEqual(
-            ["discover", "provision-and-prepare", "qualify", "destroy"],
-            inputs["operation"]["options"],
-        )
-        self.assertEqual(
-            ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"],
-            inputs["provider_profile"]["options"],
-        )
-        self.assertNotIn("trusted_control_sha", inputs)
-        self.assertNotIn("control_sha", inputs)
-        self.assertNotIn("harness_sha256", inputs)
-        self.assertGreaterEqual(workflow.count('--control-sha "$GITHUB_SHA"'), 8)
-        self.assertNotIn("a4a4ff415f01421af4f3ddfe0a3542815df42414", workflow)
-        self.assertIn("^[0-9a-fA-F]{40}$", workflow)
-        self.assertIn('--arg profile "$PROVIDER_PROFILE"', workflow)
-        self.assertIn(".run.profile == $profile", workflow)
+        self.assertEqual(["destroy"], inputs["operation"]["options"])
+        self.assertEqual(set(inputs["provider_profile"]["options"]), {"gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"})
+        self.assertEqual(set(document["jobs"]), {"validate", "cleanup"})
+
 
     def test_reviewed_profiles_are_required_repository_files(self) -> None:
         manifest = (ROOT / "tests/repository-contract.sh").read_text(
@@ -653,83 +615,6 @@ class RockyCloudControlTests(unittest.TestCase):
         validation = preparation.index('validate-profile "$profile"')
         self.assertLess(preparation.index("trap 'preparation_exit"), validation)
         self.assertLess(preparation.index("python3-jsonschema"), validation)
-
-    def test_target_execution_job_has_no_cloud_authority(self) -> None:
-        document = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
-        target = document["jobs"]["qualify_target"]
-        self.assertEqual({"actions": "read", "contents": "read"}, target["permissions"])
-        self.assertNotIn("environment", target)
-        target_text = json.dumps(target, sort_keys=True)
-        for forbidden in (
-            "id-token",
-            "google-github-actions/auth",
-            "GOOGLE_OAUTH_ACCESS_TOKEN",
-            "GCP_SERVICE_ACCOUNT",
-            "credentials_file",
-        ):
-            self.assertNotIn(forbidden, target_text)
-
-    def test_target_source_failure_is_wrapper_owned_and_bounded(self) -> None:
-        document = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
-        steps = {
-            step["name"]: step
-            for step in document["jobs"]["qualify_target"]["steps"]
-            if "name" in step
-        }
-        execution = steps[
-            "Execute exact target SHA once on the ready identity-free guest"
-        ]
-        retrieval = steps["Retrieve and validate bounded target-source failure"]
-        publication = steps["Publish bounded target-source failure"]
-        execution_run = execution["run"]
-        retrieval_run = retrieval["run"]
-        self.assertIn("81|82|83|84|86)", execution_run)
-        self.assertIn("source_failure_expected=true", execution_run)
-        self.assertIn("91)", execution_run)
-        self.assertIn("qualification_failure_expected=true", execution_run)
-        self.assertIn(
-            "steps.target_execution.outputs.source_failure_expected == 'true'",
-            retrieval["if"],
-        )
-        self.assertIn(
-            "steps.target_execution.outputs.source_failure_expected == 'true'",
-            publication["if"],
-        )
-        self.assertIn("test ! -L", retrieval_run)
-        self.assertIn("head -c 1025", retrieval_run)
-        self.assertIn("stat -c %s", retrieval_run)
-        self.assertIn("-le 1024", retrieval_run)
-
-        runner = (
-            ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
-        ).read_text(encoding="utf-8")
-        for status in (81, 82, 83, 84, 86):
-            self.assertIn(f"exit {status}", runner)
-        self.assertIn(
-            'validate-target-source-failure \\\n    "$source_failure" --target-sha "$target_sha" \\\n    --control-sha "$control_sha"',
-            runner,
-        )
-        self.assertIn(
-            '--control-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID"',
-            retrieval_run,
-        )
-        self.assertIn(
-            'if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then',
-            runner,
-        )
-        self.assertIn("validate-target-qualification-failure", runner)
-        self.assertIn("exit 91", runner)
-
-    def test_opentofu_consumes_only_exact_image_identity(self) -> None:
-        main = (TF_ROOT / "main.tf").read_text(encoding="utf-8")
-        main += (TF_ROOT / "metadata.tf").read_text(encoding="utf-8")
-        variables = (TF_ROOT / "variables.tf").read_text(encoding="utf-8")
-        self.assertNotIn("data \"google_compute_image\"", main)
-        self.assertNotIn("family", main)
-        self.assertRegex(main, r"image\s*=\s*var\.exact_image_self_link")
-        self.assertIn("rocky-linux-cloud/global/images/", variables)
-        self.assertIsNone(re.search(r"\bcount\s*=", main))
-        self.assertEqual(1, main.count('resource "google_compute_instance"'))
 
     def test_rocky_contract_does_not_reuse_debian_admission(self) -> None:
         rocky_files = [WORKFLOW, PROFILE, X86_PROFILE, *TF_ROOT.glob("*.tf")]
@@ -2232,117 +2117,6 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertEqual(0, completed.returncode, completed.stderr)
         self.assertEqual('{"base":1}\n', completed.stdout)
 
-    def test_preparation_failure_transport_is_closed_and_reboot_safe(self) -> None:
-        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
-            encoding="utf-8"
-        )
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn('current_phase="guest-identity"', preparation)
-        self.assertIn("preparation-failure.json", preparation)
-        self.assertIn("trap 'preparation_exit", preparation)
-        self.assertIn("reboot_requested=true", preparation)
-        self.assertIn("preparation-failure.json", workflow)
-        self.assertIn("ROCKY_PREPARATION_EVIDENCE_TIMEOUT", workflow)
-        self.assertIn("rocky-cloud-preparation-failure-${{ github.run_id }}-${{ github.run_attempt }}", workflow)
-        self.assertIn("validate-evidence preparation-failure", workflow)
-        self.assertIn("repository_operation=", workflow)
-        self.assertIn("repository_reason=", workflow)
-        self.assertIn("fixture_operation=", workflow)
-        self.assertIn("fixture_reason=", workflow)
-        self.assertIn("steps.preparation.outputs.failure == 'true'", workflow)
-        self.assertIn('install -d -o root -g secpal-cloud -m 0710 "$state_root"', preparation)
-        self.assertIn('install -d -o root -g secpal-cloud -m 0750 "$state_root/evidence"', preparation)
-        self.assertIn('chown root:secpal-cloud "$evidence_output"', preparation)
-        self.assertIn('chmod 0440 "$evidence_output"', preparation)
-        self.assertNotIn('chmod 0400 "$evidence_output"', preparation)
-        self.assertIn('chown root:secpal-cloud "$temporary" && chmod 0440', preparation)
-
-    def _run_workflow_preparation_poll(
-        self, states: list[str], *, include_timeout: bool = False
-    ) -> subprocess.CompletedProcess[str]:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        start = workflow.index("          preparation_state=none")
-        if include_timeout:
-            end = workflow.index("\n\n      - name: Publish bounded preparation failure evidence", start)
-        else:
-            end = workflow.index('          if [[ "$preparation_state" == failure ]]', start)
-        block = "\n".join(
-            line[10:] if line.startswith("          ") else line
-            for line in workflow[start:end].splitlines()
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            fake_bin = root / "bin"
-            fake_bin.mkdir()
-            states_path = root / "states"
-            states_path.write_text("\n".join(states) + "\n", encoding="utf-8")
-            (fake_bin / "ssh").write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "count=0\n"
-                "[[ -f \"$POLL_COUNTER\" ]] && count=$(cat \"$POLL_COUNTER\")\n"
-                "count=$((count + 1))\n"
-                "printf '%s' \"$count\" >\"$POLL_COUNTER\"\n"
-                "printf 'FAKE_SSH_ATTEMPT=%s\\n' \"$count\" >&2\n"
-                "state=$(sed -n \"${count}p\" \"$POLL_STATES\")\n"
-                "[[ \"$state\" == transport ]] && exit 255\n"
-                "printf '%s' \"$state\"\n",
-                encoding="utf-8",
-            )
-            (fake_bin / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-            for executable in fake_bin.iterdir():
-                executable.chmod(0o700)
-            script = (
-                "set -euo pipefail\n"
-                "ip=198.51.100.10\n"
-                "RUNNER_TEMP=$(mktemp -d)\n"
-                "mkdir -p \"$RUNNER_TEMP/rocky-cloud\"\n"
-                "touch \"$RUNNER_TEMP/rocky-cloud/id_ed25519\"\n"
-                f"{block}\n"
-                "printf 'FINAL_STATE=%s\\n' \"$preparation_state\"\n"
-            )
-            environment = dict(os.environ)
-            environment.update(
-                {
-                    "PATH": f"{fake_bin}:{environment['PATH']}",
-                    "POLL_COUNTER": str(root / "counter"),
-                    "POLL_STATES": str(states_path),
-                    "GITHUB_OUTPUT": str(root / "github-output"),
-                }
-            )
-            return subprocess.run(
-                ["bash", "-c", script],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-            )
-
-    def test_preparation_poll_retries_transport_failures_then_reaches_evidence(self) -> None:
-        failure = self._run_workflow_preparation_poll(
-            ["transport", "transport", "failure"]
-        )
-        self.assertEqual(0, failure.returncode, failure.stderr)
-        self.assertIn("FINAL_STATE=failure", failure.stdout)
-        self.assertEqual(3, failure.stderr.count("FAKE_SSH_ATTEMPT="))
-        success = self._run_workflow_preparation_poll(["transport", "success"])
-        self.assertEqual(0, success.returncode, success.stderr)
-        self.assertIn("FINAL_STATE=success", success.stdout)
-        self.assertEqual(2, success.stderr.count("FAKE_SSH_ATTEMPT="))
-
-    def test_preparation_poll_rejects_malformed_and_both_evidence_state(self) -> None:
-        for state in ("garbage", "both"):
-            with self.subTest(state=state):
-                completed = self._run_workflow_preparation_poll([state])
-                self.assertNotEqual(0, completed.returncode)
-                self.assertNotIn("FINAL_STATE=success", completed.stdout)
-
-    def test_preparation_poll_attempt_ninety_reaches_timeout_diagnostic(self) -> None:
-        completed = self._run_workflow_preparation_poll(["transport"] * 90, include_timeout=True)
-        self.assertNotEqual(0, completed.returncode)
-        self.assertIn("ROCKY_PREPARATION_EVIDENCE_TIMEOUT", completed.stderr)
-        self.assertEqual(90, completed.stderr.count("FAKE_SSH_ATTEMPT="))
-
     def test_continuation_rejects_expiry_target_mismatch_and_instance_only(self) -> None:
         validator = ROOT / "scripts/ci-cloud/rocky-control.py"
         with tempfile.TemporaryDirectory() as directory:
@@ -2496,10 +2270,6 @@ class RockyCloudControlTests(unittest.TestCase):
         )
         self.assertNotIn("positive_access", schema["required"])
         runner = (ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh").read_text(encoding="utf-8")
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        bootstrap = (ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl").read_text(
-            encoding="utf-8"
-        )
         preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
             encoding="utf-8"
         )
@@ -2563,24 +2333,13 @@ class RockyCloudControlTests(unittest.TestCase):
         )
         self.assertIn('bash "$work_root/scripts/qualify-production-host.sh"', runner)
         self.assertNotIn("verify-target-harness", runner)
-        self.assertNotIn("sudo bash -s", workflow)
-        self.assertNotIn("secpal-collect-rocky-native-admission", workflow + bootstrap)
-        self.assertNotIn("qualification_harness_base64gzip", bootstrap)
         self.assertIn(
             "NOPASSWD: /usr/local/sbin/secpal-run-rocky-target-qualification "
             "[0-9a-f]* [0-9a-f]* [1-9]* [1-9]* [0-9a-f]*",
             preparation,
         )
-        self.assertEqual(
-            0,
-            workflow.count("/usr/local/sbin/secpal-collect-rocky-preparation"),
-        )
         self.assertIn(
             '--native-observation "$native_observation"', runner
-        )
-        self.assertIn(
-            '"$RUNNER_TEMP/rocky-target/native-package-observation.json"',
-            workflow,
         )
         self.assertIn("validate-collection-diagnostic", runner)
         self.assertIn("native admission requires trusted control", target)
@@ -2864,277 +2623,12 @@ class RockyCloudControlTests(unittest.TestCase):
             with self.subTest(rejected=name):
                 self.assertNotEqual(0, validate(document).returncode)
 
-    def test_transition_rejects_replacement_with_same_name_and_labels(self) -> None:
-        transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
-        spec = importlib.util.spec_from_file_location("rocky_transition", transition_path)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        options = SimpleNamespace(instance="sprk-12345-1-instance", instance_id="987654", target_sha="b" * 40, control_sha="a" * 40, profile="gcp-rocky-10-2-arm64", created_at="1800000000", expires_at="1800010800")
-        labels = {"secpal_ci_owner": "rocky-host-qualification", "repository": "secpal-deployment", "github_run_id": "12345", "github_run_attempt": "1", "target_sha": "b" * 40, "control_sha": "a" * 40, "provider_profile": "gcp-rocky-10-2-arm64", "created_at": "1800000000", "expires_at": "1800010800"}
-        accepted = {
-            "name": options.instance,
-            "id": "987654",
-            "labels": labels,
-            "machineType": (
-                "https://www.googleapis.com/compute/v1/projects/secpal-dev/"
-                "zones/europe-west3-a/machineTypes/c4a-standard-4"
-            ),
-            "metadata": {
-                "items": [
-                    {
-                        "key": "secpal-rocky-provider-profile",
-                        "value": "gcp-rocky-10-2-arm64",
-                    }
-                ]
-            },
-            "serviceAccounts": [],
-        }
-        module.validate_instance(accepted, options)
-        replaced = dict(accepted, id="987655")
-        with self.assertRaises(module.TransitionError):
-            module.validate_instance(replaced, options)
-
-        x86_options = SimpleNamespace(
-            **{
-                **vars(options),
-                "profile": "gcp-rocky-10-2-x86-64",
-            }
-        )
-        x86_labels = {
-            **labels,
-            "provider_profile": "gcp-rocky-10-2-x86-64",
-        }
-        x86 = {
-            **accepted,
-            "labels": x86_labels,
-            "machineType": (
-                "https://www.googleapis.com/compute/v1/projects/secpal-dev/"
-                "zones/europe-west3-a/machineTypes/c3-standard-4"
-            ),
-            "metadata": {
-                "items": [
-                    {
-                        "key": "secpal-rocky-provider-profile",
-                        "value": "gcp-rocky-10-2-x86-64",
-                    }
-                ]
-            },
-        }
-        module.validate_instance(x86, x86_options)
-        for mutation in (
-            {**x86, "machineType": accepted["machineType"]},
-            {**x86, "metadata": accepted["metadata"]},
-            {**x86, "labels": labels},
-        ):
-            with self.assertRaises(module.TransitionError):
-                module.validate_instance(mutation, x86_options)
-
-    def test_bootstrap_identity_admission_normalizes_only_empty_scope_forms(self) -> None:
-        transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
-        spec = importlib.util.spec_from_file_location("rocky_transition", transition_path)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        bootstrap = "secpal-ci-bootstrap@secpal-dev.iam.gserviceaccount.com"
-        accepted = (
-            {},
-            {"serviceAccounts": []},
-            {"serviceAccounts": [{"email": bootstrap, "scopes": []}]},
-            {"serviceAccounts": [{"email": bootstrap}]},
-            {"serviceAccounts": [{"email": bootstrap, "scopes": None}]},
-        )
-        for instance in accepted:
-            with self.subTest(instance=instance):
-                module.validate_service_accounts(instance)
-        rejected = (
-            {"serviceAccounts": None},
-            {"serviceAccounts": {}},
-            {"serviceAccounts": [{"email": bootstrap}, {"email": bootstrap}]},
-            {"serviceAccounts": [{"email": "other@secpal-dev.iam.gserviceaccount.com"}]},
-            {"serviceAccounts": [{"email": "123-compute@developer.gserviceaccount.com"}]},
-            {"serviceAccounts": [{"email": "gcp-service-account@secpal-dev.iam.gserviceaccount.com"}]},
-            {"serviceAccounts": [{"email": bootstrap, "scopes": ["https://www.googleapis.com/auth/cloud-platform"]}]},
-            {"serviceAccounts": [{"email": bootstrap, "scopes": ["arbitrary"]}]},
-            {"serviceAccounts": [{"email": bootstrap, "scopes": ""}]},
-            {"serviceAccounts": [{"email": bootstrap, "scopes": {}}]},
-            {"serviceAccounts": [{"email": bootstrap, "scopes": True}]},
-            {"serviceAccounts": [{"email": bootstrap, "scopes": 0}]},
-        )
-        for instance in rejected:
-            with self.subTest(instance=instance), self.assertRaises(module.TransitionError):
-                module.validate_service_accounts(instance)
-
-    def test_transition_binds_each_boot_to_the_current_access_run(self) -> None:
-        transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
-        spec = importlib.util.spec_from_file_location("rocky_transition", transition_path)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        instance = {
-            "metadata": {
-                "fingerprint": "exact-fingerprint",
-                "items": [
-                    {"key": "startup-script", "value": "trusted"},
-                    {"key": "secpal-rocky-access-run-id", "value": "old"},
-                    {"key": "secpal-rocky-access-run-attempt", "value": "old"},
-                ],
-            }
-        }
-        payload = module.metadata_payload(
-            instance,
-            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJg27OkflrkqeiB5KIy9PTGqXLI22JkP42HA2U5zAF6n secpal-rocky-33146182082-1",
-            "33146182082",
-            "1",
-        )
-        items = {item["key"]: item["value"] for item in payload["items"]}
-        self.assertEqual("33146182082", items["secpal-rocky-access-run-id"])
-        self.assertEqual("1", items["secpal-rocky-access-run-attempt"])
-        self.assertEqual("true", items["secpal-rocky-cloud-identity-admitted"])
-        self.assertEqual("trusted", items["startup-script"])
-        self.assertEqual(len(items), len(payload["items"]))
-    def test_runner_firewall_rotation_uses_classic_patch_without_fingerprint(self) -> None:
-        transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
-        spec = importlib.util.spec_from_file_location("rocky_transition", transition_path)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        labels = {
-            "secpal_ci_owner": "rocky-host-qualification",
-            "repository": "secpal-deployment",
-            "github_run_id": "12345",
-            "github_run_attempt": "1",
-            "target_sha": "b" * 40,
-            "control_sha": "a" * 40,
-            "provider_profile": "gcp-rocky-10-2-arm64",
-            "created_at": "1800000000",
-            "expires_at": "1800010800",
-        }
-        name = "sprk-12345-1-ssh"
-        expected_description = {
-            "o": labels["secpal_ci_owner"], "r": labels["repository"],
-            "i": labels["github_run_id"], "a": labels["github_run_attempt"],
-            "t": labels["target_sha"], "c": labels["control_sha"],
-            "p": labels["provider_profile"], "n": labels["created_at"],
-            "x": labels["expires_at"],
-        }
-
-        def firewall(source_ranges: list[str]) -> dict[str, object]:
-            return {
-                "name": name,
-                "description": json.dumps(expected_description, separators=(",", ":")),
-                "network": "https://www.googleapis.com/compute/v1/projects/secpal-dev/global/networks/sprk-12345-1-network",
-                "priority": 1000,
-                "direction": "INGRESS",
-                "allowed": [{"IPProtocol": "tcp", "ports": ["22"]}],
-                "targetTags": ["sprk-12345-1"],
-                "sourceRanges": source_ranges,
-            }
-
-        class FakeClient:
-            def __init__(self, responses: list[dict[str, object]]) -> None:
-                self.responses = responses
-                self.requests: list[tuple[str, str]] = []
-                self.mutations: list[tuple[str, dict[str, object], bool, str]] = []
-
-            def request(self, method: str, path: str) -> dict[str, object]:
-                self.requests.append((method, path))
-                return deepcopy(self.responses.pop(0))
-
-            def mutate(self, path: str, payload: dict[str, object], *, global_operation: bool, method: str) -> None:
-                self.mutations.append((path, payload, global_operation, method))
-
-        client = FakeClient([firewall(["198.51.100.10/32"]), firewall(["203.0.113.10/32"])])
-        module.update_runner_firewall(client, "sprk-12345-1-instance", "203.0.113.10", labels)
-        self.assertEqual(
-            [("global/firewalls/sprk-12345-1-ssh", {"sourceRanges": ["203.0.113.10/32"]}, True, "PATCH")],
-            client.mutations,
-        )
-        self.assertNotIn("fingerprint", client.mutations[0][1])
-        self.assertEqual(
-            [("GET", "global/firewalls/sprk-12345-1-ssh"), ("GET", "global/firewalls/sprk-12345-1-ssh")],
-            client.requests,
-        )
-
-    def test_runner_firewall_rotation_rejects_unreviewed_pre_or_post_patch_state(self) -> None:
-        transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
-        spec = importlib.util.spec_from_file_location("rocky_transition", transition_path)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        labels = {
-            "secpal_ci_owner": "rocky-host-qualification", "repository": "secpal-deployment",
-            "github_run_id": "12345", "github_run_attempt": "1", "target_sha": "b" * 40,
-            "control_sha": "a" * 40, "provider_profile": "gcp-rocky-10-2-arm64",
-            "created_at": "1800000000", "expires_at": "1800010800",
-        }
-        name = "sprk-12345-1-ssh"
-        description = {"o": labels["secpal_ci_owner"], "r": labels["repository"], "i": labels["github_run_id"], "a": labels["github_run_attempt"], "t": labels["target_sha"], "c": labels["control_sha"], "p": labels["provider_profile"], "n": labels["created_at"], "x": labels["expires_at"]}
-
-        def valid() -> dict[str, object]:
-            return {"name": name, "description": json.dumps(description), "network": "https://www.googleapis.com/compute/v1/projects/secpal-dev/global/networks/sprk-12345-1-network", "priority": 1000, "direction": "INGRESS", "allowed": [{"IPProtocol": "tcp", "ports": ["22"]}], "targetTags": ["sprk-12345-1"], "sourceRanges": ["198.51.100.10/32"]}
-
-        class FakeClient:
-            def __init__(self, responses: list[dict[str, object]]) -> None:
-                self.responses, self.mutations = responses, []
-
-            def request(self, method: str, path: str) -> dict[str, object]:
-                return deepcopy(self.responses.pop(0))
-
-            def mutate(self, path: str, payload: dict[str, object], *, global_operation: bool, method: str) -> None:
-                self.mutations.append((path, payload, global_operation, method))
-
-        pre_mutations: list[tuple[str, object]] = [
-            ("name", "sprk-99999-1-ssh"), ("description", "{}"), ("network", "wrong"),
-            ("direction", "EGRESS"), ("priority", 999), ("disabled", True),
-            ("allowed", [{"IPProtocol": "tcp", "ports": ["2222"]}]),
-            ("targetTags", ["other"]), ("targetTags", ["sprk-12345-1", "other"]),
-            ("denied", [{"IPProtocol": "tcp"}]), ("sourceTags", ["source"]),
-            ("sourceServiceAccounts", ["source@example.com"]),
-            ("targetServiceAccounts", ["target@example.com"]), ("sourceRanges", None),
-            ("sourceRanges", ["198.51.100.10/32", "203.0.113.10/32"]),
-            ("sourceRanges", ["0.0.0.0/0"]), ("sourceRanges", ["198.51.100.0/24"]),
-            ("sourceRanges", "198.51.100.10/32"),
-        ]
-        for key, value in pre_mutations:
-            with self.subTest(pre_field=key, pre_value=value):
-                candidate = valid()
-                candidate[key] = value
-                client = FakeClient([candidate])
-                with self.assertRaises(module.TransitionError):
-                    module.update_runner_firewall(client, "sprk-12345-1-instance", "203.0.113.10", labels)
-                self.assertEqual([], client.mutations)
-        for label_key in ("o", "r", "i", "a", "t", "c", "p"):
-            with self.subTest(description_key=label_key):
-                candidate = valid()
-                changed = dict(description)
-                changed[label_key] = "wrong"
-                candidate["description"] = json.dumps(changed)
-                client = FakeClient([candidate])
-                with self.assertRaises(module.TransitionError):
-                    module.update_runner_firewall(client, "sprk-12345-1-instance", "203.0.113.10", labels)
-                self.assertEqual([], client.mutations)
-        post_mutations: list[tuple[str, object]] = [
-            ("sourceRanges", ["198.51.100.10/32"]), ("description", "{}"), ("network", "wrong"),
-            ("direction", "EGRESS"), ("allowed", [{"IPProtocol": "tcp", "ports": ["2222"]}]),
-            ("targetTags", ["other"]), ("disabled", True),
-        ]
-        for key, value in post_mutations:
-            with self.subTest(post_field=key, post_value=value):
-                before, after = valid(), valid()
-                after["sourceRanges"] = ["203.0.113.10/32"]
-                after[key] = value
-                client = FakeClient([before, after])
-                with self.assertRaises(module.TransitionError):
-                    module.update_runner_firewall(client, "sprk-12345-1-instance", "203.0.113.10", labels)
-                self.assertEqual(1, len(client.mutations))
-
     def test_every_rocky_wif_auth_has_a_same_job_identity_gate(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         auth = "uses: google-github-actions/auth@"
-        self.assertEqual(4, workflow.count(auth))
-        self.assertGreaterEqual(workflow.count('[[ "$GCP_PROJECT_ID" == secpal-dev ]]'), 4)
-        self.assertGreaterEqual(workflow.count("gcp-service-account@secpal-dev.iam.gserviceaccount.com"), 4)
+        self.assertEqual(1, workflow.count(auth))
+        self.assertEqual(workflow.count('[[ "$GCP_PROJECT_ID" == secpal-dev ]]'), 1)
+        self.assertEqual(workflow.count("gcp-service-account@secpal-dev.iam.gserviceaccount.com"), 1)
 
     def test_rpm_provenance_uses_installed_signed_header_identity(self) -> None:
         collector = (ROOT / "scripts/ci-cloud/collect-rocky-preparation.py").read_text(encoding="utf-8")

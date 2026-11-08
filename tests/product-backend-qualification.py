@@ -91,11 +91,7 @@ class QualificationContract(unittest.TestCase):
         guard_spec.loader.exec_module(guard)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            paths = set(contract.SOURCES.values()) | {
-                '.github/workflows/rocky-cloud-qualification.yml',
-                'infra/ci-cloud/gcp-rocky/metadata.tf',
-                'scripts/ci-cloud/bootstrap-rocky-host.tftpl',
-            }
+            paths = set(contract.SOURCES.values())
             for relative in paths:
                 target = root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -210,15 +206,6 @@ class QualificationContract(unittest.TestCase):
             with self.subTest(option=option):
                 contract.normalize_observations(raw, 993, 992, 991)
 
-    def test_closed_selector_is_dispatchable_only_from_main(self):
-        import yaml
-        workflow = yaml.safe_load((ROOT / '.github/workflows/rocky-cloud-qualification.yml').read_text())
-        inputs = workflow.get('on', workflow.get(True))['workflow_dispatch']['inputs']
-        self.assertIn('product-backend-policy', inputs['qualification']['options'])
-        text = (ROOT / '.github/workflows/rocky-cloud-qualification.yml').read_text()
-        self.assertIn('[[ "$IS_DEFAULT_BRANCH" == true ]]', text)
-        self.assertIn('sudo /usr/local/sbin/secpal-qualify-product-backends', text)
-        self.assertIn('product-backend-qualification-control.py "$operation"', text)
 
     def test_closed_manifest_authenticates_exact_policy_closure(self):
         import product_backend_qualification_contract as contract
@@ -333,31 +320,6 @@ class QualificationContract(unittest.TestCase):
                     del changed['nftables'][index]
                     self.assertRaises(ValueError, contract.admit_nftables, changed, 993)
 
-    def test_closed_workflow_selection_rejects_candidate_control(self):
-        import yaml
-        workflow = yaml.safe_load((ROOT / '.github/workflows/rocky-cloud-qualification.yml').read_text())
-        step = next(s for s in workflow['jobs']['validate']['steps'] if s.get('id') == 'closed')
-        script = step['run']
-        for target, profile, main, expected in (
-                ('', 'gcp-rocky-10-2-arm64', 'true', 0),
-                ('', 'gcp-rocky-10-2-x86-64', 'true', 0),
-                ('ef05207311e55b17c9b777e74f867efb5fb5d6b3', 'gcp-rocky-10-2-arm64', 'true', 1),
-                ('', '../../evil', 'true', 1), ('', 'gcp-rocky-10-2-arm64', 'false', 1)):
-            with tempfile.TemporaryDirectory() as temporary:
-                env = dict(os.environ, RAW_QUALIFICATION='product-backend-policy', RAW_OPERATION='provision-and-prepare',
-                    RAW_TARGET_SHA=target, RAW_PROFILE=profile, RAW_SOURCE_RUN_ID='', RAW_SOURCE_RUN_ATTEMPT='',
-                    IS_DEFAULT_BRANCH=main, GITHUB_OUTPUT=str(Path(temporary)/'output'))
-                result = subprocess.run(['bash', '--noprofile', '--norc', '-euo', 'pipefail', '-c', script],
-                    cwd=ROOT, env=env, capture_output=True)
-                self.assertEqual(result.returncode == 0, expected == 0)
-        for job in ('validate', 'qualify_target'):
-            self.assertNotIn('id-token', workflow['jobs'][job].get('permissions', {}))
-            self.assertNotIn('environment', workflow['jobs'][job])
-        provision = workflow['jobs']['provision']['steps']
-        confirm = next(i for i, s in enumerate(provision) if s['name'] == 'Reconfirm backend bytes before provider credentials')
-        oidc = next(i for i, s in enumerate(provision) if str(s.get('uses','')).startswith('google-github-actions/auth@'))
-        self.assertLess(confirm, oidc)
-        self.assertIn('always()', workflow['jobs']['cleanup']['if'])
 
     def test_dispatch_architecture_guard_rejects_impure_and_unclassified_operations(self):
         spec=importlib.util.spec_from_file_location('backend_guard',ROOT/'scripts/validate-product-backend-qualification.py')
@@ -367,7 +329,7 @@ class QualificationContract(unittest.TestCase):
         import shutil
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
-            relative_paths=set(contract.SOURCES.values())|{'.github/workflows/rocky-cloud-qualification.yml','infra/ci-cloud/gcp-rocky/metadata.tf','scripts/ci-cloud/bootstrap-rocky-host.tftpl'}
+            relative_paths=set(contract.SOURCES.values())
             for relative in relative_paths:
                 target=root/relative;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/relative,target)
             cases=(('scripts/ci-cloud/product_backend_qualification_contract.py','\nimport subprocess\n'),

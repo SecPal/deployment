@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
+# Retained-state recovery only. Resource creation is retired.
 terraform {
   required_version = "= 1.12.5"
 
@@ -13,8 +14,8 @@ terraform {
 }
 
 provider "google" {
-  project                         = var.project_id
+  project                         = "secpal-dev"
   region                          = "europe-west3"
-  zone                            = var.zone
+  zone                            = "europe-west3-a"
   add_terraform_attribution_label = false
 }

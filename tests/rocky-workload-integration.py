@@ -159,17 +159,13 @@ class RockyWorkloadTests(unittest.TestCase):
             self.assertEqual("failed", self.admit(bundle)["test"]["result"])
 
     def test_workflow_uses_current_control_and_retains_frozen_target_and_cleanup(self):
-        workflow = (ROOT / ".github/workflows/rocky-cloud-qualification.yml").read_text()
-        self.assertIn("admit-rocky-workload.py", workflow)
-        self.assertIn("secpal-run-rocky-workload-qualification", workflow)
-        self.assertIn("402c22b0a1d69a5a3dba74ffb68cf016caba606b", workflow)
-        self.assertIn("436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac", workflow)
-        self.assertIn("PROVIDER_RUN_RESOURCE_SET_ABSENT", workflow)
-        runner = (SCRIPTS / "run-rocky-workload-qualification.py").read_text()
-        self.assertEqual(self.loader.TARGET, self.runner.TARGET)
-        self.assertEqual(self.loader.HARNESS, self.runner.HARNESS)
-        self.assertIn('"env", "-i"', runner)
-        self.assertNotIn("guarded_decision", runner)
+        workflow = (ROOT / '.github/workflows/rocky-cloud-qualification.yml').read_text()
+        self.assertIn('rocky-control.py validate-continuation', workflow)
+        self.assertIn('--exact-action cleanup', workflow)
+        self.assertIn('--exact-action verify', workflow)
+        self.assertNotIn('admit-rocky-workload.py', workflow)
+        self.assertNotIn('tofu apply', workflow)
+
 
 
 if __name__ == "__main__":
