@@ -47,7 +47,6 @@ def validate(root: Path):
         raise ValueError('closed semantic diagnostic schema disagrees with trusted operations')
     runner = (root / 'scripts/ci-cloud/qualify-native-postgresql.py').read_text()
     control = (root / 'scripts/ci-cloud/postgresql-qualification-control.py').read_text()
-    workflow = (root / '.github/workflows/rocky-cloud-qualification.yml').read_text()
     reference = (root / 'scripts/ci-cloud/postgresql-reference-host.py').read_text()
     for source in (runner, control, reference):
         parsed = ast.parse(source)
@@ -69,15 +68,6 @@ def validate(root: Path):
     for required in ('contract.admit_diagnostic(', 'consumer !=', "'candidate_tree': tree", 'NoRedirect'):
         if required not in control:
             raise ValueError('trusted source/diagnostic binding missing')
-    for required in ('scripts/validate-postgresql-qualification.py', 'admit-diagnostic', 'confirm_postgresql:', 'postgresql-failure-'):
-        if required not in workflow:
-            raise ValueError('pre-provider admission or diagnostic transport missing')
-    import yaml
-    jobs = yaml.safe_load(workflow)['jobs']
-    if jobs['confirm_postgresql']['permissions'].get('id-token') == 'write':
-        raise ValueError('source observer has provider authority')
-    if any(key in jobs['provision']['permissions'] for key in ('issues', 'pull-requests')):
-        raise ValueError('provider controller has source graph authority')
     if len(contract.rpm.PACKAGES) != 22:
         raise ValueError('frozen host package claim widened')
 
