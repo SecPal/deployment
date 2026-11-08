@@ -629,6 +629,12 @@ class ProductionStateContractTest(unittest.TestCase):
                 self.assertEqual(rejected.returncode, 78)
 
     def test_live_php_process_arguments_environment_and_logs_do_not_leak(self) -> None:
+        self.assert_live_php_secret_surfaces()
+
+    def test_live_php_secret_inspection_survives_delayed_startup(self) -> None:
+        self.assert_live_php_secret_surfaces(startup_delay_microseconds=2_100_000)
+
+    def assert_live_php_secret_surfaces(self, startup_delay_microseconds: int = 0) -> None:
         if subprocess.run(["php", "-v"], capture_output=True, check=False).returncode != 0:
             self.skipTest("php is unavailable")
         with tempfile.TemporaryDirectory() as temporary:
@@ -651,8 +657,8 @@ class ProductionStateContractTest(unittest.TestCase):
             ready = root / "ready"
             probe = root / "sleeping-probe.php"
             probe.write_text(
-                "<?php define('SECPAL_TEST_SECRET_ROOT', $argv[1]); require $argv[2]; "
-                "file_put_contents($argv[3], 'ready'); usleep(750000);\n",
+                "<?php usleep((int) $argv[4]); define('SECPAL_TEST_SECRET_ROOT', $argv[1]); require $argv[2]; "
+                "file_put_contents($argv[3], 'ready'); fgets(STDIN);\n",
                 encoding="utf-8",
             )
             environment = dict(os.environ)
@@ -663,23 +669,36 @@ class ProductionStateContractTest(unittest.TestCase):
                     os.fspath(root),
                     os.fspath(BOOTSTRAP_PATH),
                     os.fspath(ready),
+                    str(startup_delay_microseconds),
                 ],
                 env=environment,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
             try:
-                deadline = time.monotonic() + 2
+                # Keep the existing combined startup/inspection budget (2 + 3s),
+                # but hold PHP until /proc has been inspected instead of racing
+                # a fixed 750ms lifetime on a loaded CI runner.
+                deadline = time.monotonic() + 5
                 while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
                     time.sleep(0.01)
-                self.assertTrue(ready.exists(), "PHP secret probe did not become ready")
+                self.assertTrue(ready.exists(), f"PHP secret probe did not become ready (exit={process.poll()})")
                 environment_surface = Path(f"/proc/{process.pid}/environ").read_bytes()
                 argument_surface = Path(f"/proc/{process.pid}/cmdline").read_bytes()
-                stdout, stderr = process.communicate(timeout=3)
+                stdout, stderr = process.communicate(
+                    input=b"inspection-complete\n",
+                    timeout=max(0.1, deadline - time.monotonic()),
+                )
+                self.assertEqual(process.returncode, 0)
             finally:
                 if process.poll() is None:
                     process.terminate()
-                    process.wait(timeout=3)
+                    process.communicate(timeout=3)
+                else:
+                    for stream in (process.stdin, process.stdout, process.stderr):
+                        if stream is not None:
+                            stream.close()
             surfaces = (environment_surface, argument_surface, stdout, stderr)
             for name, sentinel in sentinels.items():
                 with self.subTest(name=name):
