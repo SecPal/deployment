@@ -7,13 +7,15 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Unreleased
 
-### Fixed
+### Removed
 
 - Retire active GCP provisioning, bootstrap and qualification dispatch. Preserve
   native Rocky/SELinux/PostgreSQL/backend qualification and its accepted
   AMD64/ARM64 reference-host evidence. GCP portability is deferred, not passed.
 - Retain exact-owned janitors, locked provider roots and manual retained-state
   destroy/reconciliation until external cleanup obligations are discharged.
+
+### Fixed
 
 - Preserve the gateway's existing bounded HTTP readiness probe as its image
   default, matching the canonical Quadlet role. Build the local fixture with

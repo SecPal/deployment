@@ -37,7 +37,26 @@ class CloudCIContractTests(unittest.TestCase):
             root = Path(temporary)
             fixture = root / 'github.json'
             gh = root / 'gh'
-            gh.write_text('#!/usr/bin/env python3\nimport os,json,sys\nd=json.load(open(os.environ["SECPAL_SOURCE_FIXTURE"]))\np=sys.argv[2]\nprint(json.dumps(d["run"] if "/actions/runs/" in p else d["compare"] if "/compare/" in p else d["commit"]))\n')
+            gh.write_text(
+                '#!/usr/bin/env python3\n'
+                'import argparse\n'
+                'import json\n'
+                'import os\n'
+                '\n'
+                'parser = argparse.ArgumentParser()\n'
+                'parser.add_argument("command", choices=["api"])\n'
+                'parser.add_argument("endpoint")\n'
+                'parser.add_argument("-H", "--header", action="append")\n'
+                'parser.add_argument("-X", "--method", choices=["GET"], default="GET")\n'
+                'args = parser.parse_args()\n'
+                'with open(os.environ["SECPAL_SOURCE_FIXTURE"], encoding="utf-8") as fixture:\n'
+                '    responses = json.load(fixture)\n'
+                'endpoint = args.endpoint.removeprefix("/")\n'
+                'if endpoint not in responses:\n'
+                '    parser.error("unexpected cleanup API endpoint")\n'
+                'print(json.dumps(responses[endpoint]))\n',
+                encoding="utf-8",
+            )
             gh.chmod(0o700)
             # Public native representation: historical successful preparation.
             source = 'bd5e667ddad55a91a7101e9f602ba3e5291de7f9'
@@ -56,14 +75,29 @@ class CloudCIContractTests(unittest.TestCase):
                     data['compare']['merge_base_commit']['sha'] = value
                 elif field:
                     data['run'][field] = value
-                fixture.write_text(json.dumps(data))
+                fixture.write_text(json.dumps({
+                    'repos/SecPal/deployment/actions/runs/34953572359/attempts/1': data['run'],
+                    f'repos/SecPal/deployment/commits/{source}': data['commit'],
+                    f'repos/SecPal/deployment/compare/{source}...{"b" * 40}': data['compare'],
+                }))
                 env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
                            SECPAL_SOURCE_FIXTURE=str(fixture), SOURCE_RUN_ID='34953572359',
                            SOURCE_RUN_ATTEMPT='1', SOURCE_CONTROL_SHA=source, GITHUB_SHA='b' * 40)
-                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', step['run']], env=env,
-                                        text=True, capture_output=True)
-                with self.subTest(field=field):
-                    self.assertEqual(result.returncode == 0, field is None, result.stderr)
+                for position in ('none', 'before', 'after', 'leading-slash'):
+                    command = step['run']
+                    flags = '-H "Accept: application/vnd.github+json" --method GET'
+                    if position == 'before':
+                        command = command.replace('gh api', f'gh api {flags}')
+                    elif position == 'after':
+                        command = re.sub(r'(gh api "[^"\n]+")', rf'\1 {flags}', command)
+                    elif position == 'leading-slash':
+                        command = command.replace('"repos/SecPal/', '"/repos/SecPal/')
+                    with self.subTest(field=field, position=position):
+                        result = subprocess.run(
+                            ['bash', '-euo', 'pipefail', '-c', command], env=env,
+                            text=True, capture_output=True,
+                        )
+                        self.assertEqual(result.returncode == 0, field is None, result.stderr)
 
     def test_gcp_creation_is_retired_without_losing_retained_state_cleanup(self):
         workflow = yaml.load(
