@@ -27,6 +27,7 @@ from integration_runtime_contract import (
     API_IMAGE,
     FRONTEND_DIGEST,
     POSTGRES_FIXTURE,
+    ROLE_SPECS,
     podman_version_supported as quadlet_generator_version_supported,
     podman_versions_compatible as quadlet_generator_versions_compatible,
 )
@@ -71,6 +72,22 @@ PRODUCT_ROLES = {
 
 
 class QuadletContract(unittest.TestCase):
+    def test_gateway_image_default_preserves_canonical_role_health(self) -> None:
+        # integration_runtime_contract owns this readiness probe. The image
+        # default and explicit Quadlet settings must agree, including bounds.
+        health = ROLE_SPECS["gateway"].health
+        self.assertIsNotNone(health)
+        expected = (
+            f"HEALTHCHECK --interval={health.interval_seconds}s "
+            f"--timeout={health.timeout_seconds}s "
+            f"--start-period={health.start_period_seconds}s "
+            f"--retries={health.retries} CMD {health.command}"
+        )
+        containerfile = ROOT / "containers/phase-b-gateway/Containerfile"
+        checks = [line for line in containerfile.read_text().splitlines()
+                  if line.startswith("HEALTHCHECK")]
+        self.assertEqual(checks, [expected])
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="secpal-quadlet-test.")
         self.addCleanup(self.temp.cleanup)
