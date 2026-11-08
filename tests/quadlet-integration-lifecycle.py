@@ -469,6 +469,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                 build = lifecycle.command.call_args.args[0]
                 self.assertEqual(build[build.index("--file") + 1], str(containerfile))
                 self.assertIn("--pull=never", build)
+                self.assertIn("--format=docker", build)
                 self.assertNotIn("--build-arg", build)
 
     def test_cloud_prepare_diagnostics_cover_every_real_image_operation(self) -> None:

@@ -2066,6 +2066,9 @@ class IntegrationLifecycle:
             [
                 "podman",
                 "build",
+                # OCI image configuration has no HEALTHCHECK field. Preserve
+                # the real fallback probe with Podman's supported image format.
+                "--format=docker",
                 "--pull=never",
                 "--force-rm=true",
                 "--label",
