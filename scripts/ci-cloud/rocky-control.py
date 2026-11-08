@@ -19,8 +19,6 @@ import re
 import stat
 import struct
 import sys
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -102,10 +100,7 @@ IMAGE_PREFIX = (
     "https://www.googleapis.com/compute/v1/projects/rocky-linux-cloud/"
     "global/images/"
 )
-DISCOVERY_ROOT = (
-    "https://compute.googleapis.com/compute/v1/projects/rocky-linux-cloud/"
-    "global/images/family/"
-)
+
 PROVIDER_ARCHITECTURES = {"aarch64": "ARM64", "x86_64": "X86_64"}
 REPOSITORY_DIAGNOSTIC_REASONS = {
     "validate-dnf4": {"command-failed", "postcondition-failed"},
@@ -1213,75 +1208,6 @@ def validate_collection_diagnostic_semantics(diagnostic: dict[str, Any]) -> None
         raise ControlError("collection diagnostic has an inappropriate subject")
 
 
-def discover_image(profile_name: str, control_sha: str, output: Path) -> None:
-    if SHA.fullmatch(control_sha) is None:
-        raise ControlError("trusted control SHA must be a lowercase full commit SHA")
-    validate_profile(profile_name)
-    profile = canonical_profile(profile_name)
-    profile_architecture = profile["architecture"]
-    family = profile["image"]["discovery_family"]
-    token = os.environ.get("GOOGLE_OAUTH_ACCESS_TOKEN", "")
-    if not token or any(character.isspace() for character in token):
-        raise ControlError("bounded WIF access token is required for discovery")
-    request = urllib.request.Request(
-        f"{DISCOVERY_ROOT}{family}",
-        headers={
-            "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
-            "User-Agent": "SecPal-Rocky-Image-Discovery/1",
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = response.read(1_000_001)
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as error:
-        raise ControlError("official Rocky image discovery failed") from error
-    if len(payload) > 1_000_000:
-        raise ControlError("image discovery response exceeded the size bound")
-    try:
-        image = json.loads(payload)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ControlError("image discovery returned invalid JSON") from error
-    if not isinstance(image, dict):
-        raise ControlError("image discovery response must be an object")
-    name = image.get("name")
-    self_link = image.get("selfLink")
-    image_architecture = image.get("architecture")
-    creation = image.get("creationTimestamp")
-    expected_name = re.compile(
-        r"^rocky-linux-10-[a-z0-9-]*arm64[a-z0-9-]*$"
-        if profile_architecture == "aarch64"
-        else r"^rocky-linux-10-v[0-9]{8}$"
-    )
-    if (
-        not isinstance(name, str)
-        or expected_name.fullmatch(name) is None
-        or self_link != f"{IMAGE_PREFIX}{name}"
-        or image_architecture != PROVIDER_ARCHITECTURES[profile_architecture]
-        or not isinstance(creation, str)
-        or image.get("status") != "READY"
-        or image.get("deprecated") is not None
-    ):
-        raise ControlError("resolved image is outside the reviewed official profile shape")
-    evidence = {
-        "schema_version": 1,
-        "trusted_control_sha": control_sha,
-        "provider": "google",
-        "profile": profile_name,
-        "image_project": profile["image"]["project"],
-        "discovery_family": family,
-        "exact_image_name": name,
-        "exact_image_self_link": self_link,
-        "architecture": image_architecture,
-        "image_creation_timestamp": creation,
-        "discovered_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
-            "+00:00", "Z"
-        ),
-    }
-    write_object(output, evidence)
-    validate_evidence("discovery", output)
-
-
 def validate_continuation(
     path: Path,
     profile_name: str,
@@ -1407,10 +1333,6 @@ def parser() -> argparse.ArgumentParser:
     access_request.add_argument("--target-sha", required=True)
     access_request.add_argument("--run-id", required=True)
     access_request.add_argument("--run-attempt", required=True)
-    discovery = subparsers.add_parser("discover-image")
-    discovery.add_argument("--profile", required=True, choices=tuple(PROFILE_PATHS))
-    discovery.add_argument("--control-sha", required=True)
-    discovery.add_argument("--output", required=True, type=Path)
     continuation = subparsers.add_parser("validate-continuation")
     continuation.add_argument("path", type=Path)
     continuation.add_argument("--profile", required=True, choices=tuple(PROFILE_PATHS))
@@ -1490,8 +1412,6 @@ def main(arguments: list[str]) -> int:
                 options.run_id,
                 options.run_attempt,
             )
-        elif options.command == "discover-image":
-            discover_image(options.profile, options.control_sha, options.output)
         elif options.command == "validate-continuation":
             validate_continuation(
                 options.path,

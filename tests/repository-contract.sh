@@ -64,9 +64,6 @@ required_files=(
   infra/ci-cloud/gcp/versions.tf
   infra/ci-cloud/gcp/.terraform.lock.hcl
   infra/ci-cloud/gcp-rocky/.terraform.lock.hcl
-  infra/ci-cloud/gcp-rocky/main.tf
-  infra/ci-cloud/gcp-rocky/outputs.tf
-  infra/ci-cloud/gcp-rocky/variables.tf
   infra/ci-cloud/gcp-rocky/versions.tf
   schemas/ci-cloud-evidence.schema.json
   schemas/rocky-cloud-continuation.schema.json
@@ -104,12 +101,10 @@ required_files=(
   scripts/ci-cloud/gcp-janitor.py
   scripts/ci-cloud/gcp-rocky-janitor.py
   scripts/ci-cloud/allocate-rocky-subids.py
-  scripts/ci-cloud/bootstrap-rocky-host.tftpl
   scripts/ci-cloud/collect-rocky-preparation.py
   scripts/ci-cloud/prepare-rocky-host.sh
   scripts/ci-cloud/publish-rocky-qualification-readiness.py
   scripts/ci-cloud/rocky-control.py
-  scripts/ci-cloud/rocky-gcp-transition.py
   scripts/ci-cloud/wait-rocky-qualification-readiness.py
   scripts/ci-cloud/run-rocky-target-qualification.sh
   scripts/qualify-production-host.sh

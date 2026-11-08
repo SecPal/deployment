@@ -5,6 +5,12 @@ SPDX-License-Identifier: MIT
 
 # Rocky instance insertion transport observations
 
+This GCP insertion diagnostic is historical. Active provisioning and its
+transport collector are retired; exact-owned janitors, retained-state recovery
+and original artifacts remain. No new insertion or GCP qualification is
+supported. The former implementation is preserved in Git history at
+`bf6ec699f1ce28f13081f5d368bdd21996eb5b18`.
+
 This diagnostic belongs to deployment #300. It adds observability; #299 owns
 root-cause diagnosis and correction. It claims no GCP fix or real-provider
 success. Local fixtures prove repository behavior only. No GCP dispatch is

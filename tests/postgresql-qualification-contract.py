@@ -42,22 +42,12 @@ class CandidateData(unittest.TestCase):
             legacy.update(path.encode() + b'\0' + hashlib.sha256((ROOT/path).read_bytes()).digest())
         self.assertEqual(expected, legacy.hexdigest())
         self.assertEqual(contract.probe_manifest_digest(manifest), expected)
-        terraform = (ROOT / 'infra/ci-cloud/gcp-rocky/metadata.tf').read_text()
-        template = (ROOT / 'scripts/ci-cloud/bootstrap-rocky-host.tftpl').read_text()
-        sources = dict(re.findall(
-            r'(\w+)\s*=\s*file\("\$\{path.module\}/\.\./\.\./\.\./([^"\n]+)"\)', terraform))
-        destinations = re.findall(r"decode_script '(\w+)' /opt/secpal-control/([^\s]+)", template)
         with tempfile.TemporaryDirectory() as directory:
             guest = Path(directory)
-            for variable, destination in destinations:
-                if destination not in contract.GUEST_PROBE_PATHS:
-                    continue
+            for destination in contract.GUEST_PROBE_PATHS:
                 path = guest / destination
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes((ROOT / sources[variable]).read_bytes())
-            transported = {destination for _, destination in destinations if destination in contract.PROBE_PATHS}
-            self.assertEqual(transported, set(contract.GUEST_PROBE_PATHS))
-            self.assertTrue(set(contract.CONTROL_PROBE_PATHS).isdisjoint(transported))
+                path.write_bytes((ROOT / destination).read_bytes())
             with mock.patch.object(runner, 'ROOT', guest), mock.patch.object(runner, 'read_probe_manifest', return_value=manifest):
                 self.assertEqual(runner.guest_probe_digest(), expected)
                 bad = dict(manifest); bad.pop(contract.CONTROL_PROBE_PATHS[0])
@@ -457,21 +447,6 @@ class CandidateData(unittest.TestCase):
             self.assertEqual(contract.admit_diagnostic(document, authorization=auth, binding=binding,
                 qualification_run_id='200', qualification_run_attempt='1', host_evidence_sha256='0'*64), document)
 
-    def test_qualification_runner_installs_its_own_pinned_schema_dependency(self):
-        import yaml
-        job = yaml.safe_load((ROOT/'.github/workflows/rocky-cloud-qualification.yml').read_text())['jobs']['qualify_target']
-        self.assertTrue(any('jsonschema==4.25.1' in step.get('run', '') for step in job['steps']))
-
-    def test_workflow_composes_pg_data_with_frozen_host_authority(self):
-        source = (ROOT / '.github/workflows/rocky-cloud-qualification.yml').read_text()
-        self.assertIn('native-postgresql-18', source)
-        self.assertIn('Bind independently confirmed PostgreSQL data before provisioning', source)
-        self.assertIn('Retrieve and independently admit native PostgreSQL evidence', source)
-        self.assertIn('expected_target_sha=402c22b0a1d69a5a3dba74ffb68cf016caba606b', source)
-        self.assertIn('inputs.qualification', source)
-        self.assertNotIn('inputs.candidate_sha', source)
-        self.assertNotIn('inputs.harness', source)
-
     def system_fixture(self, profile):
         architecture = contract.rpm.PROFILE_ARCHITECTURES[profile]
         auth = {'schema_version': 1, 'selector': contract.SELECTOR, 'repository': 'SecPal/deployment',
@@ -604,7 +579,6 @@ class CandidateData(unittest.TestCase):
                      'scripts/ci-cloud/qualify-native-postgresql.py',
                      'scripts/ci-cloud/postgresql-qualification-control.py',
                      'schemas/postgresql-qualification-diagnostic.schema.json',
-                     '.github/workflows/rocky-cloud-qualification.yml',
                      'scripts/ci-cloud/postgresql-reference-host.py')
             for name in paths:
                 destination = temporary / name; destination.parent.mkdir(parents=True,exist_ok=True)
@@ -613,8 +587,7 @@ class CandidateData(unittest.TestCase):
                 (paths[0],'import hashlib','import os\nimport hashlib'),
                 (paths[2],'import argparse','import argparse\nsubprocess.run(["unbounded"])'),
                 (paths[2],'observer.cleanup()','observer.omit_cleanup()'),
-                (paths[3],'contract.admit_diagnostic(','contract.trust_diagnostic('),
-                (paths[5],'scripts/validate-postgresql-qualification.py','scripts/skip-postgresql-gate.py')):
+                (paths[3],'contract.admit_diagnostic(','contract.trust_diagnostic(')):
                 original = (temporary / name).read_text()
                 (temporary / name).write_text(original.replace(before,after))
                 with self.subTest(name=name), self.assertRaises(ValueError):
@@ -682,11 +655,7 @@ class CandidateData(unittest.TestCase):
 
     def test_guest_identity_does_not_reopen_metadata(self):
         source = (ROOT / 'scripts/ci-cloud/qualify-native-postgresql.py').read_text()
-        bootstrap = (ROOT / 'scripts/ci-cloud/bootstrap-rocky-host.tftpl').read_text()
         self.assertNotIn('http://169.254.169.254', source)
-        self.assertIn('postgresql-resource-binding.json', bootstrap)
-        self.assertLess(bootstrap.index('postgresql-resource-binding.json'),
-                        bootstrap.index('/usr/local/sbin/secpal-prepare-rocky-host \\'))
 
     def test_process_collection_is_bounded_during_execution(self):
         spec = importlib.util.spec_from_file_location('pg_observer', ROOT / 'scripts/ci-cloud/qualify-native-postgresql.py')

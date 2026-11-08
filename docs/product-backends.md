@@ -88,6 +88,13 @@ the fragment contains no public listener, TLS material or routing decision.
 
 ## Validation and qualification
 
+Active GCP provisioning and the `product-backend-policy` dispatcher are retired.
+The following historical GCP transport narrative is retained as context, not an
+active requirement or successful provider proof. The native backend observer,
+effective-policy/negative-access tests and accepted #248 reference-host evidence
+remain; the real host invariants above are unchanged. See
+[the retirement and retained cleanup boundary](rocky-cloud-qualification.md).
+
 Focused repository evidence:
 
 ```bash
