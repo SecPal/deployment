@@ -5,15 +5,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Native PostgreSQL qualification authority
 
-The maintained `rocky-cloud-qualification.yml` workflow has one closed
-`native-postgresql-18` selector for deployment#81. It composes frozen #80 host
-admission with a separate PostgreSQL claim. Neither the #119/#126 application
-fixture nor this qualification environment is production infrastructure.
+The maintained native path is `scripts/ci-cloud/postgresql-reference-host.py`,
+using accepted protected-main control, a root-owned host-specific lease, strict
+SSH identity, exact probe/configuration binding and independent admission.
+Actual native Rocky AMD64/ARM64 evidence remains indexed by accepted #81 / PR
+[PR #286](https://github.com/SecPal/deployment/pull/286) and #248. No source retirement waives package, SELinux, TLS/SCRAM, role,
+network, persistence, failure or cleanup requirements.
 
-The trusted workflow must already be accepted on protected main before it can
-qualify a PostgreSQL candidate. The prerequisite implementing this interface
-has no real-system completion claim of its own. Its repository fixtures prove
-admission behavior, not Rocky/PostgreSQL conformance.
+The GCP `native-postgresql-18` dispatcher and provisioning are retired. The
+GCP-specific transport description below is historical; it is not an executable
+current workflow or evidence of GCP acceptance. Published schemas and pure
+historical representation/diagnostic tests remain. Current reference-host tests
+continue to prove their existing distinct scope, including no metadata access.
+See [the retirement/recovery boundary](rocky-cloud-qualification.md).
 
 ## Candidate and execution boundary
 

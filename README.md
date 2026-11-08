@@ -118,14 +118,18 @@ The active checks are `Local Integration / Quadlet Contract (amd64)` and
 `Local Integration / Quadlet Contract (arm64)`. The current integration runtime
 is exclusively rootless Podman, systemd-user, and native Quadlet.
 
-### Ephemeral Rocky cloud qualification
+### Native Rocky qualification and retained cloud cleanup
 
-Current ephemeral host qualification follows the
-[Rocky Linux 10.2 contract](docs/rocky-cloud-qualification.md).
-The retired Debian provisioning path is preserved in Git history.
-Bounded legacy cloud janitors remain until outstanding resource ownership and
-cleanup responsibilities have been independently discharged.
-This qualification does not claim production provisioning or operation.
+Native Rocky Linux 10.2+/SELinux qualification and the accepted AMD64/ARM64
+reference-host evidence remain required. See the
+[maintained qualification and recovery boundaries](docs/rocky-cloud-qualification.md).
+
+Active GCP provisioning/qualification is retired. GCP and multi-provider
+portability #123 are deferred, not completed. The former cloud workflow accepts
+only exact retained-state `destroy`; scheduled janitors and all three pinned
+provider roots remain until external resource/state obligations are independently
+discharged. Source retirement is not proof of provider absence and performs no
+cloud, IAM, production or reference-host operation.
 
 ## Security
 
@@ -160,9 +164,10 @@ A source scan supplies no fabricated Terraform values and authorizes no cloud
 operation.
 
 [Shared #1236](https://github.com/SecPal/.github/issues/1236) retains historical
-evidence only; its expired dispositions are not renewed. Current public-IP,
-OS Login, flow-logging, customer-managed disk-key and Private Google Access
-findings remain blocking under the unchanged central policy. The gateway image
+evidence only; its expired dispositions are not renewed. The retired GCP
+resource definitions are absent from current source; historical findings retain
+their original scope. Any finding in retained cleanup source remains blocking
+under the unchanged central policy. The gateway image
 and Quadlet use the same bounded readiness probe. Missing or unbound source,
 incomplete evaluation, invalid diagnostics and stale databases fail closed.
 The action and closed v5 schema come from the same immutable accepted shared
@@ -181,21 +186,12 @@ Run deterministic repository checks without starting the integration stack:
 ```
 
 The preflight does not install system tools or access production infrastructure.
-Install the pinned OpenTofu 1.12.5 alongside the existing validation tools;
-Rocky metadata tests evaluate the actual provider-bound representation locally.
-Exact OpenTofu and provider version constraints accept both `x.y.z` and `= x.y.z`.
-Version ranges remain forbidden; manifests, dependency locks and transport
-evidence must agree on the admitted versions.
-The transport-provider regression initializes Google 8.7.0 with the unchanged
-dependency lock in a disposable credential-isolated directory, then runs the
-real producer with only loopback networking. It accepts TCP without reading
-application data. Independent loopback, TCP_INFO/inet_diag and filtered
-destruction-subscription capability admission precedes provider initialization
-or installed-package copying. Unsupported Linux namespace capabilities report `SKIP`;
-`python3 tests/ci-cloud-instance-transport-provider.py --required` instead fails
-when the real-provider regression cannot run. Use `--tofu` for an ephemeral
-official OpenTofu 1.12.5 executable. No cloud credentials or GCP calls are needed.
-Observer failures after capability admission remain failures in optional mode.
+Install pinned OpenTofu 1.12.5 alongside the existing validation tools for the
+retained recovery roots. Exact provider constraints accept both `x.y.z` and
+`= x.y.z`; version ranges and manifest/lock disagreement remain forbidden.
+The retired GCP insertion/metadata tests are not part of current validation.
+Native host, PostgreSQL, backend, failure and cleanup contracts remain in the
+preflight. A reported native capability skip is not a passed real-host test.
 
 ## Repository boundary
 

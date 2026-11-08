@@ -1175,8 +1175,8 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     def test_workflow_architecture_gate_precedes_provider_authentication(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         validate = workflow.index("jobs:\n  validate:")
-        discover = workflow.index("\n  discover:", validate)
-        validation_job = workflow[validate:discover]
+        cleanup = workflow.index("\n  cleanup:", validate)
+        validation_job = workflow[validate:cleanup]
         checkout = validation_job.index("Checkout trusted architecture gate from main")
         setup = validation_job.index("Set up reviewed architecture-gate Python")
         architecture = validation_job.index("Validate Rocky evidence architecture")
@@ -1188,7 +1188,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         self.assertIn("validate-rocky-evidence-architecture.py", validation_job)
         self.assertNotIn("id-token: write", validation_job)
         self.assertNotIn("google-github-actions/auth", validation_job)
-        self.assertIn("needs: validate", workflow[discover:])
+        self.assertIn("needs: validate", workflow[cleanup:])
 
     def test_architecture_gate_rejects_target_binding_disagreement(self) -> None:
         target = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
