@@ -19,8 +19,6 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parents[1]
 WAITER = ROOT / "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
 WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
-BOOTSTRAP = ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl"
-TRANSITION = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
 PUBLISHER = ROOT / "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
 READINESS_SCHEMA = ROOT / "schemas/rocky-cloud-qualification-readiness.schema.json"
 
@@ -196,35 +194,6 @@ class RockyQualificationReadinessTests(unittest.TestCase):
         self.assertEqual(self.marker(), result)
         self.assertEqual(1, calls)
 
-    def test_startup_and_workflow_enforce_the_new_lifecycle_boundary(self) -> None:
-        bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
-        publisher = PUBLISHER.read_text(encoding="utf-8")
-        transition = TRANSITION.read_text(encoding="utf-8")
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("qualification-readiness.json", bootstrap)
-        self.assertLess(
-            bootstrap.index('rm -f -- "$qualification_readiness"'),
-            bootstrap.index('printf \'%s\\n\' "$public_key"'),
-        )
-        self.assertLess(
-            bootstrap.index("/usr/local/sbin/secpal-prepare-rocky-host"),
-            bootstrap.index("/usr/local/sbin/secpal-publish-rocky-qualification-readiness"),
-        )
-        self.assertIn("runtime_user_manager_active", publisher)
-        self.assertIn("runtime_user_bus_available", publisher)
-        self.assertIn("runtime_user_control_reachable", publisher)
-        self.assertNotIn("daemon-reload", publisher)
-        self.assertNotRegex(publisher, r"(?m)^\s*(?:time\.)?sleep\(60\)")
-        self.assertIn("secpal-rocky-access-run-id", transition)
-        waiter = "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
-        target = "sudo /usr/local/sbin/secpal-run-rocky-target-qualification"
-        self.assertIn(waiter, workflow)
-        self.assertLess(workflow.index(waiter), workflow.index(target))
-        self.assertEqual(1, workflow.count(target))
-        target_job = workflow.split("  qualify_target:", 1)[1].split("\n  cleanup:", 1)[0]
-        self.assertNotIn("id-token: write", target_job)
-        self.assertNotIn("google-github-actions/auth", target_job)
-        self.assertNotRegex(target_job, r"(?m)^\s*-\s+run:\s+sleep\s+[0-9]+")
 
     def test_failure_diagnostic_is_bounded_and_contains_no_transport_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

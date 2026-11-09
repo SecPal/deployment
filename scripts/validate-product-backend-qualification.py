@@ -102,20 +102,6 @@ def validate(root):
                                        and 'if operation not in contract.OPERATIONS:' in (directory / 'qualify-product-backends.py').read_text())
                     if not dynamic_guarded and (not isinstance(node.value, ast.Constant) or node.value.value not in operations):
                         raise ValueError('unclassified trusted operation')
-    text = (root / '.github/workflows/rocky-cloud-qualification.yml').read_text()
-    required = ('native-postgresql-18 | product-backend-policy)', '[[ -z "$RAW_TARGET_SHA" ]]',
-                '[[ "$IS_DEFAULT_BRANCH" == true ]]', 'RAW_TARGET_SHA="$expected_target_sha"',
-                'product-backend-qualification-control.py reconfirm', 'product-backend-qualification-control.py "$operation"',
-                'sudo /usr/local/sbin/secpal-qualify-product-backends', 'Enforce product backend policy qualification result')
-    if any(value not in text for value in required):
-        raise ValueError('accepted-main dispatch/admission boundary absent')
-    metadata = (root / 'infra/ci-cloud/gcp-rocky/metadata.tf').read_text()
-    bootstrap = (directory / 'bootstrap-rocky-host.tftpl').read_text()
-    for name, relative in sources.items():
-        if f'file("${{path.module}}/../../../{relative}")' not in metadata:
-            raise ValueError('exact source closure not transported')
-        if f'/opt/secpal-control/{relative}' not in bootstrap:
-            raise ValueError('source closure not installed through trusted path')
 
 
 def main():

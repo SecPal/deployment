@@ -23,7 +23,7 @@ class EnrollmentContract(unittest.TestCase):
         for key in ['if', 'steps', 'secrets']:
             self.assertNotIn(key, job)
         self.assertRegex(job['uses'], r'^SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@[0-9a-f]{40}$')
-        self.assertEqual(job['with']['phase'], '1')
+        self.assertEqual(job['with']['phase'], '2')
         self.assertEqual(job['with']['merge-method'], 'squash')
         self.assertEqual(job['with']['allowed-ecosystems'], 'github_actions')
         self.assertEqual(json.loads(job['with']['workflow-paths']), [

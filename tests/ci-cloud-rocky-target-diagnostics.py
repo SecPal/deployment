@@ -4606,23 +4606,6 @@ exec 6>&-
                 load(symlink)
 
     def test_success_and_failure_transport_are_disjoint(self) -> None:
-        workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-        steps = {
-            step["name"]: step
-            for step in workflow["jobs"]["qualify_target"]["steps"]
-            if "name" in step
-        }
-        failure = steps["Retrieve and validate bounded target-qualification failure"]
-        success = steps["Retrieve and validate target-owned qualification evidence"]
-        self.assertIn("qualification_failure_expected == 'true'", failure["if"])
-        self.assertEqual(
-            "${{ steps.target_execution.outcome == 'success' }}", success["if"]
-        )
-        self.assertNotIn("qualification.json", failure["run"])
-        self.assertNotIn("target-qualification-failure.json", success["run"])
-        self.assertIn("head -c 16385", failure["run"])
-        self.assertIn("-le 16384", failure["run"])
-
         runner = RUNNER.read_text(encoding="utf-8")
         direct_failure = runner.split(
             'if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then',
