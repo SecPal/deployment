@@ -17,7 +17,7 @@ on:
         converted_to_draft,
       ]
 
-# The accepted immutable callee disables cache access.
+cache-mode: none
 permissions:
   contents: write
   pull-requests: write

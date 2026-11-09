@@ -34,8 +34,8 @@ repos:
       - id: yamllint
         args: ["-c", ".yamllint.yml"]
 
-  - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.12
+  - repo: https://github.com/kjanat/actionlint
+    rev: 08bb2c4f0d039744455b87aef1c647fb8b66d37b # v1.17.0
     hooks:
       - id: actionlint
 
