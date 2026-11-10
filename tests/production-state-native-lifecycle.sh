@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
-FRONTEND_IMAGE='ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077'
+FRONTEND_IMAGE='ghcr.io/secpal/frontend@sha256:d893b3b5fc3861485f56460e85ba29e7e221cda0a729a192d3749c4c85a7342f'
 GENERATOR=/usr/lib/systemd/user-generators/podman-user-generator
 
 native_unavailable() {

@@ -33,7 +33,7 @@ MAX_OUTPUT = 256 * 1024
 # bytes are not imported as admission authority on the guest.
 API_DIGEST = "sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c"
 PHP_FPM_DIGEST = "sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73"
-FRONTEND_DIGEST = "sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
+FRONTEND_DIGEST = "sha256:d893b3b5fc3861485f56460e85ba29e7e221cda0a729a192d3749c4c85a7342f"
 POSTGRES_DIGEST = "sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af"
 CHECKOUT = Path("/home/secpal-ci/deployment-target")
 QUADLET_ROOT = Path("/etc/containers/systemd/users/20000")

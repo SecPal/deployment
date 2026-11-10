@@ -40,7 +40,7 @@ case "${subject_path##*/}" in
     ;;
   frontend-image-index.json)
     image_kind=FRONTEND
-    source_commit='b755ca0d0ee5a85eca5ad5688d457241f070b1b4'
+    source_commit='d1c5b82f9f07ce4fb6bdac2054eeaa70149e2e38'
     repository='SecPal/frontend'
     workflow='SecPal/frontend/.github/workflows/publish-container.yml'
     bundle_name='frontend-attestation.json'

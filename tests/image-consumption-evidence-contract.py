@@ -71,7 +71,7 @@ def validate_evidence(root: Path) -> None:
                 runtime["FRONTEND_DIGEST"],
                 runtime["FRONTEND_SOURCE_COMMIT"],
                 runtime["API_DIGEST"],
-                "Publisher run: `31247196734` (attempt `1`)",
+                "Publisher run: `42809674397` (attempt `1`)",
                 "Artifact Attestation ID: `39567451`",
                 "4fc2796409b7c37a541f515ccf29236f143fc132",
                 "31264563173",
@@ -154,8 +154,8 @@ class ImageConsumptionEvidenceContract(unittest.TestCase):
     def test_publisher_evidence_drift_is_rejected(self) -> None:
         self.assert_drift_rejected(
             "docs/frontend-image-consumption.md",
-            "Publisher run: `31247196734` (attempt `1`)",
-            "Publisher run: `31247196735` (attempt `1`)",
+            "Publisher run: `42809674397` (attempt `1`)",
+            "Publisher run: `42809674398` (attempt `1`)",
         )
 
 
