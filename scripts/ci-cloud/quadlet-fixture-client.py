@@ -23,11 +23,11 @@ SCHEMA_VERSION = 1
 MAX_UNIT_BYTES = 64 * 1024
 INSTANCE_PATTERN = re.compile(r"[a-z0-9]{8,24}\Z")
 CONTAINER_ROLES = (
-    "secrets-init", "postgres", "migrate", "api",
+    "secrets-init", "postgres", "migrate", "php-fpm", "api",
     "worker-general", "worker-hash-chain", "scheduler", "frontend", "gateway",
 )
 NETWORKS = ("application", "edge")
-VOLUMES = ("secrets", "private-storage", "postgres")
+VOLUMES = ("secrets", "private-storage", "postgres", "fpm-socket")
 TRUSTED_SERVICE_SECTION = (
     b"\n[Service]\n"
     b"Environment=CONTAINERS_CONF=/dev/null\n"
