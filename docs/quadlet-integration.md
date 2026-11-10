@@ -40,22 +40,23 @@ exact image with no network and rejects every major other than 18 before any
 fixture service can start. This identity is integration-only and defines no
 production PostgreSQL implementation or compatibility promise.
 
-Each run generates nine container definitions, two internal networks, three
+Each run generates ten container definitions, two internal networks, four
 disposable volumes, and one native systemd user target. Resource names and
 `org.secpal.integration.instance` labels include the validated run identifier,
 so parallel runs do not collide.
 
-| Role                  | Identity                             | Networks          | Writable state                              | Required predecessor             |
-| --------------------- | ------------------------------------ | ----------------- | ------------------------------------------- | -------------------------------- |
-| secret initialization | `0:0` in the rootless user namespace | none              | secret, PostgreSQL, private-storage volumes | none                             |
-| PostgreSQL            | `999:999`                            | application       | PostgreSQL volume and bounded tmpfs         | successful secret initialization |
-| migration             | `10001:10001`                        | application       | private-storage volume and bounded tmpfs    | healthy PostgreSQL               |
-| API                   | `10001:10001`                        | application, edge | private-storage volume and bounded tmpfs    | successful one-shot migration    |
-| general worker        | `10001:10001`                        | application       | private-storage volume and bounded tmpfs    | successful one-shot migration    |
-| hash-chain worker     | `10001:10001`                        | application       | private-storage volume and bounded tmpfs    | successful one-shot migration    |
-| scheduler             | `10001:10001`                        | application       | private-storage volume and bounded tmpfs    | successful one-shot migration    |
-| frontend              | `101:101`                            | edge              | bounded `/tmp` tmpfs                        | none                             |
-| integration gateway   | `10003:10003`                        | edge              | bounded tmpfs                               | healthy API and frontend         |
+| Role                  | Identity                             | Networks    | Writable state                              | Required predecessor             |
+| --------------------- | ------------------------------------ | ----------- | ------------------------------------------- | -------------------------------- |
+| secret initialization | `0:0` in the rootless user namespace | none        | secret, PostgreSQL, private-storage volumes | none                             |
+| PostgreSQL            | `999:999`                            | application | PostgreSQL volume and bounded tmpfs         | successful secret initialization |
+| migration             | `10001:10001`                        | application | private-storage volume and bounded tmpfs    | healthy PostgreSQL               |
+| API HTTP (Nginx)      | `10001:10001`                        | edge        | private socket read-only and bounded tmpfs  | healthy PHP-FPM                  |
+| PHP-FPM               | `10001:10001`                        | application | private storage, socket and bounded tmpfs   | successful one-shot migration    |
+| general worker        | `10001:10001`                        | application | private-storage volume and bounded tmpfs    | successful one-shot migration    |
+| hash-chain worker     | `10001:10001`                        | application | private-storage volume and bounded tmpfs    | successful one-shot migration    |
+| scheduler             | `10001:10001`                        | application | private-storage volume and bounded tmpfs    | successful one-shot migration    |
+| frontend              | `101:101`                            | edge        | bounded `/tmp` tmpfs                        | none                             |
+| integration gateway   | `10003:10003`                        | edge        | bounded tmpfs                               | healthy API and frontend         |
 
 There is exactly one `activity-hash-chain` worker, one scheduler, and one
 explicit migration container. Migration remains a `Type=oneshot` service and
@@ -65,10 +66,13 @@ Every API-based role receives `CACHE_STORE=database`,
 trip and both representative queue dispatches therefore use PostgreSQL-backed
 application state; the browser contract exercises the database-backed session
 through the credentialed Sanctum flow.
-The shared API runtime-preparation wrapper loads file-backed fixture secrets
-and prepares writable directories, but never decides to run a migration.
+The existing production PHP bootstrap loads the file-backed fixture delivery
+without exporting application secrets into the OS environment. A bounded
+FPM pool overlay forwards only non-secret session settings; `clear_env=yes`
+remains enabled. PostgreSQL requires TLS/SCRAM and the live PHP probe verifies
+TLS and rejects a plaintext connection.
 Health checks, workers, and the scheduler never invoke migration.
-PostgreSQL, API, frontend, and gateway use Podman health notifications
+PostgreSQL, PHP-FPM, API HTTP, frontend, and gateway use Podman health notifications
 as systemd readiness. Failed health or migration therefore prevents the
 dependent target from becoming active.
 
@@ -88,11 +92,12 @@ evidence.
 The active runner is fail closed in this order:
 
 1. validate repository inputs and the local rootless runtime;
-2. retrieve each exact SecPal OCI index and its public attestation bundle;
+2. verify the exact accepted pair artifact and its signed source/index binding,
+   then retrieve each exact SecPal OCI index and public attestation bundle;
 3. verify the exact index digest, response digest, descriptor chain, publisher
    workflow, source ref, source commit, and GitHub-hosted publisher policy;
 4. stage the verified digest anonymously in local rootless Podman storage;
-5. repeat the complete gate for both API and frontend;
+5. repeat the complete gate for PHP-FPM, Nginx and frontend;
 6. stage the digest-pinned official PostgreSQL and test-gateway Caddy inputs,
    then
    execute-admit the PostgreSQL 18 major from the exact staged image;
@@ -108,6 +113,14 @@ The admitted rootless storage location is preserved, but caller credential
 files and external registry credential helpers cannot be consulted. The runner
 never logs in, depends on GHCR credentials, or falls back to a tag or alternate
 registry.
+
+The private named socket volume is mounted at `/run/secpal-fpm` only into FPM
+and Nginx, with narrow shared SELinux labeling. FPM, as UID/GID 10001, sets the
+directory to mode 0700 before executing the image's FPM process; the existing
+pool creates `api.sock` as 0660. Nginx mounts it read-only and has no database
+network, private storage or secret mount. No FastCGI TCP listener is published.
+Both HTTP/FPM drain with SIGQUIT; PHP CLI roles explicitly retain SIGTERM.
+Quadlet health commands are explicit because OCI image metadata omits them.
 
 ## Lifecycle evidence and cleanup
 

@@ -181,8 +181,10 @@ mapfile -t generated_services < <(find "$PRODUCTION_GENERATED" -maxdepth 1 -type
 expected_services=(
   secpal-api.service
   secpal-edge-network.service
+  secpal-fpm-volume.service
   secpal-frontend.service
   secpal-migrate.service
+  secpal-php-fpm.service
   secpal-scheduler.service
   secpal-worker-general.service
   secpal-worker-hash-chain.service

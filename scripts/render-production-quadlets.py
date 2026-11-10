@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import json
+import shlex
 from pathlib import Path
 import sys
 
@@ -19,17 +21,16 @@ if os.fspath(SCRIPT_DIRECTORY) not in sys.path:
     sys.path.insert(0, os.fspath(SCRIPT_DIRECTORY))
 
 from integration_runtime_contract import (  # noqa: E402
-    FRONTEND_IMAGE,
+    FRONTEND_IMAGE, API_IMAGE as NGINX_IMAGE, PHP_FPM_IMAGE, FPM_SOCKET_VOLUME, FPM_SOCKET_DIRECTORY,
     role_execution_spec,
-    role_spec,
+    role_spec, ROLE_STOP_SIGNALS,
     tmpfs_mounts,
 )
 
 sys.path.insert(0, str(SCRIPT_DIRECTORY / 'ci-cloud'))
-from postgresql_qualification_contract import APPLICATION_RUNTIME  # noqa: E402
 from product_backend_contract import POLICY_CHECK_COMMAND, publish_lines  # noqa: E402
 
-API_IMAGE = APPLICATION_RUNTIME["image"]
+API_IMAGE = PHP_FPM_IMAGE
 
 
 def _load_state_module():
@@ -48,7 +49,7 @@ DEFAULT_CONTRACT = _STATE.DEFAULT_CONTRACT
 load_contract = _STATE.load_contract
 
 
-API_ROLES = ("migrate", "api", "worker-general", "worker-hash-chain", "scheduler")
+API_ROLES = ("migrate", "php-fpm", "worker-general", "worker-hash-chain", "scheduler")
 APPLICATION_ENVIRONMENT = (
     "Environment=APP_DEBUG=false",
     "Environment=APP_ENV=production",
@@ -64,6 +65,14 @@ APPLICATION_ENVIRONMENT = (
     "Environment=LOG_CHANNEL=stderr",
     "Environment=QUEUE_CONNECTION=database",
     "Environment=SESSION_DRIVER=database",
+    "Environment=APP_URL=https://api.secpal.dev",
+    "Environment=FRONTEND_URL=https://app.secpal.dev",
+    "Environment=SANCTUM_STATEFUL_DOMAINS=app.secpal.dev",
+    "Environment=CORS_ALLOWED_ORIGINS=https://app.secpal.dev",
+    "Environment=SESSION_DOMAIN=.secpal.dev",
+    "Environment=SESSION_SECURE_COOKIE=true",
+    "Environment=SESSION_HTTP_ONLY=true",
+    "Environment=SESSION_SAME_SITE=lax",
 )
 COMMON_PODMAN_ARGS = (
     "PodmanArgs=--http-proxy=false",
@@ -119,6 +128,7 @@ def common_container(
         "NoNewPrivileges=true",
         "RunInit=true",
         "StopTimeout=30",
+        *([f"StopSignal={ROLE_STOP_SIGNALS[role]}"] if role in ROLE_STOP_SIGNALS else []),
         f"LogDriver={logs['driver']}",
         f"LogOpt=path={logs['directory']}/{log_file}",
         f"LogOpt=max-size={logs['maximum_file_size']}",
@@ -226,7 +236,9 @@ def api_container(contract: dict, role: str) -> str:
     )
     lines.extend(
         (
-            f"Exec={' '.join(execution_command)}",
+            *(("Entrypoint=" + json.dumps(execution.entrypoint, separators=(',', ':')),)
+              if role == "php-fpm" else ()),
+            f"Exec={shlex.join(execution_command)}",
             "Mount=type=bind,source=/srv/secpal/config/php/99-secpal-secrets.ini,"
             "target=/usr/local/etc/php/conf.d/99-secpal-secrets.ini,ro=true",
             "Mount=type=bind,source=/srv/secpal/config/runtime/production-secret-bootstrap.php,"
@@ -242,15 +254,30 @@ def api_container(contract: dict, role: str) -> str:
             "AddHost=db.secpal.internal:169.254.81.1",
         )
     )
-    if role == "api":
-        lines.extend(publish_lines(role))
+    if role == "php-fpm":
+        lines.append(f"Volume={FPM_SOCKET_VOLUME}.volume:{FPM_SOCKET_DIRECTORY}:rw,z,U")
+        lines.append("Mount=type=bind,source=/srv/secpal/config/php/zz-fpm-session.conf,target=/usr/local/etc/php-fpm.d/zz-secpal-deployment.conf,ro=true")
         health = role_spec(role).health
         if health is None:
             raise ValueError("API health contract is missing")
         lines.extend(health.quadlet_lines())
     return unit(
         f"SecPal production {role}", dependencies, oneshot=role == "migrate"
-    ) + section("Container", lines) + service(oneshot=role == "migrate", backend=role == "api")
+    ) + section("Container", lines) + service(oneshot=role == "migrate", backend=False)
+
+
+def nginx_container(contract: dict) -> str:
+    lines = common_container(contract, "api", NGINX_IMAGE)
+    public = contract["objects"]["public_application_storage"]["location"]
+    lines.extend((
+        f"Volume={FPM_SOCKET_VOLUME}.volume:{FPM_SOCKET_DIRECTORY}:ro,z",
+        f"Mount=type=bind,source={public},target=/app/storage/app/public,ro=true",
+        *tmpfs_mounts("api"),
+        "Network=secpal-edge.network",
+        *publish_lines("api"),
+        *role_spec("api").health.quadlet_lines(),
+    ))
+    return unit("SecPal production API HTTP", ("secpal-php-fpm.service",)).replace("PartOf=secpal.target", "PartOf=secpal.target secpal-php-fpm.service") + section("Container", lines) + service(backend=True)
 
 
 def build_units(contract: dict) -> dict[str, str]:
@@ -266,6 +293,11 @@ def build_units(contract: dict) -> dict[str, str]:
             "Label=org.secpal.production=true",
         ],
     )
+
+    units[f"{FPM_SOCKET_VOLUME}.volume"] = unit("SecPal private FastCGI socket") + section(
+        "Volume", [f"VolumeName={FPM_SOCKET_VOLUME}", "Label=org.secpal.production=true"]
+    )
+    units["secpal-api.container"] = nginx_container(contract)
 
     for role in API_ROLES:
         units[f"secpal-{role}.container"] = api_container(contract, role)

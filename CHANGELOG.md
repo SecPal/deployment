@@ -9,6 +9,10 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Removed
 
+- Remove active FrankenPHP server commands, obsolete PHP `/config` and `/data`
+  mounts, and the redundant fixture entrypoint that exported secrets. Retain
+  only the original historical/recovery artifact references.
+
 - Retire active GCP provisioning, bootstrap and qualification dispatch. Preserve
   native Rocky/SELinux/PostgreSQL/backend qualification and its accepted
   AMD64/ARM64 reference-host evidence. GCP portability is deferred, not passed.
@@ -16,6 +20,11 @@ SPDX-License-Identifier: CC0-1.0
   destroy/reconciliation until external cleanup obligations are discharged.
 
 ### Fixed
+
+- Consume the accepted, attested PHP-FPM/Nginx API pair in production and
+  integration Quadlets, with a private FastCGI socket, isolated PHP secrets,
+  TLS/SCRAM fixture transport, explicit shutdown and health contracts, and
+  unchanged historical qualification/recovery identities.
 
 - Preserve the gateway's existing bounded HTTP readiness probe as its image
   default, matching the canonical Quadlet role. Build the local fixture with

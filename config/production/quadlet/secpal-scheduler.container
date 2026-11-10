@@ -10,7 +10,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 [Container]
 ContainerName=secpal-scheduler
-Image=ghcr.io/secpal/api@sha256:ac97416f3feac5c57204421059105389c9add2cfbcda1b063eadf4c6ad7647ab
+Image=ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73
 Pull=never
 User=10001
 Group=10001
@@ -20,6 +20,7 @@ DropCapability=all
 NoNewPrivileges=true
 RunInit=true
 StopTimeout=30
+StopSignal=SIGTERM
 LogDriver=k8s-file
 LogOpt=path=/srv/secpal/logs/secpal-scheduler.log
 LogOpt=max-size=10mb
@@ -44,6 +45,14 @@ Environment=FILESYSTEM_DISK=local
 Environment=LOG_CHANNEL=stderr
 Environment=QUEUE_CONNECTION=database
 Environment=SESSION_DRIVER=database
+Environment=APP_URL=https://api.secpal.dev
+Environment=FRONTEND_URL=https://app.secpal.dev
+Environment=SANCTUM_STATEFUL_DOMAINS=app.secpal.dev
+Environment=CORS_ALLOWED_ORIGINS=https://app.secpal.dev
+Environment=SESSION_DOMAIN=.secpal.dev
+Environment=SESSION_SECURE_COOKIE=true
+Environment=SESSION_HTTP_ONLY=true
+Environment=SESSION_SAME_SITE=lax
 Exec=php artisan schedule:work
 Mount=type=bind,source=/srv/secpal/config/php/99-secpal-secrets.ini,target=/usr/local/etc/php/conf.d/99-secpal-secrets.ini,ro=true
 Mount=type=bind,source=/srv/secpal/config/runtime/production-secret-bootstrap.php,target=/run/secpal/bootstrap/production-secret-bootstrap.php,ro=true
@@ -56,8 +65,6 @@ Mount=type=bind,source=/run/secpal/secrets/runtime/postgres-ca.crt,target=/run/s
 Mount=type=bind,source=/srv/secpal/private-storage,target=/app/storage/app/private,rw=true
 Mount=type=bind,source=/srv/secpal/public-storage,target=/app/storage/app/public,rw=true
 Mount=type=tmpfs,destination=/tmp,tmpfs-size=32m,tmpfs-mode=0700,U=true,nosuid=true,nodev=true,noexec=true
-Mount=type=tmpfs,destination=/config,tmpfs-size=16m,tmpfs-mode=0700,U=true,nosuid=true,nodev=true,noexec=true
-Mount=type=tmpfs,destination=/data,tmpfs-size=16m,tmpfs-mode=0700,U=true,nosuid=true,nodev=true,noexec=true
 Mount=type=tmpfs,destination=/app/storage/framework/cache/data,tmpfs-size=32m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
 Mount=type=tmpfs,destination=/app/storage/framework/sessions,tmpfs-size=32m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
 Mount=type=tmpfs,destination=/app/storage/framework/views,tmpfs-size=32m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true

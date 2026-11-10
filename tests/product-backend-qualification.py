@@ -52,8 +52,8 @@ def observation_fixture(contract):
     for iteration in range(3):
         products={}
         for role,backend in contract.BACKENDS.items():
-            products[role]=dict(listeners=[backend.endpoint],forwarder_context='system_u:system_r:' + ('pasta_t' if role == 'api' else 'container_runtime_t') + ':s0',container_context='system_u:system_r:container_t:s0:c1,c2',
-                network_mode='pasta' if role == 'api' else 'bridge',networks=[] if role == 'api' else ['secpal-backend101-edge'],environment_keys=['PATH'],mount_types=['tmpfs'],
+            products[role]=dict(listeners=[backend.endpoint],forwarder_context='system_u:system_r:' + ('container_runtime_t') + ':s0',container_context='system_u:system_r:container_t:s0:c1,c2',
+                network_mode='bridge',networks=['secpal-backend101-edge'],environment_keys=['PATH'],mount_types=['tmpfs'],
                 unit=f'FragmentPath=/run/user/992/systemd/generator/secpal-{role}.service\nSourcePath=/etc/containers/systemd/users/992/secpal-{role}.container\nDropInPaths=\nExecStart={{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run --publish {backend.endpoint}:8080/tcp ; }}\nExecStartPre={{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check ; }}')
         raw['recreations'].append(dict(products=products,runtime=dict(host={'security':{'rootless':True},'serviceIsRemote':False},unit_states=['inactive']*4,manager_override_keys=[],enforcing='Enforcing',booleans=['haproxy_connect_any --> off','pasta_bind_all_ports --> off']),
             http_stats='# pxname,svname,status,check_status,check_code\nsecpal_frontend,frontend,UP,L7OK,200\nsecpal_api,api,UP,L7OK,200\n'))
@@ -62,24 +62,7 @@ def observation_fixture(contract):
 
 class QualificationContract(unittest.TestCase):
 
-    def test_http_fixture_serves_the_haproxy_probe(self):
-        import product_backend_contract as backend
-        program = (
-            'register_shutdown_function(static function (): void { '
-            'fwrite(STDERR, (string) (http_response_code() ?: 200)); }); '
-            '$_SERVER["REQUEST_URI"] = $argv[1]; require $argv[2];'
-        )
-        for path in {item.readiness_path for item in backend.BACKENDS.values()} | {'/health/ready', '/unrelated'}:
-            with self.subTest(path=path):
-                result = subprocess.run(
-                    ['php', '-r', program, path, str(ROOT / 'scripts/ci-cloud/product-backend-http-fixture.php')],
-                    cwd=ROOT, text=True, capture_output=True, check=True,
-                )
-                self.assertEqual(result.stderr, '404' if path == '/unrelated' else '200')
-                if path != '/unrelated':
-                    self.assertEqual(json.loads(result.stdout), {'status': 'transport-ready'})
-
-    def test_http_qualification_preserves_production_pasta_publication(self):
+    def test_http_qualification_preserves_production_edge_publication(self):
         """Renderer, trusted source closure and current production carrier."""
         import product_backend_qualification_contract as contract
         spec = importlib.util.spec_from_file_location('renderer', ROOT / 'scripts/render-production-quadlets.py')
@@ -106,18 +89,16 @@ class QualificationContract(unittest.TestCase):
             for role, backend in contract.BACKENDS.items():
                 fixture = contract.fixture_unit(sources['backend_' + role].decode(), role)
                 self.assertEqual([line for line in fixture.splitlines() if line.startswith('Network=')],
-                                 (['Network=pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1']
-                                  if role == 'api' else ['Network=secpal-backend101-edge.network']))
+                                 ['Network=secpal-backend101-edge.network'])
                 self.assertEqual([line for line in fixture.splitlines() if line.startswith('PublishPort=')],
                                  [backend.publication])
                 self.assertNotIn('application', fixture)
                 self.assertNotIn('Mount=type=bind,', fixture)
                 self.assertNotIn('Environment=DB_', fixture)
-                if role == 'api':
-                    self.assertIn('AddHost=db.secpal.internal:169.254.81.1', fixture)
-                else:
-                    self.assertNotIn('AddHost=', fixture)
-                    self.assertNotIn('map-host-loopback', fixture)
+                self.assertNotIn('AddHost=', fixture)
+                self.assertNotIn('map-host-loopback', fixture)
+                self.assertNotIn('/run/secpal-fpm', fixture)
+                self.assertNotIn('/usr/local/bin/php', fixture)
             raw = observation_fixture(contract)
             contract.normalize_observations(raw, 993, 992, 991)
             qualifier_spec = importlib.util.spec_from_file_location('qualifier', ROOT / 'scripts/ci-cloud/qualify-product-backends.py')
@@ -139,7 +120,7 @@ class QualificationContract(unittest.TestCase):
                 return 0, ''
             def path(value):
                 fixtures = {'/etc/containers/secpal-backend101-auth.json': root / 'auth.json',
-                            '/etc/containers/secpal-backend101-api.php': root / 'api-fixture.php'}
+                            '/etc/containers/secpal-backend101-api.conf': root / 'api-fixture.conf'}
                 return fixtures.get(value, Path(value))
             with mock.patch.object(qualifier, 'ROOT', root), mock.patch.object(qualifier, 'Path', side_effect=path), \
                     mock.patch.object(qualifier, 'write', side_effect=lambda target, data, **kw: target.write_bytes(data)), \
@@ -278,8 +259,8 @@ class QualificationContract(unittest.TestCase):
         change(lambda r:r['recreations'][1]['products']['frontend'].update(environment_keys=['FILESYSTEM_DISK']))
         change(lambda r:r['recreations'][1]['products']['frontend'].update(mount_types=['bind']))
         change(lambda r:r['recreations'][1]['products']['api'].update(networks=['secpal-backend101-application']))
-        change(lambda r:r['recreations'][1]['products']['api'].update(network_mode='bridge'))
-        change(lambda r:r['recreations'][1]['products']['api'].update(forwarder_context='system_u:system_r:container_runtime_t:s0'))
+        change(lambda r:r['recreations'][1]['products']['api'].update(network_mode='pasta'))
+        change(lambda r:r['recreations'][1]['products']['api'].update(forwarder_context='system_u:system_r:pasta_t:s0'))
         change(lambda r:r['recreations'][1].update(http_stats=r['recreations'][1]['http_stats'].replace('UP','DOWN')))
         change(lambda r:r['unrelated'].update(avc=r['unrelated']['avc'].replace('pid=123','pid=789')))
         change(lambda r:r['external']['api'].update(positive_http_code='000'))

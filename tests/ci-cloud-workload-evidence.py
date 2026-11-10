@@ -60,19 +60,21 @@ REVIEWED_CLOUD_FILE_LIMIT_EVIDENCE = (
         "size_bytes": 129_271_672,
     },
 )
-API_DIGEST = "sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
+API_DIGEST = "sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c"
+PHP_FPM_DIGEST = "sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73"
 FRONTEND_DIGEST = "sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
 POSTGRES_DIGEST = "sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af"
 
 ROLES = (
-    "secrets-init", "postgres", "migrate", "api",
+    "secrets-init", "postgres", "migrate", "api", "php-fpm",
     "worker-general", "worker-hash-chain", "scheduler", "frontend", "gateway",
 )
 ROLE_NETWORKS = {
     "secrets-init": (),
     "postgres": ("application",),
     "migrate": ("application",),
-    "api": ("application", "edge"),
+    "api": ("edge",),
+    "php-fpm": ("application",),
     "worker-general": ("application",),
     "worker-hash-chain": ("application",),
     "scheduler": ("application",),
@@ -148,18 +150,21 @@ ROLE_VOLUME_MOUNTS = {
     ),
     **{
         role: (
-            ("secrets", "/run/secpal-secrets", False),
+            ("secrets", "/run/secpal/secrets", False),
             ("private-storage", "/app/storage/app/private", True),
         )
         for role in (
-            "migrate", "api", "worker-general", "worker-hash-chain", "scheduler"
+            "migrate", "php-fpm", "worker-general", "worker-hash-chain", "scheduler"
         )
     },
+    "api": (("fpm-socket", "/run/secpal-fpm", False),),
     "frontend": (),
     "gateway": (),
 }
+ROLE_VOLUME_MOUNTS["php-fpm"] += (("fpm-socket", "/run/secpal-fpm", True),)
 API_BINDS = (
-    ("container-entrypoint.sh", "/run/secpal/container-entrypoint.sh"),
+    ("production-secret-bootstrap.php", "/run/secpal/bootstrap/production-secret-bootstrap.php"),
+    ("99-secpal-secrets.ini", "/usr/local/etc/php/conf.d/99-secpal-secrets.ini"),
     ("phase-b-runtime-probe.php", "/run/secpal/phase-b-runtime-probe.php"),
 )
 ROLE_BINDS = {
@@ -170,7 +175,8 @@ ROLE_BINDS = {
     "postgres": (),
     "migrate": API_BINDS
     + (("quadlet-oneshot-entrypoint.sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),),
-    "api": API_BINDS,
+    "api": (),
+    "php-fpm": API_BINDS + (("zz-fpm-session.conf", "/usr/local/etc/php-fpm.d/zz-secpal-deployment.conf"),),
     "worker-general": API_BINDS,
     "worker-hash-chain": API_BINDS,
     "scheduler": API_BINDS,
@@ -179,8 +185,6 @@ ROLE_BINDS = {
 }
 API_TMPFS = (
     ("/tmp", 32, "0700", True),
-    ("/config", 16, "0700", True),
-    ("/data", 16, "0700", True),
     ("/app/storage/app/public", 32, "0750", False),
     ("/app/storage/framework/cache/data", 32, "0750", True),
     ("/app/storage/framework/sessions", 32, "0750", True),
@@ -192,7 +196,8 @@ ROLE_TMPFS = {
     "secrets-init": (("/tmp", 16, "0700", True),),
     "postgres": (("/tmp", 32, "0700", True), ("/run/postgresql", 16, "0750", True)),
     "migrate": API_TMPFS,
-    "api": API_TMPFS,
+    "api": (("/tmp", 32, "0700", True),),
+    "php-fpm": API_TMPFS,
     "worker-general": API_TMPFS,
     "worker-hash-chain": API_TMPFS,
     "scheduler": API_TMPFS,
@@ -201,35 +206,34 @@ ROLE_TMPFS = {
 }
 ROLE_IDENTITIES = {
     "secrets-init": (0, 0), "postgres": (999, 999),
-    "migrate": (10001, 10001), "api": (10001, 10001),
+    "migrate": (10001, 10001), "api": (10001, 10001), "php-fpm": (10001, 10001),
     "worker-general": (10001, 10001), "worker-hash-chain": (10001, 10001),
     "scheduler": (10001, 10001), "frontend": (101, 101),
     "gateway": (10003, 10003),
 }
-HEALTHY_ROLES = {"postgres", "api", "frontend", "gateway"}
+HEALTHY_ROLES = {"postgres", "api", "php-fpm", "frontend", "gateway"}
 HEALTH_INTERVAL_USEC = {
     "postgres": 5_000_000,
     "api": 10_000_000,
+    "php-fpm": 10_000_000,
     "frontend": 10_000_000,
     "gateway": 10_000_000,
 }
-API_ENTRYPOINT = ("/bin/bash", "/run/secpal/container-entrypoint.sh")
+API_ENTRYPOINT = ("docker-php-entrypoint",)
 ROLE_EXECUTION = {
     "secrets-init": (
-        ("/bin/bash", "/run/secpal/init-local-secrets.sh"),
+        ("/bin/sh", "/run/secpal/init-local-secrets.sh"),
         (),
         (),
     ),
     "migrate": (
-        ("/bin/bash", "/run/secpal/container-entrypoint.sh"),
-        ("php", "artisan", "migrate", "--force"),
+        ("php",),
+        ("artisan", "migrate", "--force"),
         (),
     ),
-    "api": (
-        API_ENTRYPOINT,
-        ("frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile"),
-        ("CMD", "/usr/local/bin/secpal-http-live"),
-    ),
+    "api": (("nginx",), ("-g", "daemon off;"), ("CMD", "/usr/local/bin/secpal-http-live")),
+    "php-fpm": (("/bin/sh", "-c"), ("chmod 0700 /run/secpal-fpm && exec php-fpm --nodaemonize",),
+                ("CMD", "php", "/usr/local/bin/secpal-fpm-live.php")),
     "worker-general": (
         API_ENTRYPOINT,
         (
@@ -292,17 +296,18 @@ def valid_observations() -> dict[str, object]:
     unit_names = sorted(
         [f"{prefix}-{role}.container" for role in ROLES]
         + [f"{prefix}-{name}.network" for name in ("application", "edge")]
-        + [f"{prefix}-{name}.volume" for name in ("secrets", "private-storage", "postgres")]
+        + [f"{prefix}-{name}.volume" for name in ("secrets", "private-storage", "postgres", "fpm-socket")]
         + [f"{prefix}.target"]
     )
     unit_images = {
         **{
-            role: f"localhost/secpal-ci-api@{API_DIGEST}"
+            role: f"localhost/secpal-ci-php-fpm@{PHP_FPM_DIGEST}"
             for role in (
-                "secrets-init", "migrate", "api", "worker-general",
+                "secrets-init", "migrate", "php-fpm", "worker-general",
                 "worker-hash-chain", "scheduler",
             )
         },
+        "api": f"localhost/secpal-ci-api@{API_DIGEST}",
         "postgres": f"localhost/secpal-ci-postgres@{POSTGRES_DIGEST}",
         "frontend": f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}",
         "gateway": f"localhost/secpal-ci-gateway-{instance}@sha256:{9:064x}",
@@ -333,7 +338,7 @@ def valid_observations() -> dict[str, object]:
     generated_names = (
         *ROLES,
         "application-network", "edge-network",
-        "secrets-volume", "private-storage-volume", "postgres-volume",
+        "secrets-volume", "private-storage-volume", "postgres-volume", "fpm-socket-volume",
     )
     services = [
         {
@@ -542,11 +547,12 @@ def valid_observations() -> dict[str, object]:
                     f"{generated_names.index(role) + 1:032x}" if one_shot else ""
                 ),
                 "image": (
-                    f"localhost/secpal-ci-api@{API_DIGEST}"
+                    f"localhost/secpal-ci-php-fpm@{PHP_FPM_DIGEST}"
                     if role in {
-                        "secrets-init", "migrate", "api", "worker-general",
+                        "secrets-init", "migrate", "php-fpm", "worker-general",
                         "worker-hash-chain", "scheduler",
                     }
+                    else f"localhost/secpal-ci-api@{API_DIGEST}" if role == "api"
                     else f"localhost/secpal-ci-postgres@{POSTGRES_DIGEST}"
                     if role == "postgres"
                     else f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}"
@@ -555,11 +561,12 @@ def valid_observations() -> dict[str, object]:
                 ),
                 "image_id": f"sha256:{role_index + 1:064x}",
                 "image_digest": (
-                    API_DIGEST
+                    PHP_FPM_DIGEST
                     if role in {
-                        "secrets-init", "migrate", "api", "worker-general",
+                        "secrets-init", "migrate", "php-fpm", "worker-general",
                         "worker-hash-chain", "scheduler",
                     }
+                    else API_DIGEST if role == "api"
                     else POSTGRES_DIGEST
                     if role == "postgres"
                     else FRONTEND_DIGEST
@@ -615,7 +622,7 @@ def valid_observations() -> dict[str, object]:
             "podman_rootless": True,
             "oci_runtime": "crun",
             "networks": [f"{prefix}-application", f"{prefix}-edge"],
-            "volumes": [f"{prefix}-postgres", f"{prefix}-private-storage", f"{prefix}-secrets"],
+            "volumes": [f"{prefix}-postgres", f"{prefix}-private-storage", f"{prefix}-secrets", f"{prefix}-fpm-socket"],
             "all_containers": sorted(item["name"] for item in containers),
             "all_networks": sorted(
                 [
@@ -631,6 +638,7 @@ def valid_observations() -> dict[str, object]:
                     f"{prefix}-postgres",
                     f"{prefix}-private-storage",
                     f"{prefix}-secrets",
+                    f"{prefix}-fpm-socket",
                 ]
             ),
             "podman_api": False,
@@ -760,6 +768,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "postgres",
             "migrate",
             "api",
+            "php-fpm",
             "worker-general",
             "worker-hash-chain",
             "scheduler",
@@ -785,6 +794,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         finally:
             sys.modules.pop(spec.name, None)
         self.assertEqual(module.API_DIGEST, self.collector.API_DIGEST)
+        self.assertEqual(module.PHP_FPM_DIGEST, self.collector.PHP_FPM_DIGEST)
         self.assertEqual(module.FRONTEND_DIGEST, self.collector.FRONTEND_DIGEST)
         self.assertEqual(
             module.POSTGRES_FIXTURE.image.rsplit("@", 1)[1],
@@ -950,9 +960,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
         mutation(observations)
         self.assertIn(expected, self.admission.workload_admission_failures(observations))
 
-    def test_exact_snapshot_contains_fifteen_root_owned_units(self) -> None:
+    def test_exact_snapshot_contains_seventeen_root_owned_units(self) -> None:
         live = valid_observations()["live"]
-        self.assertEqual(15, len(live["installed_units"]))
+        self.assertEqual(17, len(live["installed_units"]))
         self.assertEqual(
             [], self.admission.workload_admission_failures(valid_observations())
         )
@@ -2158,17 +2168,16 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_api_and_frontend_require_distinct_image_identities(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][7].__setitem__(
-                "image_digest",
-                evidence["live"]["containers"][3]["image_digest"],
+            lambda evidence: next(v for v in evidence["live"]["containers"] if v["role"] == "frontend").__setitem__(
+                "image_digest", API_DIGEST,
             ),
             "WORKLOAD_IMAGE_ROLE_SEPARATION",
         )
 
-    def test_secrets_initializer_requires_the_api_image_digest(self) -> None:
+    def test_secrets_initializer_requires_the_php_image_digest(self) -> None:
         observations = valid_observations()
         containers = observations["live"]["containers"]
-        api = next(item for item in containers if item["role"] == "api")
+        api = next(item for item in containers if item["role"] == "php-fpm")
         secrets_init = next(
             item for item in containers if item["role"] == "secrets-init"
         )
@@ -2932,7 +2941,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         observations = valid_observations()
         api_bind = next(
             mount
-            for mount in observations["live"]["containers"][3]["mounts"]
+            for mount in next(v for v in observations["live"]["containers"] if v["role"] == "php-fpm")["mounts"]
             if mount["type"] == "bind"
         )
         api_bind["source"] = "/tmp/target-selected-entrypoint.sh"
@@ -4272,7 +4281,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     )
                 elif any(
                     arguments[3].endswith(f"-{name}-volume.service")
-                    for name in ("secrets", "private-storage", "postgres")
+                    for name in ("secrets", "private-storage", "postgres", "fpm-socket")
                 ):
                     properties = properties.replace(
                         "podman run", "podman volume create"

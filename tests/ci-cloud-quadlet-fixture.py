@@ -21,6 +21,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 INSTALLER = ROOT / "scripts" / "ci-cloud" / "quadlet-fixture-installer.py"
 CLIENT = ROOT / "scripts" / "ci-cloud" / "quadlet-fixture-client.py"
 TRUSTED_SERVICE_SECTION = (
@@ -97,13 +98,30 @@ class QuadletFixtureTests(unittest.TestCase):
 
     def test_closed_unit_name_set(self) -> None:
         names = self.installer.expected_unit_names("a1b2c3d4")
-        self.assertEqual(15, len(names))
+        self.assertEqual(17, len(names))
         self.assertIn("secpal-int-a1b2c3d4-api.container", names)
         self.assertIn("secpal-int-a1b2c3d4-application.network", names)
         self.assertIn("secpal-int-a1b2c3d4-postgres.volume", names)
         self.assertIn("secpal-int-a1b2c3d4.target", names)
         with self.assertRaises(ValueError):
             self.installer.expected_unit_names("../../escape")
+
+    def test_rendered_cloud_inventory_is_accepted_by_both_trusted_owners(self) -> None:
+        renderer = load(ROOT / "scripts/render-integration-quadlets.py", "fixture_renderer")
+        instance = "a1b2c3d4"
+        units = renderer.build_units(
+            instance, 18443, Path("/srv/secpal-ci/fixture"),
+            cloud_gateway_digest="sha256:" + "a" * 64,
+        )
+        self.assertEqual(set(units), set(self.installer.expected_unit_names(instance)))
+        self.assertEqual(set(units), set(self.client.expected_unit_names(instance)))
+        source = Path(self.temporary.name) / "rendered"
+        source.mkdir(mode=0o700)
+        for name, content in units.items():
+            (source / name).write_text(content)
+        self.stage("install", instance, source)
+        self.assertTrue(self.installer.handle_request("install", self.layout, lambda _: None))
+        self.assertEqual("installed", json.loads(self.layout.result_path("install").read_text())["result"])
 
     def test_install_snapshots_only_the_complete_closed_set(self) -> None:
         instance = "a1b2c3d4"

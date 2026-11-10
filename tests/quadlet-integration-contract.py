@@ -24,7 +24,7 @@ sys.path.insert(0, os.fspath(ROOT / "scripts"))
 
 from integration_runtime_contract import (
     API_DIGEST,
-    API_IMAGE,
+    API_IMAGE, PHP_FPM_IMAGE, PHP_FPM_DIGEST,
     FRONTEND_DIGEST,
     POSTGRES_FIXTURE,
     ROLE_SPECS,
@@ -44,6 +44,8 @@ PORT = "18443"
 GATEWAY_DIGEST = "sha256:" + "a" * 64
 EXPECTED_FILES = {
     f"secpal-int-{INSTANCE}-api.container",
+    f"secpal-int-{INSTANCE}-php-fpm.container",
+    f"secpal-int-{INSTANCE}-fpm-socket.volume",
     f"secpal-int-{INSTANCE}-application.network",
     f"secpal-int-{INSTANCE}-edge.network",
     f"secpal-int-{INSTANCE}-frontend.container",
@@ -62,6 +64,7 @@ EXPECTED_FILES = {
 
 PRODUCT_ROLES = {
     "api",
+    "php-fpm",
     "frontend",
     "migrate",
     "scheduler",
@@ -314,15 +317,17 @@ class QuadletContract(unittest.TestCase):
     def test_cloud_renderer_uses_only_closed_local_digest_identities(self) -> None:
         units = self.render_cloud()
         api_reference = f"localhost/secpal-ci-api@{API_DIGEST}"
+        php_reference = f"localhost/secpal-ci-php-fpm@{PHP_FPM_DIGEST}"
         frontend_reference = f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}"
         postgres_digest = POSTGRES_FIXTURE.image.rsplit("@", 1)[1]
         expected = {
             "api": api_reference,
-            "migrate": api_reference,
-            "secrets-init": api_reference,
-            "worker-general": api_reference,
-            "worker-hash-chain": api_reference,
-            "scheduler": api_reference,
+            "php-fpm": php_reference,
+            "migrate": php_reference,
+            "secrets-init": php_reference,
+            "worker-general": php_reference,
+            "worker-hash-chain": php_reference,
+            "scheduler": php_reference,
             "frontend": frontend_reference,
             "postgres": f"localhost/secpal-ci-postgres@{postgres_digest}",
             "gateway": (
@@ -346,16 +351,16 @@ class QuadletContract(unittest.TestCase):
         )
         secrets_init = units[f"secpal-int-{INSTANCE}-secrets-init.container"]
         self.assertIn(
-            'Entrypoint=["/bin/bash","/run/secpal/init-local-secrets.sh"]\n',
+            'Entrypoint=["/bin/sh","/run/secpal/init-local-secrets.sh"]\n',
             secrets_init,
         )
         self.assertNotIn("Exec=", secrets_init)
         migrate = units[f"secpal-int-{INSTANCE}-migrate.container"]
         self.assertIn(
-            'Entrypoint=["/bin/bash","/run/secpal/container-entrypoint.sh"]\n',
+            'Entrypoint=["php"]\n',
             migrate,
         )
-        self.assertIn("Exec=php artisan migrate --force\n", migrate)
+        self.assertIn("Exec=artisan migrate --force\n", migrate)
         for role in ("secrets-init", "migrate"):
             with self.subTest(retained_oneshot=role):
                 unit = units[f"secpal-int-{INSTANCE}-{role}.container"]
@@ -483,7 +488,7 @@ class QuadletContract(unittest.TestCase):
 
         self.assertEqual(
             combined.count(
-                "Image=ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
+                f"Image={PHP_FPM_IMAGE}"
             ),
             6,
         )
@@ -495,6 +500,7 @@ class QuadletContract(unittest.TestCase):
         )
         expected_users = {
             "api": "10001",
+            "php-fpm": "10001",
             "frontend": "101",
             "gateway": "10003",
             "migrate": "10001",
@@ -580,10 +586,10 @@ class QuadletContract(unittest.TestCase):
         for network in (application, edge):
             self.assertIn("Internal=true", units[network])
 
-        for role in ("postgres", "migrate", "worker-general", "worker-hash-chain", "scheduler"):
+        for role in ("postgres", "migrate", "php-fpm", "worker-general", "worker-hash-chain", "scheduler"):
             self.assertIn(f"Network={application}", units[f"secpal-int-{INSTANCE}-{role}.container"])
             self.assertNotIn(f"Network={edge}", units[f"secpal-int-{INSTANCE}-{role}.container"])
-        self.assertIn(f"Network={application}", units[f"secpal-int-{INSTANCE}-api.container"])
+        self.assertNotIn(f"Network={application}", units[f"secpal-int-{INSTANCE}-api.container"])
         self.assertIn(f"Network={edge}", units[f"secpal-int-{INSTANCE}-api.container"])
         self.assertIn(f"Network={edge}", units[f"secpal-int-{INSTANCE}-frontend.container"])
         self.assertNotIn(f"Network={application}", units[f"secpal-int-{INSTANCE}-frontend.container"])
@@ -595,7 +601,6 @@ class QuadletContract(unittest.TestCase):
         self.assertEqual(sum("schedule:work" in text for text in units.values()), 1)
         self.assertEqual(sum("artisan migrate --force" in text for text in units.values()), 1)
         expected_processes = {
-            "api": "frankenphp run --config /etc/frankenphp/Caddyfile",
             "worker-general": (
                 "php artisan queue:work --queue=merkle,opentimestamp,default "
                 "--sleep=1 --tries=3 --timeout=90"
@@ -610,7 +615,7 @@ class QuadletContract(unittest.TestCase):
             with self.subTest(execution_role=role):
                 text = units[f"secpal-int-{INSTANCE}-{role}.container"]
                 self.assertIn(
-                    'Entrypoint=["/bin/bash","/run/secpal/container-entrypoint.sh"]',
+                    'Entrypoint=["docker-php-entrypoint"]',
                     text,
                 )
                 self.assertIn(f"Exec={command}", text)
@@ -640,7 +645,7 @@ class QuadletContract(unittest.TestCase):
         for line in combined.splitlines():
             if line.startswith("Mount=type=tmpfs"):
                 self.assertIn("U=true", line)
-        for role in ("postgres", "api", "frontend", "gateway"):
+        for role in ("postgres", "api", "php-fpm", "frontend", "gateway"):
             text = units[f"secpal-int-{INSTANCE}-{role}.container"]
             self.assertIn(
                 "HealthOnFailure=kill",
@@ -654,15 +659,14 @@ class QuadletContract(unittest.TestCase):
 
         migrate = units[f"secpal-int-{INSTANCE}-migrate.container"]
         self.assertIn(
-            "Exec=/bin/bash /run/secpal/container-entrypoint.sh "
-            "php artisan migrate --force",
+            "Exec=php artisan migrate --force",
             migrate,
         )
         self.assertIn(
             f"Requires=secpal-int-{INSTANCE}-postgres.service",
             migrate,
         )
-        for role in ("api", "worker-general", "worker-hash-chain", "scheduler"):
+        for role in ("php-fpm", "worker-general", "worker-hash-chain", "scheduler"):
             self.assertIn(
                 f"Requires=secpal-int-{INSTANCE}-migrate.service",
                 units[f"secpal-int-{INSTANCE}-{role}.container"],
@@ -880,7 +884,7 @@ class QuadletContract(unittest.TestCase):
             elif name.endswith(".volume"):
                 service += "-volume"
             self.assertIn(f"---{service}.service---", generated, name)
-        for role in ("postgres", "api", "frontend", "gateway"):
+        for role in ("postgres", "api", "php-fpm", "frontend", "gateway"):
             marker = f"---secpal-int-{INSTANCE}-{role}.service---"
             translated_service = generated.split(marker, 1)[1].split("\n---", 1)[0]
             with self.subTest(health_service=role):
@@ -896,7 +900,7 @@ class QuadletContract(unittest.TestCase):
             for line in generated.splitlines()
             if line.startswith("ExecStart=/usr/bin/podman run ")
         ]
-        self.assertEqual(len(container_starts), 9)
+        self.assertEqual(len(container_starts), 10)
         for argument in (
             "--http-proxy=false",
             "--pid=private",
@@ -926,10 +930,10 @@ class QuadletContract(unittest.TestCase):
         )
         self.assert_effective_podman_entrypoint(
             scheduler_start,
-            ["/bin/bash", "/run/secpal/container-entrypoint.sh"],
+            ["docker-php-entrypoint"],
         )
         self.assertIn(
-            f"{API_IMAGE} php artisan schedule:work",
+            f"{PHP_FPM_IMAGE} php artisan schedule:work",
             scheduler,
         )
         self.assertEqual(len(units), len(EXPECTED_FILES))
@@ -1005,14 +1009,14 @@ class QuadletContract(unittest.TestCase):
                 )
         self.assert_effective_podman_entrypoint(
             starts["secrets-init"],
-            ["/bin/bash", "/run/secpal/init-local-secrets.sh"],
+            ["/bin/sh", "/run/secpal/init-local-secrets.sh"],
         )
         self.assert_effective_podman_entrypoint(
             starts["migrate"],
-            ["/bin/bash", "/run/secpal/container-entrypoint.sh"],
+            ["php"],
         )
         self.assertTrue(
-            starts["migrate"].endswith(" php artisan migrate --force")
+            starts["migrate"].endswith(" artisan migrate --force")
         )
         api_start = next(
             line
