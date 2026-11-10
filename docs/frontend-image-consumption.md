@@ -23,9 +23,35 @@ paired with the accepted PHP-FPM index as documented in
 [API image consumption](api-image-consumption.md). The older Phase C identities
 below remain historical evidence and do not qualify this new deployment pair.
 
-## Canonical identity and evidence
+## Current accepted frontend release
 
-The only approved frontend deployment reference is:
+The source deployment and disposable integration contract now select:
+
+- Image: `ghcr.io/secpal/frontend@sha256:d893b3b5fc3861485f56460e85ba29e7e221cda0a729a192d3749c4c85a7342f`.
+- Source: `d1c5b82f9f07ce4fb6bdac2054eeaa70149e2e38`.
+- Publisher run: `42809674397` (attempt `1`), workflow
+  `SecPal/frontend/.github/workflows/publish-container.yml` on protected main,
+  GitHub-hosted runners only.
+- Accepted build evidence: `ghcr.io/secpal/frontend@sha256:27cc637c5fc799d237ea640da0fdf27aa86021025ad648aeed3399b911bb1e34`.
+
+The existing OCI/attestation fetcher independently verifies this exact index and
+source before staging. The frontend release monitor re-evaluates the signed
+publisher's authoritative Syft SPDX with Grype and each exact native subject with
+Trivy through SecPal/.github#636. Scanner failures or stale databases cannot
+qualify deployment.
+
+This is source-contract acceptance, not activation. The operator confirmed that
+the demo frontend remained at
+`ghcr.io/secpal/frontend@sha256:1c737d692e633d355f2ee92e82f0d78929c4dcf43f959e3e17d1cdc6c41fb0c9`
+during the API cutover on 2026-11-10. Its independent monitoring is retained.
+No complete cross-environment inventory of historical consumers or permitted
+recovery/rollback targets exists. Historical CVE findings remain open unless
+subject-specific remediation or complete retirement is established; neither a
+new publication nor this source change proves retirement.
+
+## Historical Phase C.3 identity and evidence
+
+The completed Phase C.3 integration used:
 
 ```text
 ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077
@@ -97,8 +123,8 @@ checksum
 `73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5`.
 The runner requires that exact version. GitHub CLI verifies the local raw index
 and bundle with exact bindings to `SecPal/frontend`, the publisher workflow,
-`refs/heads/main`, source digest and signer digest
-`b755ca0d0ee5a85eca5ad5688d457241f070b1b4`, and GitHub-hosted runners only.
+`refs/heads/main`, the current source digest and signer digest
+`d1c5b82f9f07ce4fb6bdac2054eeaa70149e2e38`, and GitHub-hosted runners only.
 It does not reopen the registry during cryptographic verification.
 
 Only after both published SecPal images pass these gates does the runner build

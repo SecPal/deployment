@@ -25,9 +25,9 @@ API_VEX_EXPIRES_AT = "2026-11-23T00:00:00Z"
 FPM_SOCKET_VOLUME = "secpal-fpm"
 FPM_SOCKET_DIRECTORY = "/run/secpal-fpm"
 FPM_START_COMMAND = "chmod 0700 /run/secpal-fpm && exec php-fpm --nodaemonize"
-FRONTEND_IMAGE = "ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
-FRONTEND_DIGEST = "sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
-FRONTEND_SOURCE_COMMIT = "b755ca0d0ee5a85eca5ad5688d457241f070b1b4"
+FRONTEND_DIGEST = "sha256:d893b3b5fc3861485f56460e85ba29e7e221cda0a729a192d3749c4c85a7342f"
+FRONTEND_IMAGE = "ghcr.io/secpal/frontend@" + FRONTEND_DIGEST
+FRONTEND_SOURCE_COMMIT = "d1c5b82f9f07ce4fb6bdac2054eeaa70149e2e38"
 
 
 @dataclass(frozen=True)
