@@ -21,6 +21,12 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Select the accepted frontend publisher release `d1c5b82f` in source deployment
+  and disposable integration, preserving exact OCI/attestation verification.
+  Qualify DNS isolation with the image's existing bounded curl probe, including
+  a positive resolver control and strict lookup/transport-error distinction.
+  This changes source contracts only; the demo consumer remains unchanged.
+
 - Consume the accepted, attested PHP-FPM/Nginx API pair in production and
   integration Quadlets, with a private FastCGI socket, isolated PHP secrets,
   TLS/SCRAM fixture transport, explicit shutdown and health contracts, and

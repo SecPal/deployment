@@ -1202,7 +1202,9 @@ def transfer_timeout_seconds(deadline: float, current: float) -> int:
 def validate_dns_isolation_result(returncode: int, service: str) -> None:
     if returncode == 0:
         raise IntegrationError(f"frontend unexpectedly resolved data service {service}")
-    if returncode != 2:
+    # curl 6 is specifically a failed host lookup. Transport, timeout and
+    # execution errors cannot establish DNS isolation.
+    if returncode != 6:
         raise IntegrationError(f"unable to verify frontend DNS isolation for {service}")
 
 
@@ -3154,32 +3156,24 @@ class IntegrationLifecycle:
             )
             if internal != "true":
                 raise IntegrationError(f"network is not internal: {name}")
-        resolver = self.command(
-            [
-                "podman",
-                "exec",
-                f"{self.resources.prefix}-frontend",
-                "/bin/sh",
-                "-c",
-                "command -v getent >/dev/null 2>&1",
-            ],
-            check=False,
-            capture=True,
+        probe_command = [
+            "podman", "exec", f"{self.resources.prefix}-frontend", "curl",
+            "--fail", "--silent", "--show-error", "--noproxy", "*",
+            "--connect-timeout", "2", "--max-time", "3",
+        ]
+        # The qualified minimal frontend has curl for its ordinary health probe,
+        # but no musl-utils/getent. Prove working container DNS before accepting
+        # a negative lookup; a missing tool or broken resolver remains a failure.
+        positive = self.command(
+            [*probe_command, "http://frontend:8080/health/live"],
+            check=False, capture=True,
         )
-        if resolver.returncode != 0:
-            raise IntegrationError("frontend DNS isolation probe is unavailable")
+        if positive.returncode != 0:
+            raise IntegrationError("frontend DNS positive control failed")
         for forbidden in ("postgres",):
             probe = self.command(
-                [
-                    "podman",
-                    "exec",
-                    f"{self.resources.prefix}-frontend",
-                    "/bin/sh",
-                    "-c",
-                    f"getent hosts {forbidden} >/dev/null 2>&1",
-                ],
-                check=False,
-                capture=True,
+                [*probe_command, f"http://{forbidden}:5432/"],
+                check=False, capture=True,
             )
             validate_dns_isolation_result(probe.returncode, forbidden)
 
