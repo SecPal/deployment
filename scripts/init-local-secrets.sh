@@ -84,7 +84,7 @@ cleanup() {
   if [ "$INITIALIZATION_ACTIVE" -eq 1 ]; then
     for name in api database postgresql; do
       if [ -d "$SECRET_DIR/$name" ] && [ ! -L "$SECRET_DIR/$name" ]; then
-        rm -rf -- "$SECRET_DIR/$name" || true
+        rm -rf -- "${SECRET_DIR:?}/${name:?}" || true
       fi
     done
     for name in app-key postgres-password tenant-kek; do
