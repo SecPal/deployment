@@ -308,6 +308,25 @@ class OciAttestationBundleContractTest(unittest.TestCase):
                 )
         self.assertEqual(opener.open.call_count, 2)
 
+    def test_runtime_pair_binding_and_expiry_fail_closed(self) -> None:
+        from datetime import datetime, timezone
+        fetcher = load_fetcher()
+        body = {"source": {"repository": "https://github.com/SecPal/api", "commit": "da806926a754d7446cdfa9f6f19ed331e5dbee31"},
+                "images": {"php-fpm": {"reference": "ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73"},
+                           "nginx": {"reference": "ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c"}}}
+        now = datetime(2026, 11, 10, tzinfo=timezone.utc)
+        malformed = json.loads(json.dumps(body))
+        malformed["images"] = {"php-fpm": None, "nginx": None}
+        with self.assertRaises(ValueError):
+            fetcher._validate_runtime_pair(json_bytes(malformed), now)
+        fetcher._validate_runtime_pair(json_bytes(body), now)
+        changed = json.loads(json.dumps(body))
+        changed["images"]["nginx"]["reference"] = changed["images"]["php-fpm"]["reference"]
+        with self.assertRaises(ValueError):
+            fetcher._validate_runtime_pair(json_bytes(changed), now)
+        with self.assertRaises(ValueError):
+            fetcher._validate_runtime_pair(json_bytes(body), datetime(2026, 11, 23, tzinfo=timezone.utc))
+
     def test_fetches_fallback_referrer_and_writes_verified_private_bundle(self) -> None:
         fixture = RegistryFixture(self.fetcher)
         with tempfile.TemporaryDirectory() as temp_dir:

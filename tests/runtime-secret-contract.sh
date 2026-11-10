@@ -134,23 +134,6 @@ elif [ -L "$prepared_private_storage" ] || [ ! -d "$prepared_private_storage" ] 
   fail "the private-storage root did not receive the required owner and mode"
 fi
 
-expect_failure "a missing secret set" \
-  env SECPAL_SECRET_DIR="$TEMP_DIR/missing" \
-  bash "$ROOT_DIR/scripts/container-entrypoint.sh" true
-
-relative_root="$TEMP_DIR/relative-root"
-make_secret_set "$relative_root/secrets"
-printf '%s\n' '#!/bin/sh' 'exec /usr/bin/true' >"$FAKE_BIN/install"
-chmod 0700 "$FAKE_BIN/install"
-if (
-  cd "$relative_root"
-  env PATH="$FAKE_BIN:$PATH" SECPAL_SECRET_DIR=secrets \
-    bash "$ROOT_DIR/scripts/container-entrypoint.sh" true
-) >/dev/null 2>&1; then
-  fail "the container entrypoint accepted a relative secret directory"
-fi
-rm "$FAKE_BIN/install"
-
 signal_directory="$TEMP_DIR/signal-publication"
 signal_pause="$TEMP_DIR/signal-pause"
 signal_release="$TEMP_DIR/signal-release"
@@ -230,13 +213,10 @@ printf 'partial\n' >"$partial/app-key"
 if ! run_initializer "$partial" >/dev/null 2>&1; then
   fail "a partial secret set was not recovered"
 else
-  recovered_output="$TEMP_DIR/recovered.log"
-  if env SECPAL_SECRET_DIR="$partial" \
-    bash "$ROOT_DIR/scripts/container-entrypoint.sh" >"$recovered_output" 2>&1; then
-    fail "the recovered secret set accepted a missing role command"
-  elif ! grep -Fq 'ERROR: no container role command was provided.' "$recovered_output"; then
-    fail "the recovered secret set did not satisfy the runtime contract"
+  if ! run_initializer "$partial" >/dev/null 2>&1; then
+    fail "the complete PHP/TLS delivery was not idempotent"
   fi
+
 fi
 
 symlinked="$TEMP_DIR/symlinked"
@@ -254,23 +234,10 @@ wrong_owner="$TEMP_DIR/wrong-owner"
 make_secret_set "$wrong_owner"
 expect_failure "an unexpected secret owner" run_initializer "$wrong_owner" "$((CURRENT_UID + 1))"
 
-malformed="$TEMP_DIR/malformed"
-make_secret_set "$malformed"
-chmod 0600 "$malformed/app-key"
-printf 'base64:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB!\n' >"$malformed/app-key"
-chmod 0400 "$malformed/app-key"
-expect_failure "a malformed secret value" \
-  env SECPAL_SECRET_DIR="$malformed" \
-  bash "$ROOT_DIR/scripts/container-entrypoint.sh" true
-
-valid="$TEMP_DIR/valid"
-make_secret_set "$valid"
-missing_command_output="$TEMP_DIR/missing-command.log"
-if env SECPAL_SECRET_DIR="$valid" \
-  bash "$ROOT_DIR/scripts/container-entrypoint.sh" >"$missing_command_output" 2>&1; then
-  fail "a missing role command unexpectedly succeeded"
-elif ! grep -Fq 'ERROR: no container role command was provided.' "$missing_command_output"; then
-  fail "a missing role command did not fail with the documented error"
+# Value grammar and non-export of secrets are exercised against the same
+# production PHP bootstrap by tests/production-state-contract.py.
+if [ -e "$ROOT_DIR/scripts/container-entrypoint.sh" ]; then
+  fail "the redundant environment-exporting runtime loader remains"
 fi
 
 if [ "$failures" -ne 0 ]; then

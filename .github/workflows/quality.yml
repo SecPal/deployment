@@ -35,7 +35,7 @@ jobs:
 
       - name: Scan exact source with organization policy
         id: scan
-        uses: SecPal/.github/.github/actions/trivy-repository-scan@05c78cb758477b8531ee7b91534d688238c7be49 # main
+        uses: SecPal/.github/.github/actions/trivy-repository-scan@22ce172e7b1decfdd4267e382432b93765798d95 # main
 
       - name: Require clean source security
         env:
@@ -88,7 +88,7 @@ jobs:
 
   reuse:
     name: REUSE Compliance
-    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@e801240780070887050635abac80857ebcc0f760 # main
+    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@823ac15aa8308503ee772d24e41062e4b3c3b457 # main
 
   markdown-shell:
     name: Markdown and Shell
@@ -114,7 +114,7 @@ jobs:
           python -m pip install --disable-pip-version-check \
             jsonschema==4.25.1 PyYAML==6.0.2 reuse==6.1.2 \
             shellcheck-py==0.11.0.1 yamllint==1.37.1
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.8
+          go install actionlint.kjanat.dev/cmd/actionlint@v1.17.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Set up pinned OpenTofu for retained recovery contracts

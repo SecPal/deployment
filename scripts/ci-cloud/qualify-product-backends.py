@@ -335,7 +335,7 @@ class Observer:
         self.require(not authfile.exists() and not authfile.is_symlink())
         self.files.append(authfile)
         write(authfile, b'{}\n', mode=0o444)
-        fixture = Path('/etc/containers/secpal-backend101-api.php')
+        fixture = Path('/etc/containers/secpal-backend101-api.conf')
         self.require(not fixture.exists() and not fixture.is_symlink())
         self.files.append(fixture)
         write(fixture, (ROOT / contract.SOURCES['backend_http_fixture']).read_bytes(),
@@ -388,7 +388,7 @@ class Observer:
             pid = re.search(r'pid=([1-9][0-9]*)', rows[0])
             self.require(pid is not None)
             context = self.run('observe-products', ['ps', '-o', 'label=', '-p', pid.group(1)])[1]
-            domain = 'pasta_t' if role == 'api' else 'container_runtime_t'
+            domain = 'container_runtime_t'
             self.require(':' + domain + ':' in context)
             self.facts['api_bind_domain' if role == 'api' else 'runtime_bind_domain'] = domain
             label = self.run('observe-products', ['podman', '--remote=false', 'inspect', '--format', '{{.ProcessLabel}}', 'secpal-backend101-' + role], user=self.runtime.pw_name)[1]

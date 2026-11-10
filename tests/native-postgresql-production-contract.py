@@ -39,12 +39,12 @@ class NativeProduction(unittest.TestCase):
                          'Environment=CACHE_STORE=database', 'Environment=QUEUE_CONNECTION=database',
                          'Environment=SESSION_DRIVER=database',
                          'Network=pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1',
-                         'AddHost=db.secpal.internal:169.254.81.1', f'Image={pg.APPLICATION_RUNTIME["image"]}'):
+                         'AddHost=db.secpal.internal:169.254.81.1', f'Image={renderer.API_IMAGE}'):
                 self.assertIn(line, content)
             self.assertNotIn('REDIS_', content)
             self.assertNotIn('Network=host', content)
             self.assertNotIn('postgresql.sock', content)
-        runtime = units['secpal-api.container']
+        runtime = units['secpal-php-fpm.container']
         migration = units['secpal-migrate.container']
         self.assertIn('/secrets/runtime/postgres-password', runtime)
         self.assertNotIn('/secrets/migration/', runtime)

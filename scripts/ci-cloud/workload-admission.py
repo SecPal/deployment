@@ -31,6 +31,7 @@ def load_contract() -> Mapping[str, object]:
 
 _CONTRACT = load_contract()
 API_DIGEST = _CONTRACT["API_DIGEST"]
+PHP_FPM_DIGEST = _CONTRACT["PHP_FPM_DIGEST"]
 BASELINE_OBSERVATION_FIELDS = _CONTRACT["BASELINE_OBSERVATION_FIELDS"]
 CI_GID = _CONTRACT["CI_GID"]
 CI_UID = _CONTRACT["CI_UID"]
@@ -868,17 +869,18 @@ def workload_admission_failures(observations: object) -> list[str]:
             api_identity != API_DIGEST
             or frontend_identity != FRONTEND_DIGEST
             or api_identity == frontend_identity
+            or api_identity == images_by_role.get("php-fpm")
         ):
             failures.append("WORKLOAD_IMAGE_ROLE_SEPARATION")
         api_family = {
             role: images_by_role.get(role)
             for role in (
-                "secrets-init", "migrate", "api", "worker-general",
+                "secrets-init", "migrate", "php-fpm", "worker-general",
                 "worker-hash-chain", "scheduler",
             )
         }
         if (
-            set(api_family.values()) != {API_DIGEST}
+            set(api_family.values()) != {PHP_FPM_DIGEST}
         ):
             failures.append("WORKLOAD_EXECUTION_CONTRACT")
     if isinstance(containers, list) and any(

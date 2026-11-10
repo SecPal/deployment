@@ -61,6 +61,7 @@ CONTAINER_ROLES = (
     "secrets-init",
     "postgres",
     "migrate",
+    "php-fpm",
     "api",
     "worker-general",
     "worker-hash-chain",
@@ -69,7 +70,7 @@ CONTAINER_ROLES = (
     "gateway",
 )
 NETWORKS = ("application", "edge")
-VOLUMES = ("secrets", "private-storage", "postgres")
+VOLUMES = ("secrets", "private-storage", "postgres", "fpm-socket")
 TRUSTED_SERVICE_SECTION = (
     b"\n[Service]\n"
     b"Environment=CONTAINERS_CONF=/dev/null\n"

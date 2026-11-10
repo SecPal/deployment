@@ -31,7 +31,8 @@ MAX_OUTPUT = 256 * 1024
 # Trusted-control copies of the canonical #126 image contract. Agreement with
 # integration_runtime_contract.py is executable repository evidence; target
 # bytes are not imported as admission authority on the guest.
-API_DIGEST = "sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
+API_DIGEST = "sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c"
+PHP_FPM_DIGEST = "sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73"
 FRONTEND_DIGEST = "sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
 POSTGRES_DIGEST = "sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af"
 CHECKOUT = Path("/home/secpal-ci/deployment-target")
@@ -122,11 +123,11 @@ TRUSTED_USER_UNIT_PACKAGES = {
 CONTROL_NETWORK = "secpal-ci-unrelated-control-network"
 CONTROL_VOLUME = "secpal-ci-unrelated-control-volume"
 ROLES = (
-    "secrets-init", "postgres", "migrate", "api",
+    "secrets-init", "postgres", "migrate", "api", "php-fpm",
     "worker-general", "worker-hash-chain", "scheduler", "frontend", "gateway",
 )
 NETWORK_KINDS = ("application", "edge")
-VOLUME_KINDS = ("secrets", "private-storage", "postgres")
+VOLUME_KINDS = ("secrets", "private-storage", "postgres", "fpm-socket")
 GENERATED_LOGICAL_NAMES = (
     *ROLES,
     *(f"{kind}-network" for kind in NETWORK_KINDS),
@@ -135,7 +136,8 @@ GENERATED_LOGICAL_NAMES = (
 ROLE_PREDECESSORS = {
     "postgres": ("secrets-init",),
     "migrate": ("postgres",),
-    "api": ("migrate",),
+    "php-fpm": ("migrate",),
+    "api": ("php-fpm",),
     "worker-general": ("migrate",),
     "worker-hash-chain": ("migrate",),
     "scheduler": ("migrate",),
@@ -175,10 +177,11 @@ SERVICE_ACTIVATION_PROPERTIES = (
     "After",
 )
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
-HEALTHY_ROLES = frozenset({"postgres", "api", "frontend", "gateway"})
+HEALTHY_ROLES = frozenset({"postgres", "api", "php-fpm", "frontend", "gateway"})
 HEALTH_INTERVAL_USEC = MappingProxyType({
     "postgres": 5_000_000,
     "api": 10_000_000,
+    "php-fpm": 10_000_000,
     "frontend": 10_000_000,
     "gateway": 10_000_000,
 })
@@ -244,17 +247,16 @@ class ContainerCollection(NamedTuple):
 
 
 API_VOLUMES = (
-    ("secrets", "/run/secpal-secrets", False),
+    ("secrets", "/run/secpal/secrets", False),
     ("private-storage", "/app/storage/app/private", True),
 )
 API_BINDS = (
-    ("container-entrypoint.sh", "/run/secpal/container-entrypoint.sh"),
+    ("production-secret-bootstrap.php", "/run/secpal/bootstrap/production-secret-bootstrap.php"),
+    ("99-secpal-secrets.ini", "/usr/local/etc/php/conf.d/99-secpal-secrets.ini"),
     ("phase-b-runtime-probe.php", "/run/secpal/phase-b-runtime-probe.php"),
 )
 API_TMPFS = (
     ("/tmp", 32, "0700", True),
-    ("/config", 16, "0700", True),
-    ("/data", 16, "0700", True),
     ("/app/storage/app/public", 32, "0750", False),
     ("/app/storage/framework/cache/data", 32, "0750", True),
     ("/app/storage/framework/sessions", 32, "0750", True),
@@ -283,7 +285,7 @@ ROLE_CONTRACTS = MappingProxyType({
         ),
         tmpfs=(("/tmp", 16, "0700", True),),
         capabilities=("CAP_CHOWN", "CAP_FOWNER"),
-        entrypoint=("/bin/bash", "/run/secpal/init-local-secrets.sh"),
+        entrypoint=("/bin/sh", "/run/secpal/init-local-secrets.sh"),
         command=(),
         healthcheck=(),
     ),
@@ -303,24 +305,30 @@ ROLE_CONTRACTS = MappingProxyType({
         binds=API_BINDS
         + (("quadlet-oneshot-entrypoint.sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),),
         tmpfs=API_TMPFS,
-        entrypoint=("/bin/bash", "/run/secpal/container-entrypoint.sh"),
-        command=("php", "artisan", "migrate", "--force"),
+        entrypoint=("php",),
+        command=("artisan", "migrate", "--force"),
         healthcheck=(),
     ),
     "api": RoleContract(
-        (10001, 10001),
-        networks=("application", "edge"),
-        volumes=API_VOLUMES,
-        binds=API_BINDS,
-        tmpfs=API_TMPFS,
-        entrypoint=("/bin/bash", "/run/secpal/container-entrypoint.sh"),
-        command=("frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile"),
+        (10001, 10001), networks=("edge",),
+        volumes=(("fpm-socket", "/run/secpal-fpm", False),),
+        tmpfs=(("/tmp", 32, "0700", True),),
+        entrypoint=("nginx",), command=("-g", "daemon off;"),
         healthcheck=("CMD", "/usr/local/bin/secpal-http-live"),
+    ),
+    "php-fpm": RoleContract(
+        (10001, 10001), networks=("application",),
+        volumes=API_VOLUMES + (("fpm-socket", "/run/secpal-fpm", True),),
+        binds=API_BINDS + (("zz-fpm-session.conf", "/usr/local/etc/php-fpm.d/zz-secpal-deployment.conf"),),
+        tmpfs=API_TMPFS,
+        entrypoint=("/bin/sh", "-c"),
+        command=("chmod 0700 /run/secpal-fpm && exec php-fpm --nodaemonize",),
+        healthcheck=("CMD", "php", "/usr/local/bin/secpal-fpm-live.php"),
     ),
     "worker-general": RoleContract(
         (10001, 10001), networks=("application",), volumes=API_VOLUMES,
         binds=API_BINDS, tmpfs=API_TMPFS,
-        entrypoint=("/bin/bash", "/run/secpal/container-entrypoint.sh"),
+        entrypoint=("docker-php-entrypoint",),
         command=(
             "php", "artisan", "queue:work",
             "--queue=merkle,opentimestamp,default", "--sleep=1", "--tries=3",
@@ -331,7 +339,7 @@ ROLE_CONTRACTS = MappingProxyType({
     "worker-hash-chain": RoleContract(
         (10001, 10001), networks=("application",), volumes=API_VOLUMES,
         binds=API_BINDS, tmpfs=API_TMPFS,
-        entrypoint=("/bin/bash", "/run/secpal/container-entrypoint.sh"),
+        entrypoint=("docker-php-entrypoint",),
         command=(
             "php", "artisan", "queue:work", "--queue=activity-hash-chain",
             "--sleep=1", "--tries=3", "--timeout=90",
@@ -341,7 +349,7 @@ ROLE_CONTRACTS = MappingProxyType({
     "scheduler": RoleContract(
         (10001, 10001), networks=("application",), volumes=API_VOLUMES,
         binds=API_BINDS, tmpfs=API_TMPFS,
-        entrypoint=("/bin/bash", "/run/secpal/container-entrypoint.sh"),
+        entrypoint=("docker-php-entrypoint",),
         command=("php", "artisan", "schedule:work"),
         healthcheck=(),
     ),
@@ -688,16 +696,18 @@ def expected_image_identity(
     if not isinstance(container, dict):
         return False
     api_roles = {
-        "secrets-init", "migrate", "api", "worker-general",
+        "secrets-init", "migrate", "php-fpm", "worker-general",
         "worker-hash-chain", "scheduler",
     }
     exact_references = {
-        **{name: f"localhost/secpal-ci-api@{API_DIGEST}" for name in api_roles},
+        **{name: f"localhost/secpal-ci-php-fpm@{PHP_FPM_DIGEST}" for name in api_roles},
+        "api": f"localhost/secpal-ci-api@{API_DIGEST}",
         "postgres": f"localhost/secpal-ci-postgres@{POSTGRES_DIGEST}",
         "frontend": f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}",
     }
     exact_digests = {
-        **{name: API_DIGEST for name in api_roles},
+        **{name: PHP_FPM_DIGEST for name in api_roles},
+        "api": API_DIGEST,
         "postgres": POSTGRES_DIGEST,
         "frontend": FRONTEND_DIGEST,
     }
@@ -4467,6 +4477,7 @@ def collect_post_cleanup(instance: str) -> dict[str, object]:
 # Every value is defined above; no controller imports private collector helpers.
 ADMISSION_CONTRACT = MappingProxyType({
     "API_DIGEST": API_DIGEST,
+    "PHP_FPM_DIGEST": PHP_FPM_DIGEST,
     "BASELINE_OBSERVATION_FIELDS": BASELINE_OBSERVATION_FIELDS,
     "CI_GID": CI_GID,
     "CI_UID": CI_UID,
