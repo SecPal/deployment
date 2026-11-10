@@ -29,7 +29,7 @@ concurrency:
 jobs:
   auto-merge:
     # yamllint disable-line rule:line-length
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@31555f23d459031248006f77785d872bc3947127 # main
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@9715769ab8af814b9a441c5eadf7e029e6b70657 # main
     with:
       phase: "2"
       merge-method: squash
