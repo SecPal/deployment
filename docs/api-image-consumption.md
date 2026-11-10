@@ -15,7 +15,41 @@ mode-`0700` empty Podman authentication file for each pull, stages the exact
 digest in rootless local storage, and starts only native Quadlet units with
 `Pull=never`. The historical evidence is not rewritten as Podman evidence.
 
-## Canonical identity
+## Current accepted PHP-FPM/Nginx pair
+
+Production and the disposable Quadlet integration now consume the same accepted
+pair from source `da806926a754d7446cdfa9f6f19ed331e5dbee31`:
+
+- PHP-FPM: `ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73`.
+- Nginx: `ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c`.
+- Attested pair artifact: `ghcr.io/secpal/api@sha256:f2b09c90d60973af84bbcba87e89fa98531cae53a0c6600ff24534688517a911`.
+- Publisher run: `42757690047`, candidate attempt `2`, qualification/acceptance
+  attempt `3`; workflow `SecPal/api/.github/workflows/publish-container.yml`.
+
+The existing anonymous OCI fetcher verifies the pair artifact's digest and
+signed publisher identity, its exact source and both index references, then
+verifies and stages each image separately. It rejects swapped companions and
+requires renewed central qualification when the current exact-subject SQLite
+OpenVEX horizon expires at `2026-11-23T00:00:00Z`. No newer digest or tag is
+selected and no scanner policy is implemented here. The existing reviewed
+statements apply only to the published FPM manifests, not future rebuilds.
+
+The HTTP role `api` runs Nginx and retains the HAProxy backend port. The new
+`php-fpm` role owns application/database secrets and the private socket.
+Migrations, workers and scheduler use PHP CLI from that same PHP image.
+Production retains PostgreSQL 18 on the host with verify-full TLS/SCRAM.
+Integration uses the existing disposable PostgreSQL 18 fixture with TLS/SCRAM
+and the unchanged production PHP secret bootstrap. No application secrets are
+exported by a custom runtime entrypoint or mounted into Nginx.
+
+Source integration is not activation authority. A later switch still requires
+a valid Recovery Set, actual schema/data compatibility, migration/deployment
+locks, current OCI/security evidence and separately authorized activation.
+Known-vulnerable historical FrankenPHP images remain recovery identities, not
+safe automatic rollback targets. A new accepted source does not relabel any
+older PostgreSQL, cloud, or browser result as current qualification.
+
+## Historical single-image integration identity
 
 The approved API image reference for the existing application integration
 fixture is:
@@ -47,7 +81,7 @@ The separate native PostgreSQL qualifier and its #81 consumer use the scoped
 runtime identity below. Existing integration fixture consumers retain their
 approved digest and evidence contract.
 
-## Native PostgreSQL application identity
+## Historical native PostgreSQL application identity
 
 The trusted native PostgreSQL qualification contract consumes an existing
 accepted API runtime that supplies verified PHP/PDO transport and separate
@@ -60,7 +94,7 @@ run `36992636604`, attempt `1`, workflow `publish-container.yml`, on protected
 - `linux/amd64`: `sha256:8d0d960306c6989be55a9c7bc41937699e55dbdbc6193bff870f38a1b19605a3`
 - `linux/arm64`: `sha256:ed91caa822e189187d57e0ff322c54e3b9837aa679cc087015933dcda9a3be7e`
 
-The trusted controller owns this identity; #81 cannot select another runtime.
+This identity remains bound to the original #81 qualification and is not the current production image authority. The current renderer reads the accepted pair from `integration_runtime_contract.py`; the archived declaration is not rewritten.
 The declaration binds it for the #81 consumer. The qualifier verifies its OCI
 index and GitHub artifact attestation before a rootless application executes,
 using the same anonymous bundle retrieval and fixed GitHub CLI authority as

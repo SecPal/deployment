@@ -52,7 +52,7 @@ def load_renderer():
 RENDERER = SCRIPTS / "render-integration-quadlets.py"
 PROBE = SCRIPTS / "phase-b-runtime-probe.php"
 SECRET_INITIALIZER = SCRIPTS / "init-local-secrets.sh"
-CONTAINER_ENTRYPOINT = SCRIPTS / "container-entrypoint.sh"
+CONTAINER_ENTRYPOINT = SCRIPTS / "production-secret-bootstrap.php"
 INSTANCE = "contract01"
 
 
@@ -97,7 +97,7 @@ class CurrentIntegrationTopology(unittest.TestCase):
             if name.endswith(
                 (
                     "-migrate.container",
-                    "-api.container",
+                    "-php-fpm.container",
                     "-worker-general.container",
                     "-worker-hash-chain.container",
                     "-scheduler.container",
@@ -137,7 +137,7 @@ class CurrentIntegrationTopology(unittest.TestCase):
     def test_semantic_guard_rejects_backend_reintroduction_mutations(self) -> None:
         renderer = load_renderer()
         units = self.render()
-        api_name = f"secpal-int-{INSTANCE}-api.container"
+        api_name = f"secpal-int-{INSTANCE}-php-fpm.container"
         postgres_name = f"secpal-int-{INSTANCE}-postgres.container"
         cases: dict[str, dict[str, str]] = {}
 
@@ -149,7 +149,7 @@ class CurrentIntegrationTopology(unittest.TestCase):
 
         redis_image = dict(units)
         redis_image[api_name] = redis_image[api_name].replace(
-            runtime.API_IMAGE,
+            runtime.PHP_FPM_IMAGE,
             "docker.io/library/redis@sha256:" + "a" * 64,
         )
         cases["server image"] = redis_image
@@ -163,7 +163,7 @@ class CurrentIntegrationTopology(unittest.TestCase):
 
         redis_health = dict(units)
         redis_health[api_name] = redis_health[api_name].replace(
-            "HealthCmd=/usr/local/bin/secpal-http-live",
+            "HealthCmd=php /usr/local/bin/secpal-fpm-live.php",
             "HealthCmd=redis-cli -h cache-daemon ping",
         )
         cases["readiness path"] = redis_health

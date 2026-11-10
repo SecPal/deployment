@@ -252,6 +252,7 @@
             "secrets-init",
             "postgres",
             "migrate",
+            "php-fpm",
             "api",
             "worker-general",
             "worker-hash-chain",
@@ -262,7 +263,8 @@
             "edge-network",
             "secrets-volume",
             "private-storage-volume",
-            "postgres-volume"
+            "postgres-volume",
+            "fpm-socket-volume"
           ]
         },
         "unit": { "$ref": "#/$defs/generatedServiceName" },
@@ -335,6 +337,7 @@
         "secrets-init",
         "postgres",
         "migrate",
+        "php-fpm",
         "api",
         "worker-general",
         "worker-hash-chain",
@@ -695,7 +698,7 @@
         "podman_health_timers": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 5,
+          "maxItems": 6,
           "items": { "$ref": "#/$defs/podmanHealthTimerFact" }
         }
       }
@@ -794,19 +797,19 @@
         "installed_units": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 15,
+          "maxItems": 17,
           "items": { "$ref": "#/$defs/unitFact" }
         },
         "generated_services": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 14,
+          "maxItems": 16,
           "items": { "$ref": "#/$defs/generatedServiceFact" }
         },
         "containers": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 9,
+          "maxItems": 10,
           "items": { "$ref": "#/$defs/containerFact" }
         },
         "podman_rootless": { "type": "boolean" },
@@ -936,11 +939,11 @@
                   "quadlet_search_paths": {
                     "const": ["/etc/containers/systemd/users/20000"]
                   },
-                  "installed_units": { "minItems": 15, "maxItems": 15 },
-                  "generated_services": { "minItems": 14, "maxItems": 14 },
-                  "containers": { "minItems": 9, "maxItems": 9 },
+                  "installed_units": { "minItems": 17, "maxItems": 17 },
+                  "generated_services": { "minItems": 16, "maxItems": 16 },
+                  "containers": { "minItems": 10, "maxItems": 10 },
                   "networks": { "minItems": 2, "maxItems": 2 },
-                  "volumes": { "minItems": 3, "maxItems": 3 },
+                  "volumes": { "minItems": 4, "maxItems": 4 },
                   "podman_rootless": { "const": true },
                   "oci_runtime": { "const": "crun" },
                   "podman_api": { "const": false },

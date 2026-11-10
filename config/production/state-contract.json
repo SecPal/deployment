@@ -31,7 +31,7 @@
   "secret_delivery": {
     "api": {
       "consumers": [
-        "api",
+        "php-fpm",
         "migrate",
         "scheduler",
         "worker-general",
@@ -61,7 +61,12 @@
       "container_uid": 10001,
       "container_gid": 10001,
       "directory_mode": "0710",
-      "consumers": ["api", "scheduler", "worker-general", "worker-hash-chain"],
+      "consumers": [
+        "php-fpm",
+        "scheduler",
+        "worker-general",
+        "worker-hash-chain"
+      ],
       "files": {
         "postgres-username": {
           "mode": "0400",
@@ -133,7 +138,7 @@
       "integrity": "business-critical",
       "location": "/srv/secpal/private-storage",
       "consumers": [
-        "api",
+        "php-fpm",
         "migrate",
         "scheduler",
         "worker-general",
@@ -161,11 +166,12 @@
       "integrity": "business-critical",
       "location": "/srv/secpal/public-storage",
       "consumers": [
-        "api",
+        "php-fpm",
         "migrate",
         "scheduler",
         "worker-general",
-        "worker-hash-chain"
+        "worker-hash-chain",
+        "api"
       ],
       "container_identity": "10001:10001",
       "host_ownership": "mapped-api",
@@ -189,7 +195,7 @@
       "integrity": "cryptographic-critical",
       "location": "external-authority://application/app-key",
       "consumers": [
-        "api",
+        "php-fpm",
         "migrate",
         "scheduler",
         "worker-general",
@@ -217,7 +223,7 @@
       "integrity": "cryptographic-critical",
       "location": "external-authority://application/app-previous-keys",
       "consumers": [
-        "api",
+        "php-fpm",
         "migrate",
         "scheduler",
         "worker-general",
@@ -245,7 +251,7 @@
       "integrity": "cryptographic-critical",
       "location": "external-authority://application/tenant-kek",
       "consumers": [
-        "api",
+        "php-fpm",
         "migrate",
         "scheduler",
         "worker-general",

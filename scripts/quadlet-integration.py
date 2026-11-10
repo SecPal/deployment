@@ -34,7 +34,7 @@ from image_attestation_runtime import CLOUD_GH_RELEASES, EXPECTED_GH_VERSION, st
 
 from integration_runtime_contract import (
     API_DIGEST,
-    API_IMAGE,
+    API_IMAGE, PHP_FPM_IMAGE, PHP_FPM_DIGEST, API_PAIR_IMAGE, API_PAIR_DIGEST,
     API_SOURCE_COMMIT,
     CONTAINER_LOG_DRIVER,
     CONTAINER_PIDS_LIMIT,
@@ -58,7 +58,7 @@ from integration_runtime_contract import (
     podman_version_supported,
     podman_versions_compatible,
     role_execution_spec,
-    role_spec,
+    role_spec, ROLE_STOP_SIGNALS,
 )
 
 ONESHOT_SYSTEMD_PROPERTIES = (
@@ -101,7 +101,8 @@ GENERATED_LOGICAL_NAMES = (
 ROLE_PREDECESSORS = {
     "postgres": ("secrets-init",),
     "migrate": ("postgres",),
-    "api": ("migrate",),
+    "php-fpm": ("migrate",),
+    "api": ("php-fpm",),
     "worker-general": ("migrate",),
     "worker-hash-chain": ("migrate",),
     "scheduler": ("migrate",),
@@ -111,7 +112,8 @@ ROLE_VOLUME_DEPENDENCIES = {
     "secrets-init": ("secrets", "postgres", "private-storage"),
     "postgres": ("secrets", "postgres"),
     "migrate": ("secrets", "private-storage"),
-    "api": ("secrets", "private-storage"),
+    "php-fpm": ("secrets", "private-storage", "fpm-socket"),
+    "api": ("fpm-socket",),
     "worker-general": ("secrets", "private-storage"),
     "worker-hash-chain": ("secrets", "private-storage"),
     "scheduler": ("secrets", "private-storage"),
@@ -127,6 +129,13 @@ CLOUD_DIAGNOSTIC_STAGES = frozenset(
         "workload-runtime-admission",
         "workload-gh-cli-staging",
         "workload-api-attestation-fetch",
+        "workload-api-pair-attestation-fetch",
+        "workload-api-pair-attestation-verify",
+        "workload-php-fpm-attestation-fetch",
+        "workload-php-fpm-attestation-verify",
+        "workload-php-fpm-image-pull",
+        "workload-php-fpm-image-admission",
+        "workload-php-fpm-image-alias",
         "workload-api-attestation-verify",
         "workload-api-image-pull",
         "workload-api-image-admission",
@@ -166,6 +175,7 @@ CLOUD_OPERATOR_UID = 20_000
 CLOUD_OPERATOR_GID = 20_000
 CLOUD_IMAGE_TAGS = {
     "api": "localhost/secpal-ci-api:verified",
+    "php-fpm": "localhost/secpal-ci-php-fpm:verified",
     "frontend": "localhost/secpal-ci-frontend:verified",
     "postgres": "localhost/secpal-ci-postgres:verified",
 }
@@ -2033,7 +2043,12 @@ class IntegrationLifecycle:
         caddy_image = f"docker.io/library/caddy@{base['digest']}"
         self.stage_cloud_gh_cli()
         self.gh_config.mkdir(mode=0o700)
+        self.verify_and_stage_product("api-pair", API_PAIR_IMAGE, API_PAIR_DIGEST,
+            "SecPal/api", "SecPal/api/.github/workflows/publish-container.yml",
+            API_SOURCE_COMMIT, "secpal/api", runtime_pair=True)
         products = (
+            ("php-fpm", PHP_FPM_IMAGE, PHP_FPM_DIGEST, "SecPal/api",
+             "SecPal/api/.github/workflows/publish-container.yml", API_SOURCE_COMMIT, "secpal/api"),
             (
                 "api",
                 API_IMAGE,
@@ -2137,6 +2152,7 @@ class IntegrationLifecycle:
         workflow: str,
         source_commit: str,
         registry_path: str,
+        *, runtime_pair: bool = False,
     ) -> None:
         canonical_name = image.split("@", 1)[0]
         if image != f"{canonical_name}@{digest}" or canonical_name != f"ghcr.io/{registry_path}":
@@ -2156,6 +2172,7 @@ class IntegrationLifecycle:
                 registry_path,
                 "--diagnostic-stage",
                 f"workload-{label}-attestation-fetch",
+                *(["--runtime-pair-output", os.fspath(self.fixture_root / "runtime-pair.json")] if runtime_pair else []),
             ],
             environment=self.anonymous_environment(),
         )
@@ -2195,6 +2212,12 @@ class IntegrationLifecycle:
             ],
             environment=gh_environment,
         )
+        if runtime_pair:
+            subject.unlink(missing_ok=True)
+            bundle.unlink(missing_ok=True)
+            (self.fixture_root / "runtime-pair.json").unlink()
+            print(f"Verified accepted runtime pair: {image}")
+            return
         if self.cloud_mode:
             self.cloud_diagnostic_stage(f"workload-{label}-image-pull")
         self.anonymous_pull(label, image)
@@ -2306,7 +2329,9 @@ class IntegrationLifecycle:
         if self.assets.is_symlink() or stat_mode(self.assets) != 0o700:
             raise IntegrationError("integration asset directory is not private")
         for source, name, mode in (
-            (self.root / "scripts" / "container-entrypoint.sh", "container-entrypoint.sh", 0o755),
+            (self.root / "scripts" / "production-secret-bootstrap.php", "production-secret-bootstrap.php", 0o644),
+            (self.root / "config" / "production" / "php" / "99-secpal-secrets.ini", "99-secpal-secrets.ini", 0o644),
+            (self.root / "config" / "production" / "php" / "zz-fpm-session.conf", "zz-fpm-session.conf", 0o644),
             (self.root / "scripts" / "init-local-secrets.sh", "init-local-secrets.sh", 0o755),
             (
                 self.root / "scripts" / "quadlet-oneshot-entrypoint.sh",
@@ -2590,7 +2615,7 @@ class IntegrationLifecycle:
             raise IntegrationError("migration executed more than once before port retry")
         self.migration_invocation = migration_invocation
         retry_roles = (
-            "api",
+            "api", "php-fpm",
             "worker-general",
             "worker-hash-chain",
             "scheduler",
@@ -2973,6 +2998,11 @@ class IntegrationLifecycle:
         self, role: str, details: Mapping, expected_user: str | None = None
     ) -> None:
         contract = role_spec(role)
+        expected_signal = ROLE_STOP_SIGNALS.get(role)
+        if expected_signal is not None:
+            number = signal.Signals[expected_signal].value
+            if nested(details, "Config", "StopSignal") not in {expected_signal, str(number), number}:
+                raise IntegrationError("effective role shutdown signal differs from its contract")
         allowed = frozenset({"CHOWN", "FOWNER"}) if role == "secrets-init" else frozenset()
         validate_container_environment(details)
         execution = role_execution_spec(role, self.failure_case)
@@ -3023,24 +3053,26 @@ class IntegrationLifecycle:
         prefix = self.resources.prefix
         asset = lambda name: os.fspath(self.assets / name)
         api_mounts = {
-            "/run/secpal/container-entrypoint.sh": (
-                "bind",
-                asset("container-entrypoint.sh"),
-                False,
-            ),
+            "/run/secpal/bootstrap/production-secret-bootstrap.php": ("bind", asset("production-secret-bootstrap.php"), False),
+            "/usr/local/etc/php/conf.d/99-secpal-secrets.ini": ("bind", asset("99-secpal-secrets.ini"), False),
             "/run/secpal/phase-b-runtime-probe.php": (
                 "bind",
                 asset("phase-b-runtime-probe.php"),
                 False,
             ),
-            "/run/secpal-secrets": ("volume", f"{prefix}-secrets", False),
+            "/run/secpal/secrets": ("volume", f"{prefix}-secrets", False),
             "/app/storage/app/private": (
                 "volume",
                 f"{prefix}-private-storage",
                 True,
             ),
         }
-        if role in {"api", "worker-general", "worker-hash-chain", "scheduler"}:
+        if role == "api":
+            return {"/run/secpal-fpm": ("volume", f"{prefix}-fpm-socket", False)}
+        if role == "php-fpm":
+            return {**api_mounts, "/run/secpal-fpm": ("volume", f"{prefix}-fpm-socket", True),
+                    "/usr/local/etc/php-fpm.d/zz-secpal-deployment.conf": ("bind", asset("zz-fpm-session.conf"), False)}
+        if role in {"worker-general", "worker-hash-chain", "scheduler"}:
             return api_mounts
         if role == "migrate":
             return {
@@ -3312,40 +3344,44 @@ class IntegrationLifecycle:
         )
 
     def restart_application(self) -> None:
-        # A normal restart stop-job propagates through the target's fail-closed
-        # Requires graph. Dependencies were already inspected and must neither
-        # be stopped nor re-run for this single-role parity probe.
-        self.command(
-            [
-                "systemctl",
-                "--user",
-                "restart",
-                "--job-mode=ignore-dependencies",
-                f"{self.resources.prefix}-api.service",
-            ]
-        )
+        # Drain HTTP before FPM; leave the completed migration and PostgreSQL
+        # running while exercising the same pair's restart boundary.
+        for operation, role in (("stop", "api"), ("restart", "php-fpm"), ("start", "api")):
+            self.command(["systemctl", "--user", operation, "--job-mode=ignore-dependencies",
+                          f"{self.resources.prefix}-{role}.service"])
+
+    def _validate_socket_boundary(self) -> None:
+        identity = role_spec("php-fpm")
+        for path, mode in (("/run/secpal-fpm", "700"), ("/run/secpal-fpm/api.sock", "660")):
+            result = self.podman_exec("php-fpm", "stat", "-c", "%u:%g:%a", path, capture=True)
+            if (result.stdout or "").strip() != f"{identity.uid}:{identity.gid}:{mode}":
+                raise IntegrationError("private FastCGI directory or socket metadata is incorrect")
+        self.podman_exec("api", "/bin/sh", "-ec", "test ! -e /run/secpal/secrets && test ! -e /run/secpal-secrets && test ! -e /app/storage/app/private")
+        self.podman_exec("worker-general", "php", "-r", "$s=@fsockopen('php-fpm',9000,$e,$m,2); exit($s ? 1 : 0);")
 
     def _validate_runtime_probes_and_restart(self) -> None:
+        self._validate_socket_boundary()
         probes = runtime_probe_contract(self.instance)
         probe = "/run/secpal/phase-b-runtime-probe.php"
         cache_key = str(probes["cache_key"])
         cache_value = str(probes["cache_value"])
-        entrypoint = ["/bin/bash", "/run/secpal/container-entrypoint.sh", "php", probe]
-        self.podman_exec("api", *entrypoint, "cache-put", cache_key, cache_value)
-        observed = self.podman_exec("api", *entrypoint, "cache-get", cache_key, capture=True).stdout
+        entrypoint = ["php", probe]
+        self.podman_exec("php-fpm", *entrypoint, "transport", cache_key)
+        self.podman_exec("php-fpm", *entrypoint, "cache-put", cache_key, cache_value)
+        observed = self.podman_exec("php-fpm", *entrypoint, "cache-get", cache_key, capture=True).stdout
         if (observed or "").strip() != cache_value:
             raise IntegrationError("database cache round trip failed")
         for role in ("worker-general", "worker-hash-chain"):
             queue_key, queue = probes[role]
             hostname = (self.podman_exec(role, "hostname", capture=True).stdout or "").strip()
-            self.podman_exec("api", *entrypoint, "queue-dispatch", queue_key, queue)
+            self.podman_exec("php-fpm", *entrypoint, "queue-dispatch", queue_key, queue)
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
                 value = self.command(
                     [
                         "podman",
                         "exec",
-                        f"{self.resources.prefix}-api",
+                        f"{self.resources.prefix}-php-fpm",
                         *entrypoint,
                         "cache-get",
                         queue_key,
@@ -3358,15 +3394,15 @@ class IntegrationLifecycle:
                 time.sleep(1)
             else:
                 raise IntegrationError(f"{role} did not process its isolated queue probe")
-            self.podman_exec("api", *entrypoint, "cache-forget", queue_key)
-        self.podman_exec("api", *entrypoint, "cache-forget", cache_key)
+            self.podman_exec("php-fpm", *entrypoint, "cache-forget", queue_key)
+        self.podman_exec("php-fpm", *entrypoint, "cache-forget", cache_key)
         self._validate_private_storage_and_restart()
 
     def _validate_private_storage_and_restart(self) -> None:
         storage_name = f"quadlet-storage-{self.instance}"
         storage_path = f"/app/storage/app/private/{storage_name}"
         self.podman_exec(
-            "api",
+            "php-fpm",
             "/bin/sh",
             "-eu",
             "-c",
@@ -3386,7 +3422,7 @@ class IntegrationLifecycle:
             storage_path,
             capture=True,
         ).stdout
-        api = role_spec("api")
+        api = role_spec("php-fpm")
         expected_metadata = f"{api.uid}:{api.gid}:{PRIVATE_STORAGE_MODE:o}"
         if (metadata or "").strip() != expected_metadata:
             raise IntegrationError("private-storage fixture has unexpected metadata")
@@ -3395,9 +3431,9 @@ class IntegrationLifecycle:
         self.restart_application()
         if self.oneshot_invocation("migrate") != self.migration_invocation:
             raise IntegrationError("application restart executed migration again")
-        if (self.podman_exec("api", "cat", storage_path, capture=True).stdout or "").strip() != storage_name:
+        if (self.podman_exec("php-fpm", "cat", storage_path, capture=True).stdout or "").strip() != storage_name:
             raise IntegrationError("private-storage fixture did not survive application restart")
-        self.podman_exec("api", "rm", "-f", "--", storage_path)
+        self.podman_exec("php-fpm", "rm", "-f", "--", storage_path)
 
     def collect_resource_evidence(self) -> None:
         observations: dict[str, object] = {"instance": self.instance}
@@ -3468,7 +3504,7 @@ class IntegrationLifecycle:
                 volume_sizes[label] = "unavailable"
         observations["volume_bytes"] = volume_sizes
         image_sizes = {}
-        for label, image in (("api", API_IMAGE), ("frontend", FRONTEND_IMAGE), ("postgres", POSTGRES_FIXTURE.image)):
+        for label, image in (("api", API_IMAGE), ("php-fpm", PHP_FPM_IMAGE), ("frontend", FRONTEND_IMAGE), ("postgres", POSTGRES_FIXTURE.image)):
             result = self.command(["podman", "image", "inspect", image, "--format", "{{.Size}}"], capture=True, check=False)
             if result.returncode == 0 and (result.stdout or "").strip().isdigit():
                 image_sizes[label] = int((result.stdout or "").strip())

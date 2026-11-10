@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
 import binascii
 import hashlib
 import http.client
@@ -22,12 +23,17 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from integration_runtime_contract import (API_DIGEST, API_IMAGE, API_SOURCE_COMMIT,
+    PHP_FPM_IMAGE, API_PAIR_DIGEST, API_VEX_EXPIRES_AT)
+
+
 REGISTRY = "ghcr.io"
 REPOSITORY = "secpal/api"
 SUBJECT_NAME = "ghcr.io/secpal/api"
-SUBJECT_DIGEST = (
-    "sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
-)
+SUBJECT_DIGEST = API_DIGEST
+SUBJECT_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
 TOKEN_URL = (
     "https://ghcr.io/token?service=ghcr.io&scope=repository%3Asecpal%2Fapi%3Apull"
 )
@@ -61,6 +67,8 @@ DIAGNOSTIC_FAILURE_PREFIX = "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
 DIAGNOSTIC_STAGES = frozenset(
     {
         "workload-api-attestation-fetch",
+        "workload-php-fpm-attestation-fetch",
+        "workload-api-pair-attestation-fetch",
         "workload-frontend-attestation-fetch",
     }
 )
@@ -103,11 +111,13 @@ def configure_identity(
     canonical_image: str,
     canonical_digest: str,
     expected_registry_path: str,
+    *, runtime_pair: bool = False,
 ) -> None:
     """Bind every registry URL and signed subject check to explicit inputs."""
     global REPOSITORY
     global SUBJECT_NAME
     global SUBJECT_DIGEST
+    global SUBJECT_MEDIA_TYPE
     global TOKEN_URL
     global REGISTRY_BASE_URL
     global REFERRERS_URL
@@ -120,6 +130,9 @@ def configure_identity(
         raise ValueError("canonical image did not match the expected registry path")
     _require_digest(canonical_digest, "canonical image")
 
+    if runtime_pair and (canonical_image != "ghcr.io/secpal/api" or canonical_digest != API_PAIR_DIGEST):
+        raise ValueError("runtime pair is not the accepted exact artifact")
+    SUBJECT_MEDIA_TYPE = OCI_MANIFEST_MEDIA_TYPE if runtime_pair else OCI_INDEX_MEDIA_TYPE
     REPOSITORY = expected_registry_path
     SUBJECT_NAME = canonical_image
     SUBJECT_DIGEST = canonical_digest
@@ -352,7 +365,7 @@ def _select_bundle_layer(manifest: dict[str, Any]) -> tuple[str, int]:
 
     subject = manifest.get("subject")
     if not isinstance(subject, dict) or (
-        subject.get("mediaType") != OCI_INDEX_MEDIA_TYPE
+        subject.get("mediaType") != SUBJECT_MEDIA_TYPE
         or subject.get("digest") != SUBJECT_DIGEST
     ):
         raise ValueError("OCI attestation subject digest was not the reviewed image digest")
@@ -412,6 +425,10 @@ def _validate_subject_index(body: bytes) -> None:
     if observed_digest != SUBJECT_DIGEST:
         raise ValueError("subject index digest was not the reviewed image digest")
     index = _parse_object(body, "OCI subject index")
+    if SUBJECT_MEDIA_TYPE == OCI_MANIFEST_MEDIA_TYPE:
+        if index.get("schemaVersion") != 2 or index.get("mediaType") != OCI_MANIFEST_MEDIA_TYPE or index.get("artifactType") != "application/vnd.secpal-build-evidence.v1+json" or not isinstance(index.get("layers"), list):
+            raise ValueError("runtime pair OCI manifest shape was invalid")
+        return
     if (
         index.get("schemaVersion") != 2
         or index.get("mediaType") != OCI_INDEX_MEDIA_TYPE
@@ -419,6 +436,28 @@ def _validate_subject_index(body: bytes) -> None:
         or not index["manifests"]
     ):
         raise ValueError("OCI subject index shape was invalid")
+
+
+def _validate_runtime_pair(body: bytes, now: datetime) -> None:
+    """Consume the API publisher's existing pair contract, never select images."""
+    pair = _parse_object(body, "runtime pair")
+    expected = {"php-fpm": PHP_FPM_IMAGE, "nginx": API_IMAGE}
+    images = pair.get("images")
+    if (
+        pair.get("source") != {
+            "repository": "https://github.com/SecPal/api", "commit": API_SOURCE_COMMIT,
+        }
+        or not isinstance(images, dict)
+        or set(images) != set(expected)
+        or any(
+            not isinstance(images[role], dict)
+            or images[role].get("reference") != image
+            for role, image in expected.items()
+        )
+    ):
+        raise ValueError("runtime pair does not bind the accepted source and both component indexes")
+    if now >= datetime.fromisoformat(API_VEX_EXPIRES_AT.replace("Z", "+00:00")):
+        raise ValueError("runtime pair requires renewed central security qualification")
 
 
 def _write_private_file(path: Path, body: bytes) -> None:
@@ -443,7 +482,12 @@ def fetch_bundle(
     output_path: Path,
     request_bytes: RequestBytes = _request_bytes,
     subject_output_path: Path | None = None,
+    runtime_pair_output: Path | None = None,
 ) -> None:
+    if (SUBJECT_MEDIA_TYPE == OCI_MANIFEST_MEDIA_TYPE) != (runtime_pair_output is not None):
+        raise ValueError("runtime pair output and subject must be selected together")
+    if runtime_pair_output is not None and (runtime_pair_output.exists() or runtime_pair_output.is_symlink() or not runtime_pair_output.parent.is_dir()):
+        raise ValueError("runtime pair output path is unsafe")
     if output_path.exists() or output_path.is_symlink():
         raise FileExistsError(f"refusing to overwrite existing path: {output_path}")
     if not output_path.parent.is_dir():
@@ -474,19 +518,31 @@ def fetch_bundle(
         "Authorization": f"Bearer {token}",
     }
     subject_body = b""
+    pair_body = b""
     if subject_output_path is not None:
         status, content_type, registry_digest, subject_body = request_bytes(
             manifest_url(SUBJECT_DIGEST),
-            registry_headers,
+            {**registry_headers, "Accept": SUBJECT_MEDIA_TYPE},
             MANIFEST_RESPONSE_LIMIT,
             frozenset({200}),
         )
         if status != 200:
             raise RuntimeError("OCI subject index was unavailable")
-        _require_media_type(content_type, OCI_INDEX_MEDIA_TYPE, "OCI subject index")
+        _require_media_type(content_type, SUBJECT_MEDIA_TYPE, "OCI subject index")
         if registry_digest != SUBJECT_DIGEST:
             raise ValueError("OCI subject registry digest header did not match")
         _validate_subject_index(subject_body)
+        if runtime_pair_output is not None:
+            layers = _parse_object(subject_body, "runtime pair manifest")["layers"]
+            documents = [v for v in layers if v.get("annotations", {}).get("org.opencontainers.image.title") == "runtime-pair.json"]
+            if len(documents) != 1 or documents[0].get("mediaType") != "application/json":
+                raise ValueError("runtime pair document descriptor is invalid")
+            document = documents[0]
+            _require_digest(document.get("digest"), "runtime pair document")
+            _require_size(document.get("size"), "runtime pair document")
+            _, _, _, pair_body = request_bytes(blob_url(document["digest"]), {"Authorization": f"Bearer {token}"}, MANIFEST_RESPONSE_LIMIT, frozenset({200}))
+            _validate_bytes(pair_body, document["digest"], document["size"], "runtime pair document")
+            _validate_runtime_pair(pair_body, datetime.now(timezone.utc))
 
     status, content_type, _registry_digest, index_body = request_bytes(
         REFERRERS_URL,
@@ -547,35 +603,35 @@ def fetch_bundle(
     _write_private_file(subject_output_path, subject_body)
     try:
         _write_private_file(output_path, bundle_body)
+        if runtime_pair_output is not None:
+            _write_private_file(runtime_pair_output, pair_body)
     except BaseException:
+        output_path.unlink(missing_ok=True)
         subject_output_path.unlink(missing_ok=True)
         raise
 
 
 def main(argv: list[str]) -> int:
-    diagnostic_stage: str | None = None
-    if len(argv) == 8 and argv[6] == "--diagnostic-stage":
-        diagnostic_stage = argv[7]
-    if len(argv) not in {6, 8} or (
-        len(argv) == 8 and diagnostic_stage not in DIAGNOSTIC_STAGES
-    ):
-        print(
-            f"Usage: {Path(argv[0]).name} SUBJECT_OUTPUT_PATH BUNDLE_OUTPUT_PATH "
-            "CANONICAL_IMAGE CANONICAL_DIGEST EXPECTED_REGISTRY_PATH "
-            "[--diagnostic-stage CLOSED_STAGE]",
-            file=sys.stderr,
-        )
+    diagnostic_stage = None
+    pair_output = None
+    if len(argv) not in {6, 8, 10}:
         return 2
+    options = argv[6:]
+    for offset in range(0, len(options), 2):
+        name, value = options[offset:offset + 2]
+        if name == "--diagnostic-stage" and value in DIAGNOSTIC_STAGES and diagnostic_stage is None:
+            diagnostic_stage = value
+        elif name == "--runtime-pair-output" and pair_output is None:
+            pair_output = Path(value)
+        else:
+            return 2
     try:
-        configure_identity(argv[3], argv[4], argv[5])
-        fetch_bundle(Path(argv[2]), subject_output_path=Path(argv[1]))
+        configure_identity(argv[3], argv[4], argv[5], runtime_pair=pair_output is not None)
+        fetch_bundle(Path(argv[2]), subject_output_path=Path(argv[1]), runtime_pair_output=pair_output)
     except (OSError, RuntimeError, ValueError) as error:
         if diagnostic_stage is not None:
             reason = closed_failure_reason(error)
-            print(
-                f"{DIAGNOSTIC_FAILURE_PREFIX}{diagnostic_stage}:{reason}:none",
-                file=sys.stderr,
-            )
+            print(f"{DIAGNOSTIC_FAILURE_PREFIX}{diagnostic_stage}:{reason}:none", file=sys.stderr)
         print(f"ERROR: anonymous OCI attestation bundle retrieval failed: {error}", file=sys.stderr)
         return 1
     return 0
