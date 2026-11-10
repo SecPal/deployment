@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = ROOT / "config" / "production" / "state-contract.json"
 APP_KEY_PATTERN = re.compile(rb"base64:[A-Za-z0-9+/]{43}=\n?\Z")
 PASSWORD_PATTERN = re.compile(rb"[A-Za-z0-9._~!#$%&*+\-/=?^]{24,128}\n?\Z")
-EXPECTED_OBJECTS_DIGEST = "ac470a606d2511806cb243eab9da638b7feb6c899523beb0272630a094848e98"
+EXPECTED_OBJECTS_DIGEST = "1b84c89db659c4f4fbce561bc610056a03695fb4e3fb0f00222db919ab2a9b09"
 EXPECTED_TOP_LEVEL = {
     "$comment",
     "schema_version",
@@ -123,7 +123,7 @@ EXPECTED_RESERVED_LAYOUT = {
 EXPECTED_SECRET_DELIVERY = {
     "api": {
         "consumers": [
-            "api",
+            "php-fpm",
             "migrate",
             "scheduler",
             "worker-general",
@@ -154,7 +154,7 @@ EXPECTED_SECRET_DELIVERY = {
         "container_gid": 10001,
         "directory_mode": "0710",
         "consumers": [
-            "api",
+            "php-fpm",
             "scheduler",
             "worker-general",
             "worker-hash-chain"

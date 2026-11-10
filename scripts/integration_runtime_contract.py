@@ -2,20 +2,29 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Immutable role and image contract for the disposable integration runtime."""
+"""Immutable product images and role contracts shared by production and integration."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import json
 import re
+import shlex
 from types import MappingProxyType
 from typing import Mapping
 
 
-API_IMAGE = "ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
-API_DIGEST = "sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
-API_SOURCE_COMMIT = "87d1432389adac3a02574b399322928a77c5e67f"
+API_IMAGE = "ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c"
+API_DIGEST = "sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c"
+API_SOURCE_COMMIT = "da806926a754d7446cdfa9f6f19ed331e5dbee31"
+PHP_FPM_DIGEST = "sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73"
+PHP_FPM_IMAGE = "ghcr.io/secpal/api@" + PHP_FPM_DIGEST
+API_PAIR_DIGEST = "sha256:f2b09c90d60973af84bbcba87e89fa98531cae53a0c6600ff24534688517a911"
+API_PAIR_IMAGE = "ghcr.io/secpal/api@" + API_PAIR_DIGEST
+API_VEX_EXPIRES_AT = "2026-11-23T00:00:00Z"
+FPM_SOCKET_VOLUME = "secpal-fpm"
+FPM_SOCKET_DIRECTORY = "/run/secpal-fpm"
+FPM_START_COMMAND = "chmod 0700 /run/secpal-fpm && exec php-fpm --nodaemonize"
 FRONTEND_IMAGE = "ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
 FRONTEND_DIGEST = "sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
 FRONTEND_SOURCE_COMMIT = "b755ca0d0ee5a85eca5ad5688d457241f070b1b4"
@@ -75,7 +84,7 @@ POSTGRES_FIXTURE = PostgresFixtureIdentity(
     volume_target="/var/lib/postgresql",
 )
 INTERNAL_NETWORKS = ("application", "edge")
-VOLUME_NAMES = ("secrets", "private-storage", "postgres")
+VOLUME_NAMES = ("secrets", "private-storage", "postgres", "fpm-socket")
 PRIVATE_STORAGE_MODE = 0o640
 CONTAINER_PIDS_LIMIT = 512
 CONTAINER_STOP_TIMEOUT = 30
@@ -246,7 +255,7 @@ class ExecutionSpec:
             not tokens
             or any(
                 not isinstance(token, str)
-                or re.fullmatch(r"[A-Za-z0-9_./,:=-]+", token) is None
+                or (re.fullmatch(r"[A-Za-z0-9_./,:=-]+", token) is None and token not in {FPM_START_COMMAND, "daemon off;"})
                 for token in tokens
             )
         ):
@@ -258,32 +267,28 @@ class ExecutionSpec:
             encoded = json.dumps(self.entrypoint, separators=(",", ":"))
             lines.append(f"Entrypoint={encoded}")
         if self.command is not None:
-            lines.append(f"Exec={' '.join(self.command)}")
+            lines.append(f"Exec={shlex.join(self.command)}")
         return tuple(lines)
 
 
-_api_entrypoint = ("/bin/bash", "/run/secpal/container-entrypoint.sh")
+_api_entrypoint = ("docker-php-entrypoint",)
 ROLE_EXECUTION_SPECS: Mapping[str, ExecutionSpec] = MappingProxyType(
     {
         "secrets-init": ExecutionSpec(
             ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
-            ("/bin/bash", "/run/secpal/init-local-secrets.sh"),
+            ("/bin/sh", "/run/secpal/init-local-secrets.sh"),
         ),
         "migrate": ExecutionSpec(
             ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
             (
-                "/bin/bash",
-                "/run/secpal/container-entrypoint.sh",
                 "php",
                 "artisan",
                 "migrate",
                 "--force",
             ),
         ),
-        "api": ExecutionSpec(
-            _api_entrypoint,
-            ("frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile"),
-        ),
+        "api": ExecutionSpec(("nginx",), ("-g", "daemon off;")),
+        "php-fpm": ExecutionSpec(("/bin/sh", "-c"), (FPM_START_COMMAND,)),
         "worker-general": ExecutionSpec(
             _api_entrypoint,
             (
@@ -321,6 +326,12 @@ MIGRATION_FAILURE_EXECUTION_SPEC = ExecutionSpec(
 DEPENDENCY_FAILURE_EXECUTION_SPEC = ExecutionSpec(None, ("/bin/false",))
 
 
+ROLE_STOP_SIGNALS = MappingProxyType({
+    "api": "SIGQUIT", "php-fpm": "SIGQUIT", "migrate": "SIGTERM",
+    "worker-general": "SIGTERM", "worker-hash-chain": "SIGTERM", "scheduler": "SIGTERM",
+})
+
+
 @dataclass(frozen=True)
 class RoleSpec:
     uid: int
@@ -343,8 +354,6 @@ def _tmpfs(
 
 _api_tmpfs = _tmpfs(
     ("/tmp", 32, 0o700, True),
-    ("/config", 16, 0o700, True),
-    ("/data", 16, 0o700, True),
     ("/app/storage/app/public", 32, 0o750, False),
     ("/app/storage/framework/cache/data", 32, 0o750, True),
     ("/app/storage/framework/sessions", 32, 0o750, True),
@@ -367,16 +376,20 @@ ROLE_SPECS: Mapping[str, RoleSpec] = MappingProxyType(
                 ("/run/postgresql", 16, 0o750, True),
             ),
             HealthSpec(
-                "pg_isready -U secpal_local -d secpal_local", 5, 3, 20, 10
+                "pg_isready -U secpal_local -d secpal", 5, 3, 20, 10
             ),
         ),
         "migrate": RoleSpec(10001, 10001, ("application",), _api_tmpfs),
         "api": RoleSpec(
             10001,
             10001,
-            ("application", "edge"),
-            _api_tmpfs,
+            ("edge",),
+            _tmpfs(("/tmp", 32, 0o700, True)),
             HealthSpec("/usr/local/bin/secpal-http-live", 10, 5, 12, 15),
+        ),
+        "php-fpm": RoleSpec(
+            10001, 10001, ("application",), _api_tmpfs,
+            HealthSpec("php /usr/local/bin/secpal-fpm-live.php", 10, 5, 12, 15),
         ),
         "worker-general": RoleSpec(10001, 10001, ("application",), _api_tmpfs),
         "worker-hash-chain": RoleSpec(
@@ -423,6 +436,7 @@ CONTAINER_ROLES = (
     "postgres",
     "migrate",
     "api",
+    "php-fpm",
     "worker-general",
     "worker-hash-chain",
     "scheduler",

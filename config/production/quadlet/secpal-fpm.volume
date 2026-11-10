@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+[Unit]
+Description=SecPal private FastCGI socket
+PartOf=secpal.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+[Volume]
+VolumeName=secpal-fpm
+Label=org.secpal.production=true

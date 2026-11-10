@@ -54,7 +54,7 @@ EXPECTED_OBJECTS = {
     "registry_credentials",
 }
 FAKE_CA = b"-----BEGIN CERTIFICATE-----\n" + base64.b64encode(b"bounded test-only certificate bytes") + b"\n-----END CERTIFICATE-----\n"
-API_ROLES = {"api", "migrate", "scheduler", "worker-general", "worker-hash-chain"}
+API_ROLES = {"php-fpm", "migrate", "scheduler", "worker-general", "worker-hash-chain"}
 SECRET_SENTINELS = {
     "app-key": "base64:U0VDUEFMX0ZBS0VfQVBQX0tFWV8wMDAwMDAwMDA=",
     "app-previous-keys": "base64:U0VDUEFMX0ZBS0VfT0xEX0tFWV8wMDAwMDAwMDA=",
@@ -269,6 +269,30 @@ class ProductionStateContractTest(unittest.TestCase):
                     "/usr/local/libexec/secpal/production-state ",
                     text,
                 )
+
+    def test_accepted_fpm_nginx_pair_preserves_private_boundary(self) -> None:
+        units = self.renderer.build_units(self.contract)
+        fpm = units["secpal-php-fpm.container"]
+        http = units["secpal-api.container"]
+        self.assertIn("Image=ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73", fpm)
+        self.assertIn("Image=ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c", http)
+        self.assertIn("Requires=secpal-php-fpm.service", http)
+        self.assertIn("Requires=secpal-migrate.service", fpm)
+        self.assertIn("Volume=secpal-fpm.volume:/run/secpal-fpm:rw,z,U", fpm)
+        self.assertIn("Volume=secpal-fpm.volume:/run/secpal-fpm:ro,z", http)
+        self.assertIn("StopSignal=SIGQUIT", fpm)
+        self.assertIn("StopSignal=SIGQUIT", http)
+        self.assertIn("HealthCmd=php /usr/local/bin/secpal-fpm-live.php", fpm)
+        self.assertNotIn("PublishPort=", fpm)
+        for forbidden in ("DB_", "secret", "private-storage", "frankenphp", "/config", "/data"):
+            self.assertNotIn(forbidden, http.split("[Container]\n", 1)[1].split("[Service]\n", 1)[0])
+        for role in ("migrate", "scheduler", "worker-general", "worker-hash-chain"):
+            unit = units[f"secpal-{role}.container"]
+            self.assertIn("Image=ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73", unit)
+            self.assertIn("StopSignal=SIGTERM", unit)
+            self.assertNotIn("/run/secpal-fpm", unit)
+            self.assertNotIn("destination=/config", unit)
+            self.assertNotIn("destination=/data", unit)
 
     def test_fixed_product_backend_publication(self) -> None:
         units = self.renderer.build_units(self.contract)
