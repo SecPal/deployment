@@ -442,6 +442,8 @@ class TargetDiagnosticTests(unittest.TestCase):
             fetcher["DIAGNOSTIC_STAGES"],
             {
                 "workload-api-attestation-fetch",
+                "workload-php-fpm-attestation-fetch",
+                "workload-api-pair-attestation-fetch",
                 "workload-frontend-attestation-fetch",
             },
         )

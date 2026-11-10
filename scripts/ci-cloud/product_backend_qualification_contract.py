@@ -27,12 +27,12 @@ SOURCES = {
     'backend_state_contract': 'config/production/state-contract.json',
     'backend_policy': 'scripts/product-backend-policy.py',
     'backend_contract': 'scripts/product_backend_contract.py',
-    'backend_http_fixture': 'scripts/ci-cloud/product-backend-http-fixture.php',
     'backend_service': 'config/production/host-systemd/secpal-product-backend-policy.service',
     'backend_qualifier': 'scripts/ci-cloud/qualify-product-backends.py',
     'backend_qualification_contract': 'scripts/ci-cloud/product_backend_qualification_contract.py',
     'backend_control': 'scripts/ci-cloud/product-backend-qualification-control.py',
     'backend_wrapper': 'scripts/ci-cloud/run-product-backend-qualification.sh',
+    'backend_http_fixture': 'scripts/ci-cloud/product-backend-http-fixture.conf',
     'backend_api': 'config/production/quadlet/secpal-api.container',
     'backend_frontend': 'config/production/quadlet/secpal-frontend.container',
     'backend_edge_network': 'config/production/quadlet/secpal-edge.network',
@@ -97,7 +97,7 @@ def required_observations():
     return {
         'selinux': 'Enforcing', 'backend_port_type': 'secpal_backend_port_t',
         'haproxy_domain': 'haproxy_t', 'runtime_bind_domain': 'container_runtime_t',
-        'api_bind_domain': 'pasta_t',
+        'api_bind_domain': 'container_runtime_t',
         'haproxy_connect_any': False, 'pasta_bind_all_ports': False,
         'effective_backend_connect': True, 'effective_runtime_bind': True,
         'effective_pasta_bind': True, 'effective_pasta_unreserved_bind': False,
@@ -161,18 +161,15 @@ def fixture_unit(source, role):
         raise ValueError('reviewed product network authority')
     lines = [line for line in source.splitlines() if not line.startswith((
         'Requires=', 'After=', 'PartOf=', 'ExecStartPre=', 'Environment=',
-        'Mount=type=bind,', 'Health', 'Notify=', 'LogDriver=', 'LogOpt='))]
+        'Mount=type=bind,', 'Volume=secpal-fpm.volume:', 'Health', 'Notify=', 'LogDriver=', 'LogOpt='))]
     lines = [line.replace('secpal-', 'secpal-backend101-') for line in lines]
     lines.insert(lines.index('Pull=never'), 'Notify=conmon')
     lines.insert(lines.index('Pull=never'), 'LogDriver=none')
     lines.insert(lines.index('[Service]') + 1,
                  'ExecStartPre=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check')
     if role == 'api':
-        lines = [line for line in lines if not line.startswith(('Exec=', 'Entrypoint='))]
-        lines.insert(lines.index('Pull=never'), 'Entrypoint=/usr/local/bin/php')
-        lines.insert(lines.index('Pull=never'), 'Exec=-S 0.0.0.0:8080 /run/secpal-http-fixture.php')
         lines.insert(lines.index('Pull=never'),
-                     'Volume=/etc/containers/secpal-backend101-api.php:/run/secpal-http-fixture.php:ro,Z')
+                     'Volume=/etc/containers/secpal-backend101-api.conf:/etc/nginx/nginx.conf:ro,Z')
     environment = [] if role == 'api' else ['SECPAL_API_URL=https://api.secpal.example.invalid']
     for value in environment:
         lines.insert(lines.index('Pull=never'), 'Environment=' + value)
@@ -336,10 +333,10 @@ def normalize_observations(raw, haproxy_uid, runtime_uid, unrelated_uid):
             raise ValueError('local rootless runtime without API authority')
         for role, backend in BACKENDS.items():
             product = iteration['products'][role]
-            publisher = 'pasta_t' if role == 'api' else 'container_runtime_t'
-            network = 'pasta' if role == 'api' else 'bridge'
-            # Running pasta has no named-network attachment in Podman inspect.
-            networks = [] if role == 'api' else ['secpal-backend101-edge']
+            publisher = 'container_runtime_t'
+            network = 'bridge'
+            # Both HTTP roles use the production edge network.
+            networks = ['secpal-backend101-edge']
             if (set(product) != {'listeners', 'forwarder_context', 'container_context', 'network_mode', 'networks', 'environment_keys', 'mount_types', 'unit'}
                     or product['listeners'] != [backend.endpoint] or ':' + publisher + ':' not in product['forwarder_context']
                     or ':container_t:' not in product['container_context'] or product['network_mode'] != network

@@ -15,6 +15,14 @@ stages the reviewed digest through a new empty Podman authentication file, and
 uses the canonical digest from native Quadlet with `Pull=never`. It does not
 reinterpret the historical Compose run as Podman evidence.
 
+## Current API companion
+
+The current Quadlet HTTP companion is Nginx at
+`ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c`,
+paired with the accepted PHP-FPM index as documented in
+[API image consumption](api-image-consumption.md). The older Phase C identities
+below remain historical evidence and do not qualify this new deployment pair.
+
 ## Canonical identity and evidence
 
 The only approved frontend deployment reference is:

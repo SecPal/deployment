@@ -19,6 +19,24 @@ if (! preg_match('/\Aintegration-(?:cache|queue-(?:general|hash-chain))-[a-z0-9]
 }
 
 switch ($operation) {
+    case 'transport':
+        $pdo = $application->make('db')->connection()->getPdo();
+        $tls = $pdo->query('SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()')->fetchColumn();
+        if (! $tls || $pdo->query('SHOW password_encryption')->fetchColumn() !== 'scram-sha-256') {
+            exit(78);
+        }
+        try {
+            new PDO(
+                'pgsql:host=db.secpal.internal;dbname=secpal;sslmode=disable',
+                config('database.connections.pgsql.username'),
+                config('database.connections.pgsql.password'),
+            );
+        } catch (PDOException) {
+            break;
+        }
+        fwrite(STDERR, "Plain PostgreSQL transport was unexpectedly accepted.\n");
+        exit(78);
+
     case 'cache-put':
         $value = $argv[3] ?? '';
         if (! preg_match('/\Aintegration-cache-value-[a-z0-9]+\z/', $value)) {

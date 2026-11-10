@@ -508,6 +508,7 @@ class QuadletLifecycleContract(unittest.TestCase):
             )
             lifecycle.render_validate_and_install_units = mock.Mock()
 
+            (fixture / "runtime-pair.json").write_text("{}")
             self.module.execute_cloud_prepare(lifecycle)
 
             self.assertEqual(
@@ -515,6 +516,13 @@ class QuadletLifecycleContract(unittest.TestCase):
                 [
                     mock.call("workload-runtime-admission"),
                     mock.call("workload-gh-cli-staging"),
+                    mock.call("workload-api-pair-attestation-fetch"),
+                    mock.call("workload-api-pair-attestation-verify"),
+                    mock.call("workload-php-fpm-attestation-fetch"),
+                    mock.call("workload-php-fpm-attestation-verify"),
+                    mock.call("workload-php-fpm-image-pull"),
+                    mock.call("workload-php-fpm-image-admission"),
+                    mock.call("workload-php-fpm-image-alias"),
                     mock.call("workload-api-attestation-fetch"),
                     mock.call("workload-api-attestation-verify"),
                     mock.call("workload-api-image-pull"),
@@ -2489,6 +2497,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                 removed,
                 {
                     "secpal-int-contract01-api",
+                    "secpal-int-contract01-php-fpm",
                     "secpal-int-contract01-worker-general",
                     "secpal-int-contract01-worker-hash-chain",
                     "secpal-int-contract01-scheduler",
@@ -2506,6 +2515,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                     "stop",
                     "--job-mode=ignore-dependencies",
                     "secpal-int-contract01-api.service",
+                    "secpal-int-contract01-php-fpm.service",
                     "secpal-int-contract01-worker-general.service",
                     "secpal-int-contract01-worker-hash-chain.service",
                     "secpal-int-contract01-scheduler.service",
@@ -2709,6 +2719,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                 "secpal-int-contract01-secrets-volume.service",
                 "secpal-int-contract01-private-storage-volume.service",
                 "secpal-int-contract01-postgres-volume.service",
+                "secpal-int-contract01-fpm-socket-volume.service",
             )
             self.assertTrue(
                 any(
@@ -3391,7 +3402,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                         "/bin/sh",
                         "/run/secpal/quadlet-oneshot-entrypoint.sh",
                     ],
-                    "Cmd": ["/bin/bash", "/run/secpal/init-local-secrets.sh"],
+                    "Cmd": ["/bin/sh", "/run/secpal/init-local-secrets.sh"],
                     "Labels": {
                         "org.secpal.integration": "true",
                         "org.secpal.integration.instance": "contract01",
@@ -3555,8 +3566,7 @@ class QuadletLifecycleContract(unittest.TestCase):
         valid = {
             "Config": {
                 "Entrypoint": [
-                    "/bin/bash",
-                    "/run/secpal/container-entrypoint.sh",
+                    "docker-php-entrypoint",
                 ],
                 "Cmd": ["php", "artisan", "schedule:work"],
             }
@@ -3591,9 +3601,9 @@ class QuadletLifecycleContract(unittest.TestCase):
                 "Config": {
                     "Env": ["PATH=/usr/bin"],
                     "User": "10001:10001",
+                    "StopSignal": 15,
                     "Entrypoint": [
-                        "/bin/bash",
-                        "/run/secpal/container-entrypoint.sh",
+                        "docker-php-entrypoint",
                     ],
                     "Cmd": ["php", "artisan", "schedule:work"],
                     "Labels": {
@@ -3615,6 +3625,11 @@ class QuadletLifecycleContract(unittest.TestCase):
                 wraps=self.module.validate_container_execution,
             ) as execution:
                 lifecycle._validate_effective_container("scheduler", details)
+                for wrong_signal in (3, "SIGQUIT", None):
+                    candidate = json.loads(json.dumps(details))
+                    candidate["Config"]["StopSignal"] = wrong_signal
+                    with self.assertRaisesRegex(self.module.IntegrationError, "shutdown signal"):
+                        lifecycle._validate_effective_container("scheduler", candidate)
             execution.assert_called_once_with(
                 details,
                 self.module.role_execution_spec("scheduler"),
@@ -3660,16 +3675,11 @@ class QuadletLifecycleContract(unittest.TestCase):
                 runner=runner,
             )
             lifecycle.restart_application()
-            self.assertIn(
-                (
-                    "systemctl",
-                    "--user",
-                    "restart",
-                    "--job-mode=ignore-dependencies",
-                    "secpal-int-contract01-api.service",
-                ),
-                runner.commands,
-            )
+            self.assertEqual(runner.commands, [
+                ("systemctl", "--user", "stop", "--job-mode=ignore-dependencies", "secpal-int-contract01-api.service"),
+                ("systemctl", "--user", "restart", "--job-mode=ignore-dependencies", "secpal-int-contract01-php-fpm.service"),
+                ("systemctl", "--user", "start", "--job-mode=ignore-dependencies", "secpal-int-contract01-api.service"),
+            ])
 
     def test_harness_rejects_a_redundant_quadlet_output_override(self) -> None:
         with mock.patch.object(

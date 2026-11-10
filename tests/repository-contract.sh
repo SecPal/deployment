@@ -164,7 +164,6 @@ required_files=(
   tests/sensitive-path-contract.sh
   tests/workflow-action-pin-contract.sh
   tests/fixtures/fake-gh.sh
-  tests/fixtures/fake-python3.sh
   tests/fixtures/fake-curl.sh
   tests/oci-attestation-bundle-contract.py
   tests/quadlet-integration-contract.py

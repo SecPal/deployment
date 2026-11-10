@@ -19,7 +19,7 @@ sys.dont_write_bytecode = True
 
 from integration_runtime_contract import (
     API_DIGEST,
-    API_IMAGE,
+    API_IMAGE, PHP_FPM_IMAGE, PHP_FPM_DIGEST,
     CONTAINER_LOG_DRIVER,
     CONTAINER_PIDS_LIMIT,
     CONTAINER_PODMAN_ARGS,
@@ -33,7 +33,7 @@ from integration_runtime_contract import (
     TARGET_REQUIRED_ROLES,
     VOLUME_NAMES,
     health_lines,
-    role_spec,
+    role_spec, ROLE_STOP_SIGNALS,
     role_execution_spec,
     tmpfs_mounts,
 )
@@ -44,7 +44,7 @@ FAILURE_CASES = ("migration", "dependency", "health")
 DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 APPLICATION_ROLES = (
     "migrate",
-    "api",
+    "php-fpm",
     "worker-general",
     "worker-hash-chain",
     "scheduler",
@@ -95,6 +95,7 @@ def common_container(instance: str, role: str, image: str) -> list[str]:
         "NoNewPrivileges=true",
         "RunInit=true",
         f"StopTimeout={CONTAINER_STOP_TIMEOUT}",
+        *([f"StopSignal={ROLE_STOP_SIGNALS[role]}"] if role in ROLE_STOP_SIGNALS else []),
         f"LogDriver={CONTAINER_LOG_DRIVER}",
         f"PidsLimit={CONTAINER_PIDS_LIMIT}",
         *(f"PodmanArgs={argument}" for argument in CONTAINER_PODMAN_ARGS),
@@ -127,8 +128,8 @@ def api_environment(port: int) -> list[str]:
         "APP_URL": f"https://api.secpal.example.invalid:{port}",
         "CACHE_STORE": "database",
         "DB_CONNECTION": "pgsql",
-        "DB_DATABASE": "secpal_local",
-        "DB_HOST": "postgres",
+        "DB_DATABASE": "secpal",
+        "DB_HOST": "db.secpal.internal",
         "DB_PORT": "5432",
         "DB_USERNAME": "secpal_local",
         "FILESYSTEM_DISK": "local",
@@ -167,7 +168,8 @@ def validate_current_topology(instance: str, units: dict[str, str]) -> None:
         "secrets-init": (),
         "postgres": ("secrets-init",),
         "migrate": ("postgres",),
-        "api": ("migrate",),
+        "php-fpm": ("migrate",),
+        "api": ("php-fpm",),
         "worker-general": ("migrate",),
         "worker-hash-chain": ("migrate",),
         "scheduler": ("migrate",),
@@ -245,8 +247,8 @@ def cloud_image_reference(label: str, digest: str) -> str:
 
 def health_lines_for_runtime(role: str, cloud: bool) -> tuple[str, ...]:
     lines = health_lines(role)
-    if cloud and role == "api":
-        return ("HealthCmd=CMD /usr/local/bin/secpal-http-live", *lines[1:])
+    if cloud and role in {"api", "php-fpm"}:
+        return ("HealthCmd=CMD " + role_spec(role).health.command, *lines[1:])
     return lines
 
 
@@ -257,8 +259,8 @@ def cloud_oneshot_execution_lines(role: str) -> tuple[str, ...]:
         )
     if role == "migrate":
         return (
-            'Entrypoint=["/bin/bash","/run/secpal/container-entrypoint.sh"]',
-            "Exec=php artisan migrate --force",
+            'Entrypoint=["php"]',
+            "Exec=artisan migrate --force",
         )
     raise ContractError("cloud one-shot role is outside the closed contract")
 
@@ -270,7 +272,7 @@ def api_container(
     role: str,
     failure_case: str | None = None,
     *,
-    image: str = API_IMAGE,
+    image: str = PHP_FPM_IMAGE,
     cloud: bool = False,
 ) -> str:
     prefix = f"secpal-int-{instance}"
@@ -291,13 +293,19 @@ def api_container(
     lines.extend(
         (
             *execution_lines,
-            f"Mount=type=bind,source={fixture_root}/assets/container-entrypoint.sh,target=/run/secpal/container-entrypoint.sh,ro=true",
             f"Mount=type=bind,source={fixture_root}/assets/phase-b-runtime-probe.php,target=/run/secpal/phase-b-runtime-probe.php,ro=true",
-            f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
+            f"Volume={prefix}-secrets.volume:/run/secpal/secrets:ro",
+            f"Mount=type=bind,source={fixture_root}/assets/production-secret-bootstrap.php,target=/run/secpal/bootstrap/production-secret-bootstrap.php,ro=true",
+            f"Mount=type=bind,source={fixture_root}/assets/99-secpal-secrets.ini,target=/usr/local/etc/php/conf.d/99-secpal-secrets.ini,ro=true",
             f"Volume={prefix}-private-storage.volume:/app/storage/app/private",
             *tmpfs_mounts(role),
         )
     )
+    if role == "php-fpm":
+        lines.extend((
+            f"Volume={prefix}-fpm-socket.volume:/run/secpal-fpm:rw,z",
+            f"Mount=type=bind,source={fixture_root}/assets/zz-fpm-session.conf,target=/usr/local/etc/php-fpm.d/zz-secpal-deployment.conf,ro=true",
+        ))
     if oneshot:
         if cloud:
             lines.append("PodmanArgs=--rm=false")
@@ -323,6 +331,18 @@ def api_container(
     ) + section("Container", lines) + section("Service", service_lines)
 
 
+def nginx_container(instance: str, fixture_root: Path, image: str, cloud: bool = False) -> str:
+    prefix = f"secpal-int-{instance}"
+    lines = common_container(instance, "api", image)
+    lines.extend((
+        *role_execution_spec("api").quadlet_lines(),
+        f"Volume={prefix}-fpm-socket.volume:/run/secpal-fpm:ro,z",
+        *tmpfs_mounts("api"), *network_lines(instance, "api"),
+        "NetworkAlias=api", *health_lines_for_runtime("api", cloud),
+    ))
+    return unit_description(f"SecPal integration API HTTP ({instance})", [f"{prefix}-php-fpm.service"], f"{prefix}.target {prefix}-php-fpm.service", True) + section("Container", lines) + service()
+
+
 def build_units(
     instance: str,
     port: int,
@@ -337,6 +357,7 @@ def build_units(
     if cloud and DIGEST_PATTERN.fullmatch(cloud_gateway_digest) is None:
         raise ContractError("cloud gateway digest is outside the closed contract")
     api_image = cloud_image_reference("api", API_DIGEST) if cloud else API_IMAGE
+    php_image = cloud_image_reference("php-fpm", PHP_FPM_DIGEST) if cloud else PHP_FPM_IMAGE
     frontend_image = (
         cloud_image_reference("frontend", FRONTEND_DIGEST)
         if cloud
@@ -368,7 +389,7 @@ def build_units(
         ) + section("Volume", [f"VolumeName={prefix}-{name}", *labels])
 
     secret_dependencies: list[str] = []
-    secret_lines = common_container(instance, "secrets-init", api_image)
+    secret_lines = common_container(instance, "secrets-init", php_image)
     secret_execution = role_execution_spec("secrets-init")
     if secret_execution is None:
         raise ContractError("secret initialization execution contract is missing")
@@ -410,7 +431,7 @@ def build_units(
     postgres_lines = common_container(instance, "postgres", postgres_image)
     postgres_lines.extend(
         (
-            "Environment=POSTGRES_DB=secpal_local",
+            "Environment=POSTGRES_DB=secpal",
             "Environment=POSTGRES_USER=secpal_local",
             "Environment=POSTGRES_PASSWORD_FILE=/run/secpal-secrets/postgres-password",
             f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
@@ -418,6 +439,8 @@ def build_units(
             *tmpfs_mounts("postgres"),
             *network_lines(instance, "postgres"),
             "NetworkAlias=postgres",
+            "NetworkAlias=db.secpal.internal",
+            "Exec=postgres -c ssl=on -c ssl_cert_file=/run/secpal-secrets/postgresql/server.crt -c ssl_key_file=/run/secpal-secrets/postgresql/server.key -c password_encryption=scram-sha-256 -c hba_file=/run/secpal-secrets/postgresql/pg_hba.conf",
             *health_lines("postgres"),
         )
     )
@@ -443,23 +466,19 @@ def build_units(
         fixture_root,
         "migrate",
         failure_case,
-        image=api_image,
+        image=php_image,
         cloud=cloud,
     )
-    units[f"{prefix}-api.container"] = api_container(
-        instance,
-        port,
-        fixture_root,
-        "api",
-        image=api_image,
-        cloud=cloud,
+    units[f"{prefix}-php-fpm.container"] = api_container(
+        instance, port, fixture_root, "php-fpm", image=php_image, cloud=cloud,
     )
+    units[f"{prefix}-api.container"] = nginx_container(instance, fixture_root, api_image, cloud)
     units[f"{prefix}-worker-general.container"] = api_container(
         instance,
         port,
         fixture_root,
         "worker-general",
-        image=api_image,
+        image=php_image,
         cloud=cloud,
     )
     units[f"{prefix}-worker-hash-chain.container"] = api_container(
@@ -467,7 +486,7 @@ def build_units(
         port,
         fixture_root,
         "worker-hash-chain",
-        image=api_image,
+        image=php_image,
         cloud=cloud,
     )
     units[f"{prefix}-scheduler.container"] = api_container(
@@ -475,7 +494,7 @@ def build_units(
         port,
         fixture_root,
         "scheduler",
-        image=api_image,
+        image=php_image,
         cloud=cloud,
     )
 
