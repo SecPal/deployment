@@ -3430,7 +3430,7 @@ class QuadletLifecycleContract(unittest.TestCase):
             )
             dns = [
                 subprocess.CompletedProcess((), status, "", "")
-                for status in (0, 2, 2)
+                for status in (0, 6)
             ]
             with mock.patch.object(
                 lifecycle, "captured", side_effect=("true", "true")
@@ -3454,6 +3454,34 @@ class QuadletLifecycleContract(unittest.TestCase):
                         self.module.IntegrationError, "network is not internal"
                     ):
                         lifecycle._validate_network_boundary()
+
+    def test_frontend_dns_probe_uses_existing_curl_and_requires_positive_control(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT, instance="contract01", port=18443,
+                fixture_root=Path(directory), output=Path(directory) / "quadlets",
+                runner=FakeRunner(),
+            )
+            for positive in (0, 6, 127):
+                with self.subTest(positive=positive), mock.patch.object(
+                    lifecycle, "captured", side_effect=("true", "true")
+                ), mock.patch.object(lifecycle, "command", side_effect=[
+                    subprocess.CompletedProcess((), positive, "", ""),
+                    subprocess.CompletedProcess((), 6, "", ""),
+                ]) as command:
+                    if positive:
+                        with self.assertRaisesRegex(self.module.IntegrationError, "positive control"):
+                            lifecycle._validate_network_boundary()
+                        self.assertEqual(command.call_count, 1)
+                    else:
+                        lifecycle._validate_network_boundary()
+                        for call in command.call_args_list:
+                            arguments = call.args[0]
+                            self.assertEqual(arguments[:4], ["podman", "exec", "secpal-int-contract01-frontend", "curl"])
+                            self.assertIn("--noproxy", arguments)
+                            self.assertIn("--max-time", arguments)
+                        self.assertEqual(command.call_args_list[0].args[0][-1], "http://frontend:8080/health/live")
+                        self.assertEqual(command.call_args_list[1].args[0][-1], "http://postgres:5432/")
 
     def test_effective_container_contract_owns_the_exact_port_policy(self) -> None:
         valid = {"8443/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18443"}]}
@@ -3651,12 +3679,12 @@ class QuadletLifecycleContract(unittest.TestCase):
                 self.module.validate_effective_health_service(properties)
 
     def test_frontend_dns_isolation_rejects_probe_errors(self) -> None:
-        self.module.validate_dns_isolation_result(2, "postgres")
+        self.module.validate_dns_isolation_result(6, "postgres")
         with self.assertRaisesRegex(
             self.module.IntegrationError, "unexpectedly resolved data service"
         ):
             self.module.validate_dns_isolation_result(0, "postgres")
-        for returncode in (1, 3, 125):
+        for returncode in (1, 2, 3, 7, 28, 125, 127):
             with self.subTest(returncode=returncode), self.assertRaisesRegex(
                 self.module.IntegrationError,
                 "unable to verify frontend DNS isolation",
