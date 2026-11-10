@@ -255,7 +255,7 @@ def api_container(contract: dict, role: str) -> str:
         )
     )
     if role == "php-fpm":
-        lines.append(f"Volume={FPM_SOCKET_VOLUME}.volume:{FPM_SOCKET_DIRECTORY}:rw,z")
+        lines.append(f"Volume={FPM_SOCKET_VOLUME}.volume:{FPM_SOCKET_DIRECTORY}:rw,z,U")
         lines.append("Mount=type=bind,source=/srv/secpal/config/php/zz-fpm-session.conf,target=/usr/local/etc/php-fpm.d/zz-secpal-deployment.conf,ro=true")
         health = role_spec(role).health
         if health is None:

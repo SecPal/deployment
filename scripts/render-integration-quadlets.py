@@ -255,7 +255,7 @@ def health_lines_for_runtime(role: str, cloud: bool) -> tuple[str, ...]:
 def cloud_oneshot_execution_lines(role: str) -> tuple[str, ...]:
     if role == "secrets-init":
         return (
-            'Entrypoint=["/bin/bash","/run/secpal/init-local-secrets.sh"]',
+            'Entrypoint=["/bin/sh","/run/secpal/init-local-secrets.sh"]',
         )
     if role == "migrate":
         return (
@@ -303,7 +303,7 @@ def api_container(
     )
     if role == "php-fpm":
         lines.extend((
-            f"Volume={prefix}-fpm-socket.volume:/run/secpal-fpm:rw,z",
+            f"Volume={prefix}-fpm-socket.volume:/run/secpal-fpm:rw,z,U",
             f"Mount=type=bind,source={fixture_root}/assets/zz-fpm-session.conf,target=/usr/local/etc/php-fpm.d/zz-secpal-deployment.conf,ro=true",
         ))
     if oneshot:

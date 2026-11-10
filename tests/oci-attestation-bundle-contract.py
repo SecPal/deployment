@@ -315,6 +315,10 @@ class OciAttestationBundleContractTest(unittest.TestCase):
                 "images": {"php-fpm": {"reference": "ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73"},
                            "nginx": {"reference": "ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c"}}}
         now = datetime(2026, 11, 10, tzinfo=timezone.utc)
+        malformed = json.loads(json.dumps(body))
+        malformed["images"] = {"php-fpm": None, "nginx": None}
+        with self.assertRaises(ValueError):
+            fetcher._validate_runtime_pair(json_bytes(malformed), now)
         fetcher._validate_runtime_pair(json_bytes(body), now)
         changed = json.loads(json.dumps(body))
         changed["images"]["nginx"]["reference"] = changed["images"]["php-fpm"]["reference"]

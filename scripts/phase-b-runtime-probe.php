@@ -21,8 +21,12 @@ if (! preg_match('/\Aintegration-(?:cache|queue-(?:general|hash-chain))-[a-z0-9]
 switch ($operation) {
     case 'transport':
         $pdo = $application->make('db')->connection()->getPdo();
-        $tls = $pdo->query('SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()')->fetchColumn();
-        if (! $tls || $pdo->query('SHOW password_encryption')->fetchColumn() !== 'scram-sha-256') {
+        $tls = $pdo->query("SELECT CASE WHEN ssl THEN 'tls' ELSE 'plain' END FROM pg_stat_ssl WHERE pid = pg_backend_pid()")->fetchColumn();
+        // Disposable fixture authority only: inspect rules and password kind,
+        // never retrieve a password hash or infer authentication from a default.
+        $rules = $pdo->query("SELECT type || ':' || auth_method FROM pg_hba_file_rules WHERE type LIKE 'host%' ORDER BY rule_number")->fetchAll(PDO::FETCH_COLUMN);
+        $scram = $pdo->query("SELECT CASE WHEN rolpassword LIKE 'SCRAM-SHA-256$%' THEN 'scram' ELSE 'other' END FROM pg_authid WHERE rolname = current_user")->fetchColumn();
+        if ($tls !== 'tls' || $scram !== 'scram' || $rules !== ['hostssl:scram-sha-256', 'hostssl:scram-sha-256', 'host:reject', 'host:reject']) {
             exit(78);
         }
         try {

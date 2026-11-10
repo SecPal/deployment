@@ -442,7 +442,19 @@ def _validate_runtime_pair(body: bytes, now: datetime) -> None:
     """Consume the API publisher's existing pair contract, never select images."""
     pair = _parse_object(body, "runtime pair")
     expected = {"php-fpm": PHP_FPM_IMAGE, "nginx": API_IMAGE}
-    if pair.get("source") != {"repository": "https://github.com/SecPal/api", "commit": API_SOURCE_COMMIT} or not isinstance(pair.get("images"), dict) or set(pair["images"]) != set(expected) or any(pair["images"][role].get("reference") != image for role, image in expected.items()):
+    images = pair.get("images")
+    if (
+        pair.get("source") != {
+            "repository": "https://github.com/SecPal/api", "commit": API_SOURCE_COMMIT,
+        }
+        or not isinstance(images, dict)
+        or set(images) != set(expected)
+        or any(
+            not isinstance(images[role], dict)
+            or images[role].get("reference") != image
+            for role, image in expected.items()
+        )
+    ):
         raise ValueError("runtime pair does not bind the accepted source and both component indexes")
     if now >= datetime.fromisoformat(API_VEX_EXPIRES_AT.replace("Z", "+00:00")):
         raise ValueError("runtime pair requires renewed central security qualification")

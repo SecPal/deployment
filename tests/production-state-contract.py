@@ -278,7 +278,7 @@ class ProductionStateContractTest(unittest.TestCase):
         self.assertIn("Image=ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c", http)
         self.assertIn("Requires=secpal-php-fpm.service", http)
         self.assertIn("Requires=secpal-migrate.service", fpm)
-        self.assertIn("Volume=secpal-fpm.volume:/run/secpal-fpm:rw,z", fpm)
+        self.assertIn("Volume=secpal-fpm.volume:/run/secpal-fpm:rw,z,U", fpm)
         self.assertIn("Volume=secpal-fpm.volume:/run/secpal-fpm:ro,z", http)
         self.assertIn("StopSignal=SIGQUIT", fpm)
         self.assertIn("StopSignal=SIGQUIT", http)

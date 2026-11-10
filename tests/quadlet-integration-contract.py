@@ -351,7 +351,7 @@ class QuadletContract(unittest.TestCase):
         )
         secrets_init = units[f"secpal-int-{INSTANCE}-secrets-init.container"]
         self.assertIn(
-            'Entrypoint=["/bin/bash","/run/secpal/init-local-secrets.sh"]\n',
+            'Entrypoint=["/bin/sh","/run/secpal/init-local-secrets.sh"]\n',
             secrets_init,
         )
         self.assertNotIn("Exec=", secrets_init)
@@ -1009,7 +1009,7 @@ class QuadletContract(unittest.TestCase):
                 )
         self.assert_effective_podman_entrypoint(
             starts["secrets-init"],
-            ["/bin/bash", "/run/secpal/init-local-secrets.sh"],
+            ["/bin/sh", "/run/secpal/init-local-secrets.sh"],
         )
         self.assert_effective_podman_entrypoint(
             starts["migrate"],
