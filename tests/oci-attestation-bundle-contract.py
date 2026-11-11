@@ -311,10 +311,10 @@ class OciAttestationBundleContractTest(unittest.TestCase):
     def test_runtime_pair_binding_and_expiry_fail_closed(self) -> None:
         from datetime import datetime, timezone
         fetcher = load_fetcher()
-        body = {"source": {"repository": "https://github.com/SecPal/api", "commit": "da806926a754d7446cdfa9f6f19ed331e5dbee31"},
-                "images": {"php-fpm": {"reference": "ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73"},
-                           "nginx": {"reference": "ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c"}}}
-        now = datetime(2026, 11, 10, tzinfo=timezone.utc)
+        body = {"source": {"repository": "https://github.com/SecPal/api", "commit": "30a326d6c2e32a9e1251d75bfe603b3026babfc1"},
+                "images": {"php-fpm": {"reference": "ghcr.io/secpal/api@sha256:e6bd9bb7608298e2d4ac807883cbb378d58134025a9b5e8dbec88af919112024"},
+                           "nginx": {"reference": "ghcr.io/secpal/api@sha256:4bfeca7ead5436c5c4b9d51823d2438be91e5f88c25d07b8695a0a5c614a8b90"}}}
+        now = datetime(2026, 11, 11, tzinfo=timezone.utc)
         malformed = json.loads(json.dumps(body))
         malformed["images"] = {"php-fpm": None, "nginx": None}
         with self.assertRaises(ValueError):

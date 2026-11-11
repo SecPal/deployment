@@ -10,7 +10,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 [Container]
 ContainerName=secpal-scheduler
-Image=ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73
+Image=ghcr.io/secpal/api@sha256:e6bd9bb7608298e2d4ac807883cbb378d58134025a9b5e8dbec88af919112024
 Pull=never
 User=10001
 Group=10001

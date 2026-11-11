@@ -18,13 +18,19 @@ digest in rootless local storage, and starts only native Quadlet units with
 ## Current accepted PHP-FPM/Nginx pair
 
 Production and the disposable Quadlet integration now consume the same accepted
-pair from source `da806926a754d7446cdfa9f6f19ed331e5dbee31`:
+pair from source `30a326d6c2e32a9e1251d75bfe603b3026babfc1`:
 
-- PHP-FPM: `ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73`.
-- Nginx: `ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c`.
-- Attested pair artifact: `ghcr.io/secpal/api@sha256:f2b09c90d60973af84bbcba87e89fa98531cae53a0c6600ff24534688517a911`.
-- Publisher run: `42757690047`, candidate attempt `2`, qualification/acceptance
-  attempt `3`; workflow `SecPal/api/.github/workflows/publish-container.yml`.
+- PHP-FPM: `ghcr.io/secpal/api@sha256:e6bd9bb7608298e2d4ac807883cbb378d58134025a9b5e8dbec88af919112024`.
+- Nginx: `ghcr.io/secpal/api@sha256:4bfeca7ead5436c5c4b9d51823d2438be91e5f88c25d07b8695a0a5c614a8b90`.
+- Attested pair artifact: `ghcr.io/secpal/api@sha256:b95c184cfc999d8be7a36c3d9f8a8b9bf402856a0d0923c095fe828e20a3d80a`.
+- Publisher run: [`42987289933`](https://github.com/SecPal/api/actions/runs/42987289933/attempts/2),
+  candidate attempt `1`, qualification/acceptance attempt `2`; workflow `SecPal/api/.github/workflows/publish-container.yml`.
+
+This source includes [API security fix #1615](https://github.com/SecPal/api/pull/1615).
+The operator confirms this pair is already activated on `secpal.dev`. This change
+synchronizes repository declarations only; it neither performs another activation
+nor treats repository or CI results as observations of running demo containers.
+The accepted frontend identity remains unchanged.
 
 The existing anonymous OCI fetcher verifies the pair artifact's digest and
 signed publisher identity, its exact source and both index references, then
@@ -48,6 +54,19 @@ locks, current OCI/security evidence and separately authorized activation.
 Known-vulnerable historical FrankenPHP images remain recovery identities, not
 safe automatic rollback targets. A new accepted source does not relabel any
 older PostgreSQL, cloud, or browser result as current qualification.
+
+## Previous accepted pair (historical publication)
+
+The preceding source contract selected the accepted pair from source `da806926a754d7446cdfa9f6f19ed331e5dbee31`:
+
+- PHP-FPM: `ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73`.
+- Nginx: `ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c`.
+- Attested pair artifact: `ghcr.io/secpal/api@sha256:f2b09c90d60973af84bbcba87e89fa98531cae53a0c6600ff24534688517a911`.
+- Publisher run: `42757690047`, candidate attempt `2`, qualification/acceptance
+  attempt `3`; workflow `SecPal/api/.github/workflows/publish-container.yml`.
+
+These original publication identities remain recorded for historical and recovery
+reference. This entry does not declare retirement or approve automatic rollback.
 
 ## Historical single-image integration identity
 

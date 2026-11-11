@@ -18,7 +18,7 @@ reinterpret the historical Compose run as Podman evidence.
 ## Current API companion
 
 The current Quadlet HTTP companion is Nginx at
-`ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c`,
+`ghcr.io/secpal/api@sha256:4bfeca7ead5436c5c4b9d51823d2438be91e5f88c25d07b8695a0a5c614a8b90`,
 paired with the accepted PHP-FPM index as documented in
 [API image consumption](api-image-consumption.md). The older Phase C identities
 below remain historical evidence and do not qualify this new deployment pair.
