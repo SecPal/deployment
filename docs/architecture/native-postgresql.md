@@ -177,6 +177,11 @@ mount. The explicit migration oneshot boots the fixed application and sets
 owner on its PDO session before invoking its real migrations once. Migration
 execution is absent from application entrypoints and health checks.
 
+The same explicit one-shot now reconciles release-bound address data after
+migrations using a fresh runtime-only connection. See
+[address reconciliation](../production-address-data.md) for its session-lock,
+offline input, resource and pending installation/update-owner contracts.
+
 The stable NOLOGIN backup role has owner-default SELECT on tables and schema
 USAGE, with no DDL or replication privilege. The stable NOLOGIN replication
 role has only the PostgreSQL REPLICATION attribute. No backup or replication

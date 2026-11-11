@@ -95,6 +95,7 @@ python3 tests/production-inventory-contract.py
 python3 tests/standard-installation.py
 python3 tests/native-host-qualification.py
 python3 tests/native-postgresql-production-contract.py
+python3 tests/production-address-reconciliation.py
 python3 tests/certbot-package-provenance.py
 python3 tests/production-state-contract.py
 python3 tests/product-backend-contract.py
