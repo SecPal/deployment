@@ -274,8 +274,8 @@ class ProductionStateContractTest(unittest.TestCase):
         units = self.renderer.build_units(self.contract)
         fpm = units["secpal-php-fpm.container"]
         http = units["secpal-api.container"]
-        self.assertIn("Image=ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73", fpm)
-        self.assertIn("Image=ghcr.io/secpal/api@sha256:f912cd93778454b7c3910e559a5773c9c0532347e07d8e99ee7be231b5f9795c", http)
+        self.assertIn("Image=ghcr.io/secpal/api@sha256:e6bd9bb7608298e2d4ac807883cbb378d58134025a9b5e8dbec88af919112024", fpm)
+        self.assertIn("Image=ghcr.io/secpal/api@sha256:4bfeca7ead5436c5c4b9d51823d2438be91e5f88c25d07b8695a0a5c614a8b90", http)
         self.assertIn("Requires=secpal-php-fpm.service", http)
         self.assertIn("Requires=secpal-migrate.service", fpm)
         self.assertIn("Volume=secpal-fpm.volume:/run/secpal-fpm:rw,z,U", fpm)
@@ -288,7 +288,7 @@ class ProductionStateContractTest(unittest.TestCase):
             self.assertNotIn(forbidden, http.split("[Container]\n", 1)[1].split("[Service]\n", 1)[0])
         for role in ("migrate", "scheduler", "worker-general", "worker-hash-chain"):
             unit = units[f"secpal-{role}.container"]
-            self.assertIn("Image=ghcr.io/secpal/api@sha256:1a84eb5224750efefbb609a1801acce84c8b5e8b8d6e2ec5514b77a8fe3ccd73", unit)
+            self.assertIn("Image=ghcr.io/secpal/api@sha256:e6bd9bb7608298e2d4ac807883cbb378d58134025a9b5e8dbec88af919112024", unit)
             self.assertIn("StopSignal=SIGTERM", unit)
             self.assertNotIn("/run/secpal-fpm", unit)
             self.assertNotIn("destination=/config", unit)

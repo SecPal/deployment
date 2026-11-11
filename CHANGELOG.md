@@ -21,6 +21,11 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Synchronize active API Quadlets, integration and independent workload evidence
+  with the already activated customer-lock security release (API #1615). Preserve
+  the frontend and historical publication/recovery identities; this source-only
+  update performs no new deployment.
+
 - Select the accepted frontend publisher release `d1c5b82f` in source deployment
   and disposable integration, preserving exact OCI/attestation verification.
   Qualify DNS isolation with the image's existing bounded curl probe, including
