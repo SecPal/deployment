@@ -249,6 +249,61 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
+    def test_versioned_address_authorization(self) -> None:
+        for architecture in ("amd64", "arm64"):
+            inventory = load_mapping(
+                ROOT / f"tests/fixtures/production-inventory/valid-{architecture}.yaml"
+            )
+            facts = load_mapping(
+                ROOT / f"tests/fixtures/production-host/valid-{architecture}.yaml"
+            )
+            for version, authorized in ((1, False), (2, True)):
+                with self.subTest(architecture=architecture, version=version):
+                    candidate = copy.deepcopy(inventory)
+                    candidate["schema_version"] = version
+                    candidate["features"]["address_data_imports"] = authorized
+                    self.validate_synthetic_inventory(candidate)
+                    self.validator.validate_host_facts(candidate, facts)
+
+        for version in (1, 2):
+            missing = copy.deepcopy(self.inventory)
+            missing["schema_version"] = version
+            missing["features"].pop("address_data_imports")
+            self.assert_contract_violation(
+                lambda: self.validate_synthetic_inventory(missing)
+            )
+            for authorization in (None, False, True, "true", 0, 1, [], {}):
+                if type(authorization) is bool and authorization == (version == 2):
+                    continue
+                with self.subTest(version=version, authorization=authorization):
+                    candidate = copy.deepcopy(self.inventory)
+                    candidate["schema_version"] = version
+                    candidate["features"]["address_data_imports"] = authorization
+                    self.assert_contract_violation(
+                        lambda: self.validate_synthetic_inventory(candidate)
+                    )
+
+    def test_address_authorization_does_not_enable_other_features(self) -> None:
+        candidate = copy.deepcopy(self.inventory)
+        candidate["schema_version"] = 2
+        candidate["features"]["address_data_imports"] = True
+        for name, expected in candidate["features"].items():
+            if name == "address_data_imports":
+                continue
+            with self.subTest(feature=name):
+                changed = copy.deepcopy(candidate)
+                changed["features"][name] = not expected
+                self.assert_contract_violation(
+                    lambda: self.validate_synthetic_inventory(changed)
+                )
+        for version in (-1, 0, 3, 2.0, "2", True, None):
+            with self.subTest(version=version):
+                changed = copy.deepcopy(candidate)
+                changed["schema_version"] = version
+                self.assert_contract_violation(
+                    lambda: self.validate_synthetic_inventory(changed)
+                )
+
     def test_non_public_special_purpose_addresses_are_rejected(self) -> None:
         host = copy.deepcopy(nested_mapping(self.inventory, "host"))
         for address in (
