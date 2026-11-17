@@ -18,13 +18,102 @@ mechanism.
 
 ## Versioning and migration
 
-Inventory and host-fact schema version 1 are selected by the exact integer
-`schema_version: 1`. Unknown schema versions fail closed. Consumers do not
+Inventory versions 1 and 2 are selected by the exact integer `schema_version`;
+Rocky host facts use their separate version 2 contract. Unknown schema versions
+fail closed. Consumers do not
 coerce old values, ignore new fields, or silently accept a future version. Any
 incompatible schema change requires a reviewed contract change, positive and
 negative fixtures, and reviewed migration notes that state how an operator
 moves an inventory between versions. D.1 provides no implicit inventory
 migration.
+
+### Version 1 to version 2: mandatory release-bound address reconciliation
+
+Version 1 retains `features.address_data_imports: false` and does not authorize
+address downloads, import or activation. Historical v1 inventories and fixtures
+remain valid with their original admission semantics. They cannot authorize the
+release-reconciliation lifecycle introduced by
+[#344](https://github.com/SecPal/deployment/issues/344).
+
+Version 2 changes only that authorization: it requires
+`features.address_data_imports: true`. Address reconciliation is mandatory for
+each admitted release, not an optional installation, customer or tenant feature.
+All other fields and feature restrictions are unchanged. Both online and offline
+CSV input require the same authorization. The selected immutable API release
+exclusively owns the source URL and expected SHA-256; neither belongs in inventory.
+
+To migrate, review a copy of the selected v1 inventory and change exactly:
+
+```diff
+-schema_version: 1
++schema_version: 2
+ features:
+-  address_data_imports: false
++  address_data_imports: true
+```
+
+Validate the complete document with the canonical schema and existing semantic
+validator. Changing just the version or just the gate is invalid. Missing gates,
+non-boolean values, unsupported versions and changes to unrelated disabled gates
+fail admission. There is no automatic conversion or authorization default.
+
+**Lifecycle integration remains blocked.** The fixture validator below does not
+grant Deployment Authority. Construction [#92](https://github.com/SecPal/deployment/issues/92)
+and update/rollback [#93](https://github.com/SecPal/deployment/issues/93) must bind
+the validated v2 inventory and selected immutable release to their activation
+operation under the existing deployment/migration authority. They must enforce
+that decision before any deployment database mutation, and reject absent,
+invalid, v1 or stale authorization with a failed operation, never a successful
+skip. The retained state contract, renderer, an environment variable, an offline
+flag or the PHP one-shot cannot grant themselves that permission. No accepted
+runtime handoff for that decision is implemented here; schema admission alone
+does not authorize PR #345's proposed import execution.
+
+Operators must also qualify a compatible publisher-verified API artifact,
+database/session permissions, resources and source egress or offline bytes before
+execution. A rollback must satisfy #93's application/schema/data compatibility
+and recovery gates; reverting inventory to v1 cannot authorize this lifecycle or
+remove existing verified reference data.
+
+### Runtime ownership and integration order
+
+This policy-only contract changes no migration caller, renderer, Quadlet, image,
+credential delivery or runtime authorization transport. The accepted migration
+caller runs schema migrations only; admitting v2 does not add an importer call.
+The renderer consumes the separate state contract, not a trusted inventory-to-release
+decision. Synthetic inventory validation is not Deployment Activation, and schema
+v2 admission alone never authorizes execution of the importer.
+
+The existing owners must complete the following integration, without another
+authorization authority, unchecked flag, self-issued token or bypass:
+
+1. After this policy is independently accepted and merged, existing
+   [PR #345](https://github.com/SecPal/deployment/pull/345) must consume the contract
+   from main rather than maintain a duplicate copy. Its
+   [P1 authorization finding](https://github.com/SecPal/deployment/pull/345#discussion_r4308219375)
+   remains valid until actual runtime enforcement is proven; policy acceptance
+   does not authorize merging its unprotected execution path.
+2. [#100](https://github.com/SecPal/deployment/issues/100) must reach its own accepted
+   workload-scoped operational authority boundary before #92 can claim integrated
+   activation. This schema does not replace Enrollment or Deployment Activation.
+3. #92 must bind the complete admitted inventory to the exact immutable API release
+   through the existing construction/activation authority. #93 must consume the
+   same authority under its existing update/migration lock for updates, explicit
+   retries and compatible rollback. Missing, invalid, v1, stale or incorrectly
+   release-bound authorization must fail closed before any deployment database
+   mutation, download or import, for online and offline input alike. Direct
+   migration-unit invocation must not bypass that boundary or turn rejection into
+   a successful skip.
+4. Only after that admission may the lifecycle perform migration, reconcile the
+   release dataset using runtime-only database authority, and require successful,
+   nonempty active-data agreement with the release SHA-256 before promotion.
+   Starting an already-successful one-shot is not proof of repeated reconciliation;
+   #93 owns explicit re-execution, deployment locking and compatibility/recovery
+   gates. Reference-data retention alone is not rollback acceptance.
+
+No construction, update, retry, rollback or production success is claimed here.
+Existing native issue dependencies remain authoritative; this contract adds no
+reciprocal dependencies or new lifecycle mechanism.
 
 Duplicate YAML mapping keys are malformed input and fail before schema
 validation. A later duplicate cannot replace an unsupported schema version or
@@ -245,6 +334,11 @@ explicit feature gates fixed to `false` in schema version 1. They describe the
 known dependency surface without authorizing it. Enabling any one requires a
 reviewed schema migration after its documented dependency and later
 secret/runtime contract are available; an inventory cannot opt into it early.
+
+The reviewed v2 contract above authorizes only mandatory release-bound address
+reconciliation. In v2, `address_data_imports` must be `true`; all unrelated gates
+retain their v1 values. This is a versioned policy change, not a freely selectable
+feature switch. Its lifecycle enforcement is still owned by #92/#93.
 
 ## Validation
 
