@@ -25,7 +25,10 @@ python3 scripts/render-fcos-application-poc.py \
 
 The gateway is the only published role and listens on the supplied private
 address. Use the site's existing WireGuard ingress approval for the external
-port. Supply the matching TLS chain and key separately. Use native digest and
+port. Supply the matching TLS chain and key separately. Use the existing
+publicly trusted certificate for the actual lab names. The gateway's HTTPS
+health check and the testing client both require a trusted issuer. The
+`example.invalid` names above are syntax examples. Use native digest and
 publisher admission for each existing image pin before staging it into the
 runtime user's Podman store. Build the generated gateway Containerfile using
 the pinned base, `--pull=never` and `--network=none`. Tag it
@@ -104,8 +107,9 @@ Capture the schema, record and any file dependencies. Stream a consistent
 storage. Keep decryption material separately protected. Verify the archive
 digest, table of contents and full decoding before admitting a restore.
 
-Stage the restore bundle on a different authenticated host and start only
-`secrets-init` and `postgres`. Check a fresh empty schema, independent cluster
+Stage the restore bundle on a different authenticated host. Wait for
+`secrets-init` to complete successfully before starting `postgres`.
+Check a fresh empty schema, independent cluster
 identity and named volume, then stream the authenticated archive to
 `pg_restore --single-transaction --exit-on-error --no-owner --no-acl` on that
 cluster. Apply the schema from the archive. Compare the schema and exact

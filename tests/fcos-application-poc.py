@@ -87,6 +87,15 @@ class ApplicationPoC(unittest.TestCase):
             ):
                 build(INSTANCE, host, address, port)
 
+    def test_direct_oneshots_have_no_ci_wrapper_mount(self):
+        for options in ((), ("lab.example.invalid", "10.0.0.28", 18443)):
+            units, _ = build(INSTANCE, *options)
+            for unit in units.values():
+                self.assertNotIn("/run/secpal/quadlet-oneshot-entrypoint.sh", unit)
+        units, _ = build(INSTANCE, "lab.example.invalid", "10.0.0.28", 18443)
+        self.assertIn('Entrypoint=["php"]', units[f"{PREFIX}-migrate.container"])
+        self.assertNotIn("--no-check-certificate", units[f"{PREFIX}-gateway.container"])
+
 
 if __name__ == "__main__":
     unittest.main()
