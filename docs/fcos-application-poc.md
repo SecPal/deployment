@@ -92,7 +92,12 @@ absent and the pre-existing applications and volumes are healthy.
 
 ## Separate runtime and migration authority on a fresh fixture
 
-Add `--least-privilege` to the stack render command and use a new instance.
+Add `--least-privilege --evidence-validator /reviewed/governance/scripts/secpal-evidence-architecture.py`
+to the stack render command and use a new instance. Select the validator
+from the maintained governance checkout. Rendering requires dispatch
+admission for this source and fails closed if a trusted operation lacks its
+declared semantic diagnostic. Stage only the admitted bundle. The guest
+helper returns the bounded failure stage while suppressing command output.
 The resulting bundle implements the lab portion of
 [#426](https://github.com/SecPal/deployment/issues/426), using the role pattern
 from [#100](https://github.com/SecPal/deployment/issues/100). Follow the

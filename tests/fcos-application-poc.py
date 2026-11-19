@@ -3,18 +3,60 @@
 # SPDX-License-Identifier: MIT
 """Exercise the two disposable FCOS application bundle profiles."""
 
+import json
 from pathlib import Path
 import runpy
+import subprocess
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-build = runpy.run_path(str(ROOT / "scripts/render-fcos-application-poc.py"))["build"]
+renderer = runpy.run_path(str(ROOT / "scripts/render-fcos-application-poc.py"))
+build = renderer["build"]
 INSTANCE = "testpoc01"
 PREFIX = f"secpal-int-{INSTANCE}"
 
 
 class ApplicationPoC(unittest.TestCase):
+    def test_database_diagnostic_contract_fails_closed(self):
+        helper = (ROOT / "scripts/fcos-poc-db-roles.sh").read_text()
+        declaration = json.loads(
+            (ROOT / ".secpal/evidence-architecture.json").read_text()
+        )
+        validate = renderer["validate_database_diagnostics"]
+        validate(helper, declaration)
+        declaration["external_operations"] = [
+            entry
+            for entry in declaration["external_operations"]
+            if entry["id"] != "fcos-db-roles.start-migration"
+        ]
+        with self.assertRaisesRegex(ValueError, "diagnostic coverage"):
+            validate(helper, declaration)
+        with self.assertRaisesRegex(
+            ValueError, "maintained evidence architecture validator"
+        ):
+            renderer["admit_database_dispatch"](None)
+
+    def test_failed_operation_reveals_only_its_stage(self):
+        script = ROOT / "scripts/fcos-poc-db-roles.sh"
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'podman() { printf "%s\\n" diagnostic-redaction-witness >&2; return 23; }; '
+                'export -f podman; bash "$1" prepare fixture01',
+                "bash",
+                str(script),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "fcos-db-roles.rootless-runtime: failed\n")
+
     def test_separate_database_mounts_and_explicit_owner_migration(self):
         units, _ = build(
             INSTANCE, "lab.example.invalid", "10.0.0.28", least_privilege=True

@@ -5,10 +5,12 @@
 
 import argparse
 import ipaddress
+import json
 from pathlib import Path
 import re
 import runpy
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -45,6 +47,73 @@ DATABASE_ASSETS = {
     "scripts/fcos-poc-db-roles.sh": "fcos-poc-db-roles.sh",
     "scripts/production-migrate.php": "production-migrate.php",
 }
+DATABASE_DIAGNOSTIC_PREFIX = "fcos-db-roles."
+
+
+def validate_database_diagnostics(helper, declaration):
+    stages = re.findall(r"^\s*stage=([a-z][a-z-]+)$", helper, flags=re.MULTILINE)
+    operations = [
+        entry
+        for entry in declaration["external_operations"]
+        if entry["id"].startswith(DATABASE_DIAGNOSTIC_PREFIX)
+    ]
+    expected = {DATABASE_DIAGNOSTIC_PREFIX + stage for stage in stages}
+    observed = {
+        entry["id"]
+        for entry in operations
+        if entry["reachable"] is True
+        and entry["fallible"] is True
+        and entry["trusted"] is True
+        and entry["diagnostic_identity"] == {"id": entry["id"], "kind": "semantic"}
+    }
+    if (
+        not stages
+        or len(stages) != len(expected)
+        or len(operations) != len(expected)
+        or observed != expected
+    ):
+        raise ValueError("database role diagnostic coverage is incomplete")
+
+
+def admit_database_dispatch(validator):
+    validate_database_diagnostics(
+        (ROOT / "scripts/fcos-poc-db-roles.sh").read_text(encoding="utf-8"),
+        json.loads(
+            (ROOT / ".secpal/evidence-architecture.json").read_text(encoding="utf-8")
+        ),
+    )
+    if (
+        validator is None
+        or validator.name != "secpal-evidence-architecture.py"
+        or not validator.is_file()
+    ):
+        raise ValueError(
+            "least privilege requires the maintained evidence architecture validator"
+        )
+    try:
+        accepted = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                str(validator.resolve()),
+                "--repository-root",
+                str(ROOT),
+                "--repository",
+                "SecPal/deployment",
+                "--dispatch",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise ValueError(
+            "database role evidence dispatch admission timed out"
+        ) from None
+    if accepted.returncode != 0:
+        raise ValueError("database role evidence dispatch admission rejected")
 
 
 def container_lines(content, prefix, root, role):
@@ -294,6 +363,7 @@ def main():
     parser.add_argument("--port", type=int, default=18443)
     parser.add_argument("--https-port", type=int, default=443)
     parser.add_argument("--least-privilege", action="store_true")
+    parser.add_argument("--evidence-validator", type=Path)
     args = parser.parse_args()
     if args.profile == "restore" and (
         args.domain or args.bind_ipv4 or args.port != 18443 or args.https_port != 443
@@ -310,6 +380,8 @@ def main():
             args.https_port,
             least_privilege=args.least_privilege,
         )
+        if args.least_privilege:
+            admit_database_dispatch(args.evidence_validator)
         write_bundle(args.output, *bundle, least_privilege=args.least_privilege)
     except (ValueError, OSError) as error:
         parser.exit(1, f"FCOS application PoC bundle preparation failed: {error}\n")
