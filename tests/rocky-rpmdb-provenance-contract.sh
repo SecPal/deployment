@@ -22,7 +22,20 @@ source /etc/os-release
 [[ "$ID" == rocky && "$VERSION_ID" == 10.2 ]]
 [[ "$(rpm --version)" == 'RPM version 4.19.1.1' ]]
 
-dnf4 --quiet --disablerepo='*' \
+# This immutable 10.2 fixture admits headers already installed in that image.
+# Moving major-release mirrors drop those exact NEVRAs after a minor release.
+# Use the official historical 10.2 archive for this disposable test only;
+# normal production/update policy must not be redirected to the vault.
+readonly -a fixture_repository_options=(
+  --setopt=baseos.mirrorlist=
+  "--setopt=baseos.baseurl=https://dl.rockylinux.org/vault/rocky/10.2/BaseOS/\$basearch/os/"
+  --setopt=appstream.mirrorlist=
+  "--setopt=appstream.baseurl=https://dl.rockylinux.org/vault/rocky/10.2/AppStream/\$basearch/os/"
+  --setopt=extras.mirrorlist=
+  "--setopt=extras.baseurl=https://dl.rockylinux.org/vault/rocky/10.2/extras/\$basearch/os/"
+)
+
+dnf4 "${fixture_repository_options[@]}" --quiet --disablerepo='*' \
   --enablerepo=baseos,appstream,extras \
   install -y dnf-plugins-core
 [[ "$(dnf4 --version | head -n 1)" == 4.20.0 ]]
@@ -47,7 +60,7 @@ verify_installed_header() {
   [[ "${#identity[@]}" == 6 ]]
   [[ "${identity[0]}" == "$package" ]]
   nevra="${identity[5]}"
-  repositories="$(dnf4 --quiet --disablerepo='*' \
+  repositories="$(dnf4 "${fixture_repository_options[@]}" --quiet --disablerepo='*' \
     --enablerepo=baseos,appstream,extras \
     repoquery-nevra --qf '%{repoid}' "$nevra")"
   [[ "$repositories" == "$expected_repository" ]]
@@ -121,7 +134,7 @@ PY
 # dnf is present in the immutable base image; Podman is installed by the
 # reviewed transaction below. Both cross the identical RPMDB admission path.
 verify_installed_header dnf baseos
-dnf4 --quiet --disablerepo='*' \
+dnf4 "${fixture_repository_options[@]}" --quiet --disablerepo='*' \
   --enablerepo=baseos,appstream,extras install -y podman
 mkdir -m 0700 "$temporary_directory/gnupg"
 fingerprint="$(GNUPGHOME="$temporary_directory/gnupg" \
