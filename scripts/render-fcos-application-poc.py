@@ -50,14 +50,20 @@ DATABASE_ASSETS = {
 DATABASE_DIAGNOSTIC_PREFIX = "fcos-db-roles."
 
 
-def validate_database_diagnostics(helper, declaration):
+def database_diagnostic_ids(helper):
     stages = re.findall(r"^\s*stage=([a-z][a-z-]+)$", helper, flags=re.MULTILINE)
+    if not stages or len(stages) != len(set(stages)):
+        raise ValueError("database role diagnostic coverage is incomplete")
+    return {DATABASE_DIAGNOSTIC_PREFIX + stage for stage in stages}
+
+
+def validate_database_diagnostics(helper, declaration):
+    expected = database_diagnostic_ids(helper)
     operations = [
         entry
         for entry in declaration["external_operations"]
         if entry["id"].startswith(DATABASE_DIAGNOSTIC_PREFIX)
     ]
-    expected = {DATABASE_DIAGNOSTIC_PREFIX + stage for stage in stages}
     observed = {
         entry["id"]
         for entry in operations
@@ -66,12 +72,7 @@ def validate_database_diagnostics(helper, declaration):
         and entry["trusted"] is True
         and entry["diagnostic_identity"] == {"id": entry["id"], "kind": "semantic"}
     }
-    if (
-        not stages
-        or len(stages) != len(expected)
-        or len(operations) != len(expected)
-        or observed != expected
-    ):
+    if len(operations) != len(expected) or observed != expected:
         raise ValueError("database role diagnostic coverage is incomplete")
 
 
