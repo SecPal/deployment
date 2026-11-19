@@ -195,6 +195,78 @@ credentials. Production credential issuance and custody, rotation of an
 activated deployment, per-workload policy, and broader PG18 infrastructure
 qualification retain their existing owners.
 
+## ARM64 PostgreSQL process-crash qualification
+
+Use the least-privilege procedure above for a disposable slot on an admitted
+aarch64 FCOS host. Render a new instance and omit the gateway's
+`PublishPort` setting before staging. Require empty `podman port` output
+for all slot containers. Run frontend and API probes inside the isolated
+gateway network namespace with certificate validation and the expected
+HTTPS hostname. Keep the established application and its database running.
+
+Resolve the reviewed PostgreSQL OCI index to its `linux/arm64/v8` child,
+verify both manifest digests and the child configuration digest, and compare
+that configuration identity and architecture with the image used by the
+running container. In the PostgreSQL 18.6 run, the Docker Official
+`docker.io/library/postgres` index was
+`sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af`.
+The native image manifest was
+`sha256:4d155aa3f2c2cc1838bb70e81396f76373ec7275ec9ce9cf32873cd677c9a992`.
+
+Use the application's PostgreSQL connection for both test transactions.
+Require `fsync`, `full_page_writes` and `synchronous_commit` to be on
+and the witness table to be permanent and WAL-logged. In one runtime
+session, begin a transaction, insert a unique marker into the witness table
+and keep the session open. Capture its transaction ID and WAL insert LSN.
+In another runtime session, insert a different marker, commit, wait for
+the successful client acknowledgment and record the WAL flush LSN. Before
+signaling, verify that the held transaction is still active, its insert LSN
+is covered by the flush LSN and only the acknowledged row is visible to a
+third session. Keep the test window bounded.
+[PostgreSQL WAL settings](https://www.postgresql.org/docs/18/runtime-config-wal.html)
+
+Immediately before the crash, verify the authenticated host, immutable
+container ID, independent database system identifier, distinct external
+named volume, private PID namespace and internal Podman network. Compare
+these with the live application's database and abort on any ambiguity.
+Within the verified disposable container ID, read the postmaster PID from
+`$PGDATA/postmaster.pid`, compare its executable with the installed
+PostgreSQL binary and send SIGKILL only to that process. Capture the
+container's exit status and the PostgreSQL journal/log lines establishing
+automatic WAL recovery with redo start, redo completion and readiness.
+Distinguish the automatic Quadlet/systemd restart from the subsequent
+controlled container recreation.
+
+Compare the database system identifier, schema dump with randomized
+`pg_dump` restriction delimiters excluded, migration ledger, object
+ownership and effective grants. Read back the exact acknowledged witness
+and synthetic API record. Verify the open transaction's marker is absent.
+Repeat the runtime denial probe and verify that the migration unit is
+inactive, its login is disabled, and its credentials remain absent from
+the runtime. Repeat the authenticated API, worker, scheduler and persistence
+checks after the controlled recreation. Preserve bounded private evidence
+before cleaning up only the disposable slot.
+
+The ARM64 run recorded one Podman exit with status 137 and one automatic
+systemd restart. PostgreSQL replayed WAL and opened the same cluster on the
+same volume. The acknowledged transaction and exact synthetic API record
+survived. The uncommitted marker was absent despite its WAL insert LSN
+being covered by the pre-crash flush LSN. The schema, 86-entry migration
+ledger, role memberships, object ownership and grants matched after WAL
+recovery and clean container recreation. The runtime still received
+SQLSTATE `42501` for all 15 denied SQL operations. PostgreSQL rejected both
+plaintext and unrelated database connections. The migration login stayed
+disabled and neither restart ran a migration. The private HTTPS API and
+both workers passed their functional checks after both restarts.
+SELinux remained Enforcing and the slot was removed after qualification.
+
+This run qualifies recovery from a PostgreSQL process crash with the guest
+kernel and backing storage still running. Host power loss, loss of the
+storage device, PostgreSQL HA, archive recovery and production secret
+authority require separate evidence. Issue #426 retains the broader
+PostgreSQL acceptance and the reference to the private report.
+[PostgreSQL infrastructure qualification](https://github.com/SecPal/deployment/issues/426)
+
 ## Cross-host logical restore
 
 The restore bundle runs only PostgreSQL, API and FPM on a new internal network
