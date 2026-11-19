@@ -69,6 +69,16 @@ FirstBoot/presets and must not return. The installation marker and eventual
 machine-id must agree. A complete reinstall generates fresh SSH/WireGuard host
 keys; an ordinary reboot preserves them.
 
+The pure `qualification(settings, lock)` helper prepares the existing disposable
+rootless Quadlet fixture and persistent marker script. It selects the exact
+native installer child digest already used for host qualification, uses
+`Pull=never`, no network, a read-only root filesystem, no added privileges and
+no Linux capabilities. Stage/admit that image in the runtime user's store before
+using the fixture. Publish the unit only in its administrator-owned user Quadlet
+directory and the script/state in the runtime-owned external qualification path.
+The helper neither writes those files nor enables a unit. It is test workload
+preparation, not product or database activation.
+
 Zincati is explicitly disabled during controlled qualification. Production
 update/reboot authorization, rolling order, health admission and rollback remain
 owned by the existing lifecycle and HA contracts; a time window alone does not

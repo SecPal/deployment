@@ -70,7 +70,12 @@ class PreparationTests(unittest.TestCase):
                 ):
                     self.assertIn(node.attr, attributes[node.value.id])
 
-        for function in (module.check, module.admit, module.render):
+        for function in (
+            module.check,
+            module.admit,
+            module.render,
+            module.qualification,
+        ):
             check_source(textwrap.dedent(inspect.getsource(function)))
         for source in (
             "def render(x):\n return open(x)\n",
@@ -102,6 +107,32 @@ class PreparationTests(unittest.TestCase):
                     else 3 if group == "secpal-runtime" else 0
                 )
                 self.assertTrue((int(mode, 8) >> shift) & 1, path)
+
+    def test_disposable_quadlet_fixture_preserves_qualified_isolation_and_native_pin(
+        self,
+    ):
+        lock = json.loads((ROOT / "config/fcos/artifacts.json").read_text())
+        for arch in ("x86_64", "aarch64"):
+            settings = module.fixture(arch)
+            fixture = module.qualification(settings, lock)
+            unit = fixture["quadlet"]
+            self.assertIn(
+                "Image=quay.io/coreos/coreos-installer@"
+                + lock["installer"][arch + "_manifest"],
+                unit,
+            )
+            for setting in (
+                "Pull=never",
+                "Network=none",
+                "ReadOnly=true",
+                "NoNewPrivileges=true",
+                "DropCapability=ALL",
+                "Volume=/srv/secpal/runtime/qualification:/state:Z",
+            ):
+                self.assertIn(setting + "\n", unit)
+            self.assertNotIn("Network=host", unit)
+            self.assertIn(settings["installation_id"], fixture["script"])
+            self.assertNotIn("private-key", json.dumps(fixture))
 
     def test_reinstallation_identity_preserves_first_boot_semantics(self):
         settings = module.fixture("x86_64")

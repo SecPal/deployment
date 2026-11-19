@@ -205,6 +205,43 @@ d /etc/containers/systemd/users/{mapping['service_uid']} 0755 root root -
     }
 
 
+def qualification(settings, lock):
+    """Prepare the existing disposable fixture; do not activate a workload."""
+    s = admit(settings)
+    image = lock["installer"][s["architecture"] + "_manifest"]
+    check(type(image) is str and re.fullmatch(r"sha256:[0-9a-f]{64}", image))
+    return {
+        "quadlet": f"""[Unit]
+Description=SecPal rootless FCOS persistence qualification
+StartLimitIntervalSec=60
+StartLimitBurst=3
+[Container]
+Image=quay.io/coreos/coreos-installer@{image}
+Pull=never
+ContainerName=secpal-qualification
+Entrypoint=/usr/bin/sh
+Exec=/state/run.sh
+Network=none
+Volume=/srv/secpal/runtime/qualification:/state:Z
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+[Service]
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=90
+MemoryMax=96M
+TasksMax=64
+[Install]
+WantedBy=default.target
+""",
+        "script": "#!/usr/bin/sh\nset -eu\numask 077\n"
+        "if ! test -e /state/marker; then\n"
+        f" printf '%s\\n' '{s['installation_id']}' > /state/marker\n"
+        "fi\nexec /usr/bin/sleep infinity\n",
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--settings", type=Path)
