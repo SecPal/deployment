@@ -118,6 +118,25 @@ class BrokerSecurityTests(unittest.TestCase):
                 "rescue_enabled": False,
                 "locked": False,
                 "name": "DO-NOT-LOG",
+                "primary_disk_size": 40,
+                "public_net": {
+                    "ipv4": {
+                        "id": 301,
+                        "ip": "192.0.2.101",
+                        "blocked": False,
+                        "dns_ptr": "x86.example.test",
+                    },
+                    "ipv6": {
+                        "id": 401,
+                        "ip": "2001:db8:101::/64",
+                        "blocked": False,
+                        "dns_ptr": [],
+                    },
+                    "firewalls": [{"id": 501, "status": "applied"}],
+                    "floating_ips": [1001],
+                },
+                "volumes": [],
+                "private_net": [],
             }
         }
 
@@ -140,6 +159,25 @@ class BrokerSecurityTests(unittest.TestCase):
         result["server"]["server_type"]["name"] = result["server"]["server_type"].pop(
             "server_type"
         )
+        public = result["server"]["public_net"]
+        public["ipv4"].update(id=200 + sid, ip=f"192.0.2.{sid}")
+        public["ipv6"].update(id=300 + sid, ip=f"2001:db8:{sid}::/64")
+        if sid != 101:
+            result["server"]["primary_disk_size"] = 80
+        if sid == 103:
+            public["ipv6"]["dns_ptr"] = [
+                {"ip": "2001:db8:103::10", "dns_ptr": "arm.example.test"}
+            ]
+            public["firewalls"].append({"id": 502, "status": "pending"})
+            result["server"]["volumes"] = [601]
+            result["server"]["private_net"] = [
+                {
+                    "network": 701,
+                    "ip": "10.0.0.2",
+                    "alias_ips": ["10.0.0.3"],
+                    "mac_address": "DO-NOT-LOG",
+                }
+            ]
         return result
 
     def test_list_is_exact_id_reads_and_normalizes_provider_shape(self):
@@ -157,6 +195,133 @@ class BrokerSecurityTests(unittest.TestCase):
             ],
         )
         self.assertNotIn("DO-NOT-LOG", json.dumps(result))
+
+    def test_inventory_preserves_legacy_target_checks(self):
+        transport = type(
+            "Transport", (), {"request": lambda _, *a: self.transport(*a)}
+        )()
+        for sid, server_type, architecture, disk in (
+            (101, "cx23", "x86", 40),
+            (103, "cax21", "arm", 80),
+        ):
+            with self.subTest(sid=sid):
+                facts = broker.execute(
+                    {"operation": "server status", "server_id": sid},
+                    self.policy,
+                    transport,
+                )["server"]
+                expected = self.transport("GET", f"/servers/{sid}")["server"]
+                self.assertEqual(
+                    set(facts),
+                    {
+                        "id", "server_type", "architecture", "status",
+                        "delete_protection", "rebuild_protection", "rescue_enabled",
+                        "locked", "primary_disk_size", "public_net", "volumes",
+                        "private_net",
+                    },
+                )
+                self.assertEqual(
+                    (facts["id"], facts["server_type"], facts["architecture"],
+                     facts["primary_disk_size"]),
+                    (sid, server_type, architecture, disk),
+                )
+                self.assertTrue(facts["delete_protection"] and facts["rebuild_protection"])
+                self.assertEqual(
+                    facts["public_net"],
+                    {key: expected["public_net"][key] for key in ("ipv4", "ipv6", "firewalls")},
+                )
+                self.assertEqual(facts["volumes"], expected["volumes"])
+                self.assertEqual(
+                    facts["private_net"],
+                    [{key: item[key] for key in ("network", "ip", "alias_ips")}
+                     for item in expected["private_net"]],
+                )
+                self.assertNotIn("DO-NOT-LOG", json.dumps(facts))
+
+    def test_inventory_rejects_conflicting_exclusive_attachments(self):
+        for key, value in (
+            ("id", 301),
+            ("ip", "192.0.2.101"),
+        ):
+
+            def observe(_, method, path):
+                raw = self.transport(method, path)
+                if path == "/servers/102":
+                    raw["server"]["public_net"]["ipv4"][key] = value
+                return raw
+
+            transport = type("Transport", (), {"request": observe})()
+            with self.subTest(key=key), self.assertRaisesRegex(
+                broker.Rejected, "provider.shape"
+            ) as caught:
+                broker.execute({"operation": "servers list"}, self.policy, transport)
+            self.assertEqual(caught.exception.stage, "server.inspect")
+
+    def test_missing_malformed_or_conflicting_inventory_is_rejected(self):
+        missing = object()
+        for path, value in (
+            (("primary_disk_size",), missing),
+            (("primary_disk_size",), True),
+            (("primary_disk_size",), 0),
+            (("public_net",), missing),
+            (("public_net", "ipv4"), None),
+            (("public_net", "ipv4", "id"), "301"),
+            (("public_net", "ipv4", "ip"), "2001:db8::1"),
+            (("public_net", "ipv4", "ip"), "0.0.0.0"),
+            (("public_net", "ipv4", "blocked"), 0),
+            (("public_net", "ipv4", "dns_ptr"), "bad\nname"),
+            (("public_net", "ipv6"), missing),
+            (("public_net", "ipv6", "id"), 301),
+            (("public_net", "ipv6", "ip"), "2001:db8:101::1/64"),
+            (("public_net", "ipv6", "ip"), "2001:db8:101::/48"),
+            (("public_net", "ipv6", "ip"), "::/64"),
+            (("public_net", "ipv6", "dns_ptr"), None),
+            (("public_net", "ipv6", "dns_ptr"),
+             [{"ip": "2001:db8:102::1", "dns_ptr": "outside.example.test"}]),
+            (("public_net", "firewalls"), missing),
+            (("public_net", "firewalls"), [{"id": 0, "status": "applied"}]),
+            (("public_net", "firewalls"), [{"id": 501, "status": "unknown"}]),
+            (("public_net", "firewalls"),
+             [{"id": 501, "status": "applied"}, {"id": 501, "status": "pending"}]),
+            (("volumes",), missing),
+            (("volumes",), [601, 601]),
+            (("volumes",), [False]),
+            (("private_net",), missing),
+            (("private_net",), [{"network": 701, "ip": "10.0.0.2"}]),
+            (("private_net",), [{"network": 701, "ip": "192.0.2.2", "alias_ips": []}]),
+            (("private_net",),
+             [{"network": 701, "ip": "10.0.0.2", "alias_ips": ["10.0.0.2"]}]),
+            (("private_net",),
+             [{"network": 701, "ip": "10.0.0.2", "alias_ips": []},
+              {"network": 701, "ip": "10.0.0.3", "alias_ips": []}]),
+        ):
+            with self.subTest(path=path, missing=value is missing):
+                raw = copy.deepcopy(self.raw)
+                parent = raw["server"]
+                for key in path[:-1]:
+                    parent = parent[key]
+                if value is missing:
+                    del parent[path[-1]]
+                else:
+                    parent[path[-1]] = value
+                transport = type("Transport", (), {"request": lambda *_: raw})()
+                with self.assertRaisesRegex(broker.Rejected, "provider.shape") as caught:
+                    broker.execute(
+                        {"operation": "server inspect", "server_id": 101},
+                        self.policy,
+                        transport,
+                    )
+                self.assertEqual(caught.exception.stage, "server.inspect")
+
+    def test_inventory_reply_obeys_existing_wire_bound(self):
+        transport = type(
+            "Transport", (), {"request": lambda _, *a: self.transport(*a)}
+        )()
+        with patch.object(broker, "MAX_RESPONSE", 512), self.assertRaisesRegex(
+            broker.Rejected, "provider.shape"
+        ) as caught:
+            broker.execute({"operation": "servers list"}, self.policy, transport)
+        self.assertEqual(caught.exception.stage, "socket.reply")
 
     def test_wrong_identity_architecture_type_and_protection_fail_closed(self):
         edits = [
@@ -367,6 +532,7 @@ class BrokerSecurityTests(unittest.TestCase):
             output = json.dumps(logs) + response.decode()
             self.assertNotIn("SYNTHETIC-SECRET", output)
             self.assertNotIn("DO-NOT-LOG", output)
+            self.assertNotIn("192.0.2.101", json.dumps(logs))
         denied = copy.deepcopy(self.data)
         denied["caller_uid"] = 3001
         denied = broker.Policy.from_dict(denied)
@@ -389,6 +555,10 @@ class BrokerSecurityTests(unittest.TestCase):
             ("GET", "/servers/104"),
             ("GET", "/servers/101/../104"),
             ("GET", "/servers/101?path=/servers/104"),
+            ("GET", "/primary_ips/301"),
+            ("GET", "/volumes/601"),
+            ("GET", "/networks/701"),
+            ("GET", "/firewalls/501"),
         ]:
             with self.subTest(args=args), patch.object(
                 broker.http.client,
@@ -514,6 +684,7 @@ class BrokerSecurityTests(unittest.TestCase):
             "dict",
             "json",
             "re",
+            "ipaddress",
             "require",
             "closed",
             "integer",
@@ -530,8 +701,20 @@ class BrokerSecurityTests(unittest.TestCase):
             "map",
             "list",
             "all",
+            "any",
+            "parse_address",
+            "validate_dns_ptr",
+            "normalize_public_net",
+            "normalize_private_net",
+            "PRIVATE_IPV4_NETWORKS",
+            "MAX_RESPONSE",
         }
-        module_calls = {"json": {"loads"}, "re": {"fullmatch"}, "ACTIONS": {"values"}}
+        module_calls = {
+            "json": {"loads", "dumps"},
+            "re": {"fullmatch"},
+            "ipaddress": {"IPv4Address", "IPv6Address", "IPv6Network"},
+            "ACTIONS": {"values"},
+        }
 
         def check_source(source):
             table = symtable.symtable(source, "broker-pure-surface", "exec")
@@ -559,8 +742,13 @@ class BrokerSecurityTests(unittest.TestCase):
             broker.Rejected.__init__,
             broker.Policy.from_dict,
             broker.admit_request,
+            broker.parse_address,
+            broker.validate_dns_ptr,
+            broker.normalize_public_net,
+            broker.normalize_private_net,
             broker.normalize_server,
             broker.admit_server,
+            broker.admit_server_list,
             broker.normalize_action,
             broker.admit_action,
             broker.assemble_reply,

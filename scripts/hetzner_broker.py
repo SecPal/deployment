@@ -15,6 +15,7 @@ import argparse
 from dataclasses import dataclass
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 import pwd
@@ -33,6 +34,11 @@ import uuid
 ORIGIN = "api.hetzner.cloud"
 MAX_RESPONSE = 131072
 MAX_REQUEST = 2048
+PRIVATE_IPV4_NETWORKS = (
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+)
 READS = frozenset(
     {"servers list", "server inspect", "server status", "server action-status"}
 )
@@ -271,6 +277,123 @@ def admit_request(request, policy):
     return dict(request)
 
 
+def parse_address(value, parse):
+    # A full IPv6 address with an embedded IPv4 tail and /64 fits in 48 bytes.
+    require(
+        type(value) is str and 0 < len(value) <= 48 and "%" not in value,
+        "provider.shape",
+    )
+    try:
+        return parse(value)
+    except ValueError:
+        raise Rejected("provider.shape") from None
+
+
+def validate_dns_ptr(value):
+    require(type(value) is str and 0 < len(value) <= 254, "provider.shape")
+    hostname = value.removesuffix(".")
+    require(
+        len(hostname) <= 253
+        and all(
+            re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", label)
+            for label in hostname.split(".")
+        ),
+        "provider.shape",
+    )
+
+
+def normalize_public_net(raw):
+    require(type(raw) is dict, "provider.shape")
+    ipv4, ipv6 = raw.get("ipv4"), raw.get("ipv6")
+    for assignment in (ipv4, ipv6):
+        require(
+            type(assignment) is dict
+            and integer(assignment.get("id"))
+            and type(assignment.get("blocked")) is bool,
+            "provider.shape",
+        )
+    address = parse_address(ipv4.get("ip"), ipaddress.IPv4Address)
+    prefix = parse_address(ipv6.get("ip"), ipaddress.IPv6Network)
+    require(
+        not address.is_unspecified
+        and not prefix.network_address.is_unspecified
+        and prefix.prefixlen == 64
+        and ipv4["id"] != ipv6["id"],
+        "provider.shape",
+    )
+    validate_dns_ptr(ipv4.get("dns_ptr"))
+    records = ipv6.get("dns_ptr")
+    require(type(records) is list, "provider.shape")
+    ptrs = []
+    ptr_addresses = set()
+    for record in records:
+        require(type(record) is dict, "provider.shape")
+        address = parse_address(record.get("ip"), ipaddress.IPv6Address)
+        require(address in prefix and address not in ptr_addresses, "provider.shape")
+        validate_dns_ptr(record.get("dns_ptr"))
+        ptr_addresses.add(address)
+        ptrs.append({"ip": record["ip"], "dns_ptr": record["dns_ptr"]})
+
+    firewalls = raw.get("firewalls")
+    require(
+        type(firewalls) is list
+        and all(
+            type(item) is dict
+            and integer(item.get("id"))
+            and item.get("status") in ("applied", "pending")
+            for item in firewalls
+        )
+        and len({item["id"] for item in firewalls}) == len(firewalls),
+        "provider.shape",
+    )
+    return {
+        "ipv4": {key: ipv4[key] for key in ("id", "ip", "blocked", "dns_ptr")},
+        "ipv6": {
+            "id": ipv6["id"],
+            "ip": ipv6["ip"],
+            "blocked": ipv6["blocked"],
+            "dns_ptr": ptrs,
+        },
+        "firewalls": [{"id": item["id"], "status": item["status"]} for item in firewalls],
+    }
+
+
+def normalize_private_net(raw):
+    require(type(raw) is list, "provider.shape")
+    attachments = []
+    for item in raw:
+        require(
+            type(item) is dict
+            and integer(item.get("network"))
+            and type(item.get("alias_ips")) is list,
+            "provider.shape",
+        )
+        addresses = [
+            parse_address(address, ipaddress.IPv4Address)
+            for address in [item.get("ip"), *item["alias_ips"]]
+        ]
+        require(
+            len(set(addresses)) == len(addresses)
+            and all(
+                any(address in network for network in PRIVATE_IPV4_NETWORKS)
+                for address in addresses
+            ),
+            "provider.shape",
+        )
+        attachments.append(
+            {
+                "network": item["network"],
+                "ip": item["ip"],
+                "alias_ips": list(item["alias_ips"]),
+            }
+        )
+    require(
+        len({item["network"] for item in attachments}) == len(attachments),
+        "provider.shape",
+    )
+    return attachments
+
+
 def normalize_server(raw):
     require(type(raw) is dict and type(raw.get("server")) is dict, "provider.shape")
     s = raw["server"]
@@ -307,6 +430,15 @@ def normalize_server(raw):
         type(s.get("rescue_enabled")) is bool and type(s.get("locked")) is bool,
         "provider.shape",
     )
+    disk = s.get("primary_disk_size")
+    volumes = s.get("volumes")
+    require(
+        integer(disk)
+        and type(volumes) is list
+        and all(integer(volume) for volume in volumes)
+        and len(set(volumes)) == len(volumes),
+        "provider.shape",
+    )
     return {
         "id": s["id"],
         "server_type": kind["name"],
@@ -316,6 +448,10 @@ def normalize_server(raw):
         "rebuild_protection": protection["rebuild"],
         "rescue_enabled": s["rescue_enabled"],
         "locked": s["locked"],
+        "primary_disk_size": disk,
+        "public_net": normalize_public_net(s.get("public_net")),
+        "volumes": list(volumes),
+        "private_net": normalize_private_net(s.get("private_net")),
     }
 
 
@@ -332,6 +468,28 @@ def admit_server(observed, sid, policy):
         "protection.invalid",
     )
     return observed
+
+
+def admit_server_list(servers):
+    primary_ids = [
+        server["public_net"][family]["id"]
+        for server in servers
+        for family in ("ipv4", "ipv6")
+    ]
+    volumes = [volume for server in servers for volume in server["volumes"]]
+    require(
+        len(set(primary_ids)) == len(primary_ids) and len(set(volumes)) == len(volumes),
+        "provider.shape",
+    )
+    for family, parse in (
+        ("ipv4", ipaddress.IPv4Address),
+        ("ipv6", ipaddress.IPv6Network),
+    ):
+        addresses = {
+            parse_address(server["public_net"][family]["ip"], parse)
+            for server in servers
+        }
+        require(len(addresses) == len(servers), "provider.shape")
 
 
 def normalize_action(raw):
@@ -388,6 +546,9 @@ def assemble_reply(code, server=None, servers=None, action=None):
         result["servers"] = servers
     if action is not None:
         result["action"] = {key: action[key] for key in ("id", "command", "status")}
+    # Use the same JSON encoding and newline budget as the socket and client.
+    if len(json.dumps(result)) + 1 > MAX_RESPONSE:
+        raise Rejected("provider.shape", "socket.reply")
     return result
 
 
@@ -538,6 +699,7 @@ def execute(request, policy, transport, ledger=None, now=None):
             )
             for sid in sorted(policy.servers, key=int)
         ]
+        at_stage("server.inspect", lambda: admit_server_list(servers))
         return assemble_reply("observed", servers=servers)
     sid = request["server_id"]
     path = "/servers/" + str(sid)
