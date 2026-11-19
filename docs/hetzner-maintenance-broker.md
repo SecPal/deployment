@@ -81,11 +81,11 @@ Keep actual inventory outside all Git repositories. Its closed shape is:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "service_uid": 2001,
   "caller_uid": 2002,
   "expires_at": 4102444800,
-  "allow_mutations": false,
+  "allowed_mutations": [],
   "servers": {
     "101": { "architecture": "x86", "server_type": "cx23" }
   },
@@ -99,8 +99,10 @@ the installation example are replaceable operator choices, not required broker
 identities: policy uses the exact approved caller UID. The administrator resolves actual UIDs and a
 bounded expiry, verifies every immutable ID and the existing Rescue public-key
 identity, and installs the private policy. Never expand it automatically.
-Initial installation requires `allow_mutations=false`; no client request can
-override it. Both provider protection flags must remain true even for reads.
+Initial installation requires `allowed_mutations=[]`; no client request can
+override it. Later authorization names only the exact approved operation strings
+from the closed mutation set; a Rescue-only grant does not enable reboot or
+power-off. Version 1 boolean mutation policies are rejected rather than widened. Both provider protection flags must remain true even for reads.
 Unexpected identity, architecture, type, protection or policy expiry fails closed.
 
 When separately authorized later, Rescue uses fixed `linux64` and only
@@ -144,7 +146,7 @@ An administrator, in their existing authorized root session, performs:
    `secpal-hetzner-broker`, mode `0750`. Construct the private policy from the
    approved inventory, set `service_uid` to `id -u secpal-hetzner-broker`,
    `caller_uid` to `id -u codex`, expiry to the approved execution window and
-   `allow_mutations=false`. Install it as `policy.json`, root-owned with the
+   `allowed_mutations=[]`. Install it as `policy.json`, root-owned with the
    service group and mode `0640`. Do not copy a guessed service UID or expiry.
 4. Through Hetzner Console, independently provision a fresh token for the exact
    approved existing project. It must never enter Codex, Git, shell arguments or service

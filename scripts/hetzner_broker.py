@@ -154,7 +154,7 @@ class Policy:
     service_uid: int
     caller_uid: int
     expires_at: int
-    allow_mutations: bool
+    allowed_mutations: tuple
     servers: dict
     excluded_server_ids: tuple
     rescue_ssh_key_ids: tuple
@@ -168,18 +168,28 @@ class Policy:
                 "service_uid",
                 "caller_uid",
                 "expires_at",
-                "allow_mutations",
+                "allowed_mutations",
                 "servers",
                 "excluded_server_ids",
                 "rescue_ssh_key_ids",
             },
             "policy.invalid",
         )
-        require(type(data["version"]) is int and data["version"] == 1, "policy.invalid")
+        require(type(data["version"]) is int and data["version"] == 2, "policy.invalid")
         for key in ["service_uid", "caller_uid", "expires_at"]:
             require(integer(data[key]), "policy.invalid")
         require(data["service_uid"] != data["caller_uid"], "policy.invalid")
-        require(type(data["allow_mutations"]) is bool, "policy.invalid")
+        mutations = data["allowed_mutations"]
+        require(
+            type(mutations) is list
+            and len(mutations) <= len(ACTIONS)
+            and all(
+                type(operation) is str and operation in ACTIONS
+                for operation in mutations
+            )
+            and len(set(mutations)) == len(mutations),
+            "policy.invalid",
+        )
         servers = data["servers"]
         require(type(servers) is dict and 1 <= len(servers) <= 64, "policy.invalid")
         for sid, expected in servers.items():
@@ -214,7 +224,7 @@ class Policy:
             data["service_uid"],
             data["caller_uid"],
             data["expires_at"],
-            data["allow_mutations"],
+            tuple(mutations),
             servers,
             tuple(data["excluded_server_ids"]),
             tuple(data["rescue_ssh_key_ids"]),
@@ -247,7 +257,7 @@ def admit_request(request, policy):
     if "action_id" in request:
         require(integer(request["action_id"]), "request.invalid")
     if operation in ACTIONS:
-        require(policy.allow_mutations, "mutation.disabled")
+        require(operation in policy.allowed_mutations, "mutation.disabled")
         require(
             type(request["request_id"]) is str
             and re.fullmatch(r"[0-9a-f]{32}", request["request_id"]),
@@ -406,8 +416,11 @@ class HetznerTransport:
             )
         elif method == "POST":
             require(
-                self._policy.allow_mutations
-                and suffix in {v[0] for v in ACTIONS.values()},
+                suffix
+                in {
+                    ACTIONS[operation][0]
+                    for operation in self._policy.allowed_mutations
+                },
                 "mutation.disabled",
             )
             expected = (
@@ -608,7 +621,7 @@ def execute(request, policy, transport, ledger=None, now=None):
     return result
 
 
-def trusted_file(path, owners, *, secret=False, limit=16384):
+def trusted_file(path, owners, *, secret=False, limit=16384, ancestor_owners=None):
     """Check every ancestor, no symlinks, then verify the opened regular inode."""
     path = Path(path)
     require(path.is_absolute() and ".." not in path.parts, "custody.invalid")
@@ -616,7 +629,7 @@ def trusted_file(path, owners, *, secret=False, limit=16384):
         info = parent.lstat()
         require(
             stat.S_ISDIR(info.st_mode)
-            and info.st_uid in owners
+            and info.st_uid in (owners if ancestor_owners is None else ancestor_owners)
             and info.st_mode & 0o022 == 0,
             "custody.invalid",
         )
@@ -752,7 +765,13 @@ def inspect_ledger_custody(policy, ledger_path):
     )
     require(not Path(ledger_path).is_symlink(), "custody.invalid")
     if Path(ledger_path).exists():
-        trusted_file(ledger_path, {policy.service_uid}, secret=True, limit=None)
+        trusted_file(
+            ledger_path,
+            {policy.service_uid},
+            secret=True,
+            limit=None,
+            ancestor_owners={0, policy.service_uid},
+        )
 
 
 def activated_socket():
@@ -773,7 +792,7 @@ def serve(policy_path, credential_path, ledger_path):
     # Source and policy are administrator-owned; a user checkout cannot serve.
     at_stage(
         "custody.source",
-        lambda: trusted_file(Path(__file__).resolve(), {0}, limit=65536),
+        lambda: trusted_file(Path(__file__), {0}, limit=65536),
     )
     policy = at_stage(
         "custody.policy",

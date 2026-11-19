@@ -55,11 +55,11 @@ class FoundationTests(unittest.TestCase):
     def test_closed_read_only_dispatch(self):
         policy = broker.Policy.from_dict(
             {
-                "version": 1,
+                "version": 2,
                 "service_uid": 2001,
                 "caller_uid": 2002,
                 "expires_at": 4102444800,
-                "allow_mutations": False,
+                "allowed_mutations": [],
                 "servers": {
                     "101": {"architecture": "x86", "server_type": "cx23"},
                     "102": {"architecture": "x86", "server_type": "cx33"},
@@ -94,11 +94,11 @@ class FoundationTests(unittest.TestCase):
 class BrokerSecurityTests(unittest.TestCase):
     def setUp(self):
         self.data = {
-            "version": 1,
+            "version": 2,
             "service_uid": 2001,
             "caller_uid": os.getuid(),
             "expires_at": 4102444800,
-            "allow_mutations": False,
+            "allowed_mutations": [],
             "servers": {
                 "101": {"architecture": "x86", "server_type": "cx23"},
                 "102": {"architecture": "x86", "server_type": "cx33"},
@@ -203,6 +203,67 @@ class BrokerSecurityTests(unittest.TestCase):
                 broker.admit_custody(self.policy, uid)
         broker.admit_custody(self.policy, self.policy.service_uid)
 
+    def test_rescue_only_authority_does_not_enable_other_mutations(self):
+        data = copy.deepcopy(self.data)
+        data["version"] = 2
+        data["allowed_mutations"] = ["server rescue enable"]
+        policy = broker.Policy.from_dict(data)
+        for operations in (True, ["server delete"], ["server rescue enable"] * 2):
+            with self.subTest(operations=operations), self.assertRaises(
+                broker.Rejected
+            ):
+                broker.Policy.from_dict({**data, "allowed_mutations": operations})
+        with self.assertRaises(broker.Rejected):
+            broker.Policy.from_dict({**data, "version": 1})
+        broker.admit_request(
+            {
+                "operation": "server rescue enable",
+                "server_id": 101,
+                "request_id": "d" * 32,
+            },
+            policy,
+        )
+        for operation in set(broker.ACTIONS) - {"server rescue enable"}:
+            with self.subTest(operation=operation), self.assertRaisesRegex(
+                broker.Rejected, "mutation.disabled"
+            ):
+                broker.admit_request(
+                    {"operation": operation, "server_id": 101, "request_id": "e" * 32},
+                    policy,
+                )
+        transport = broker.HetznerTransport("x" * 64, policy)
+        with patch.object(
+            broker.http.client,
+            "HTTPSConnection",
+            side_effect=AssertionError("network called"),
+        ):
+            for suffix, _ in (
+                broker.ACTIONS[op]
+                for op in set(broker.ACTIONS) - {"server rescue enable"}
+            ):
+                with self.subTest(suffix=suffix), self.assertRaisesRegex(
+                    broker.Rejected, "mutation.disabled"
+                ):
+                    transport.request("POST", "/servers/101/actions/" + suffix, {})
+
+    def test_source_custody_receives_unresolved_entrypoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            real = Path(directory) / "actual.py"
+            real.write_text("# synthetic source")
+            link = Path(directory) / "entrypoint.py"
+            link.symlink_to(real)
+            observed = []
+
+            def reject(path, *_args, **_kwargs):
+                observed.append(path)
+                raise broker.Rejected("custody.invalid")
+
+            with patch.object(broker, "__file__", str(link)), patch.object(
+                broker, "trusted_file", reject
+            ), self.assertRaises(broker.Rejected):
+                broker.serve("/unused", "/unused", "/unused")
+            self.assertEqual(observed, [link])
+
     def test_checkout_and_user_owned_credentials_cannot_pass_root_custody(self):
         with self.assertRaises(broker.Rejected):
             broker.trusted_file(ROOT / "scripts/hetzner_broker.py", {0}, limit=65536)
@@ -211,6 +272,43 @@ class BrokerSecurityTests(unittest.TestCase):
             path.write_text("synthetic secret")
             with self.assertRaises(broker.Rejected):
                 broker.trusted_file(path, {0}, secret=True)
+
+    def test_existing_ledger_accepts_root_ancestors_but_only_service_owned_leaf(self):
+        import stat
+        from types import SimpleNamespace
+
+        ledger = Path("/var/lib/secpal-hetzner/requests.sqlite")
+        service_uid = self.policy.service_uid
+        for leaf_uid in (service_uid, 0, self.policy.caller_uid):
+            parent_info = SimpleNamespace(
+                st_mode=stat.S_IFDIR | 0o700, st_uid=service_uid
+            )
+            root_info = SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)
+            leaf_info = SimpleNamespace(
+                st_mode=stat.S_IFREG | 0o600, st_uid=leaf_uid, st_nlink=1, st_size=0
+            )
+
+            def metadata(path):
+                return parent_info if path == ledger.parent else root_info
+
+            with self.subTest(leaf_uid=leaf_uid), patch.object(
+                broker.Path, "lstat", metadata
+            ), patch.object(
+                broker.Path, "is_symlink", return_value=False
+            ), patch.object(
+                broker.Path, "exists", return_value=True
+            ), patch.object(
+                broker.os, "open", return_value=100
+            ), patch.object(
+                broker.os, "fstat", return_value=leaf_info
+            ), patch.object(
+                broker.os, "close"
+            ):
+                if leaf_uid == service_uid:
+                    broker.inspect_ledger_custody(self.policy, ledger)
+                else:
+                    with self.assertRaises(broker.Rejected):
+                        broker.inspect_ledger_custody(self.policy, ledger)
 
     def test_ipc_does_not_log_or_return_attacker_or_provider_secrets(self):
         transport = type(
@@ -271,7 +369,7 @@ class BrokerSecurityTests(unittest.TestCase):
 
     def test_typed_actions_durable_replay_and_response_redaction(self):
         data = copy.deepcopy(self.data)
-        data["allow_mutations"] = True
+        data["allowed_mutations"] = list(broker.ACTIONS)
         policy = broker.Policy.from_dict(data)
         transport = type(
             "Transport", (), {"request": lambda _, *a: self.transport(*a)}
@@ -507,7 +605,7 @@ class TransportBudgetTests(unittest.TestCase):
                 transport.request("GET", "/servers/101")
             self.assertEqual(factory.call_count, 2)
         data = copy.deepcopy(self.data)
-        data["allow_mutations"] = True
+        data["allowed_mutations"] = list(broker.ACTIONS)
         transport = broker.HetznerTransport("x" * 64, broker.Policy.from_dict(data))
         with patch.object(
             broker.http.client, "HTTPSConnection", return_value=failed
@@ -612,7 +710,7 @@ class SemanticDiagnosticsTests(unittest.TestCase):
 
     def test_each_provider_failure_names_its_semantic_operation(self):
         data = copy.deepcopy(self.data)
-        data["allow_mutations"] = True
+        data["allowed_mutations"] = list(broker.ACTIONS)
         policy = broker.Policy.from_dict(data)
         for index, stage in enumerate(
             ["server.inspect", "action.submit", "action.inspect", "server.readback"], 1
