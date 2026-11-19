@@ -7,6 +7,186 @@
   },
   "external_operations": [
     {
+      "id": "fcos-db-roles.disable-migration-login",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.disable-migration-login",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.empty-cluster",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.empty-cluster",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.enable-logins",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.enable-logins",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.fresh-container",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.fresh-container",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.generated-unit",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.generated-unit",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.grant-role-contract",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.grant-role-contract",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.input",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.input",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.install-transport-policy",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.install-transport-policy",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.migration-result",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.migration-result",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.prepare-credential-roots",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.prepare-credential-roots",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.remove-migration-credentials",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.remove-migration-credentials",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.restrict-migration-ledger",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.restrict-migration-ledger",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.rootless-runtime",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.rootless-runtime",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.secret-volume",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.secret-volume",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.set-migration-password",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.set-migration-password",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.set-runtime-password",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.set-runtime-password",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.start-migration",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.start-migration",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.stop-migrator",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.stop-migrator",
+        "kind": "semantic"
+      }
+    },
+    {
       "id": "administrator-owned-source-required",
       "reachable": true,
       "fallible": true,

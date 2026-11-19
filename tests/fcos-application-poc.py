@@ -3,18 +3,93 @@
 # SPDX-License-Identifier: MIT
 """Exercise the two disposable FCOS application bundle profiles."""
 
+import json
 from pathlib import Path
 import runpy
+import subprocess
+import tempfile
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-build = runpy.run_path(str(ROOT / "scripts/render-fcos-application-poc.py"))["build"]
+renderer = runpy.run_path(str(ROOT / "scripts/render-fcos-application-poc.py"))
+build = renderer["build"]
 INSTANCE = "testpoc01"
 PREFIX = f"secpal-int-{INSTANCE}"
 
 
 class ApplicationPoC(unittest.TestCase):
+    def test_same_named_validator_is_rejected_before_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "executed"
+            (root / "scripts").mkdir()
+            fake = root / "scripts" / "secpal-evidence-architecture.py"
+            fake.write_text(f"open({str(marker)!r}, 'w').close()\n")
+            with self.assertRaisesRegex(ValueError, "validator source"):
+                renderer["admit_database_dispatch"](fake)
+            self.assertFalse(marker.exists())
+
+    def test_database_diagnostic_contract_fails_closed(self):
+        helper = (ROOT / "scripts/fcos-poc-db-roles.sh").read_text()
+        declaration = json.loads(
+            (ROOT / ".secpal/evidence-architecture.json").read_text()
+        )
+        validate = renderer["validate_database_diagnostics"]
+        validate(helper, declaration)
+        declaration["external_operations"] = [
+            entry
+            for entry in declaration["external_operations"]
+            if entry["id"] != "fcos-db-roles.start-migration"
+        ]
+        with self.assertRaisesRegex(ValueError, "diagnostic coverage"):
+            validate(helper, declaration)
+        with self.assertRaisesRegex(
+            ValueError, "maintained evidence architecture validator"
+        ):
+            renderer["admit_database_dispatch"](None)
+
+    def test_failed_operation_reveals_only_its_stage(self):
+        script = ROOT / "scripts/fcos-poc-db-roles.sh"
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'podman() { printf "%s\\n" diagnostic-redaction-witness >&2; return 23; }; '
+                'export -f podman; bash "$1" prepare fixture01',
+                "bash",
+                str(script),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "fcos-db-roles.rootless-runtime: failed\n")
+
+    def test_separate_database_mounts_and_explicit_owner_migration(self):
+        units, _ = build(
+            INSTANCE, "lab.example.invalid", "10.0.0.28", least_privilege=True
+        )
+        for role in ("php-fpm", "worker-general", "worker-hash-chain", "scheduler"):
+            unit = units[f"{PREFIX}-{role}.container"]
+            self.assertIn("subpath=runtime-database", unit)
+            self.assertIn("subpath=api", unit)
+            self.assertNotIn("migration-database", unit)
+            self.assertNotIn(f"{PREFIX}-migrate.service", unit)
+            self.assertNotIn(f"{PREFIX}-secrets.volume:/run/secpal/secrets", unit)
+        postgres = units[f"{PREFIX}-postgres.container"]
+        self.assertIn("POSTGRES_USER=secpal_fixture_admin", postgres)
+        self.assertIn("subpath=postgresql", postgres)
+        self.assertNotIn("subpath=migration-database", postgres)
+        migrate = units[f"{PREFIX}-migrate.container"]
+        self.assertIn("subpath=migration-database", migrate)
+        self.assertNotIn("subpath=runtime-database", migrate)
+        self.assertIn("Exec=/run/secpal/production-migrate.php", migrate)
+        self.assertNotIn("[Install]", migrate)
+
     def test_stack_preserves_roles_state_and_explicit_oneshots(self):
         units, caddy = build(INSTANCE, "lab.example.invalid", "10.0.0.28", 18443)
         for role in (

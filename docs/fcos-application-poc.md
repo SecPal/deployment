@@ -90,6 +90,111 @@ only its named volumes, private networks, added gateway tag, unit files and
 staged directory, then reload the user manager. Verify that the fixture is
 absent and the pre-existing applications and volumes are healthy.
 
+## Separate runtime and migration authority on a fresh fixture
+
+Add `--least-privilege --evidence-validator /reviewed/governance/scripts/secpal-evidence-architecture.py`
+to the stack render command and use a new instance. Select the validator
+from the maintained governance checkout. Rendering requires dispatch
+admission for this source and fails closed if a trusted operation lacks its
+declared semantic diagnostic. The validator, its checked-in parser sources
+and dependency lock must match the accepted governance source pin. Use the
+maintained parser dependencies in that checkout. Stage only the admitted bundle. The guest
+helper returns the bounded failure stage while suppressing command output.
+The resulting bundle implements the lab portion of
+[#426](https://github.com/SecPal/deployment/issues/426), using the role pattern
+from [#100](https://github.com/SecPal/deployment/issues/100). Follow the
+HTTPS and host admission steps above. Use this startup sequence in place of
+the shared-role startup:
+
+```bash
+prefix=secpal-int-labpoc01
+roles=/var/lib/secpal-application-poc/labpoc01/assets/fcos-poc-db-roles.sh
+systemctl --user daemon-reload
+systemctl --user start "$prefix-secrets-init.service"
+bash "$roles" prepare labpoc01
+systemctl --user start "$prefix-postgres.service"
+bash "$roles" migrate labpoc01
+systemctl --user start "$prefix-gateway.service" "$prefix-scheduler.service" \
+  "$prefix-worker-general.service" "$prefix-worker-hash-chain.service"
+```
+
+Seed the synthetic user as above. Wait for API readiness before login. The
+helper accepts only a rootless slot with the generated separation label. It
+prepares credential subpaths before PostgreSQL starts and requires an empty
+cluster for the initial role installation. If the migration fails, diagnose
+the returned stage within the disposable slot and check that the migration
+login was retired before any retry. This initial bootstrap is for fresh
+fixtures, not an upgrade procedure for existing databases.
+
+- `secpal_owner` owns the database, application schema and migration-created
+  tables. It has no login. The migration login can explicitly assume the
+  owner role through `secpal_migration`; it has no cluster-wide administrative
+  attributes.
+- `secpal_poc_runtime` inherits `secpal_runtime` only. It can connect to
+  `secpal`, use `public`, perform application DML and use sequences. Defaults
+  apply to new tables and sequences created by `secpal_owner`. The runtime
+  grant on the migration ledger is read-only. The runtime has no schema
+  creation, ownership, temporary-object, cluster-wide or unrelated database
+  privileges. [PostgreSQL default privileges](https://www.postgresql.org/docs/18/sql-alterdefaultprivileges.html)
+- Bootstrap administration uses the isolated DB container's local socket.
+  Runtime and migration connections require certificate-verified TLS and
+  SCRAM. Only the migrator mounts the migration credential subpath. The
+  migration login has a ten-minute maximum initial validity. The helper
+  starts the explicit Laravel migration, records its success, disables and
+  clears the migration login, stops the unit and removes the credential
+  files. Ordinary FPM, worker and scheduler units mount only their own
+  runtime database and application credential subpaths.
+
+### Execute the database and application checks
+
+From the isolated PostgreSQL container using its local fixture administrator,
+create an empty witness as the owner after the migration:
+
+```bash
+podman exec -i "$prefix-postgres" psql -X -v ON_ERROR_STOP=1 \
+  -U secpal_fixture_admin -d secpal <<'SQL'
+SET ROLE secpal_owner;
+CREATE TABLE public.fcos_privilege_witness (
+  id bigint GENERATED ALWAYS AS IDENTITY, marker text NOT NULL
+);
+SQL
+podman exec -i "$prefix-php-fpm" php \
+  < tests/fcos-poc-database-authority.php
+```
+
+The PHP probe uses the actual application PDO session and runtime credential.
+It requires TLS and verifies that the future table and its identity sequence
+support runtime DML. It runs each denied SQL operation in its own rollback
+transaction and requires SQLSTATE `42501`. This covers table creation,
+alteration, drop and truncate, schema/function/sequence/temp creation,
+migration ledger writes, role assumption, superuser promotion and auth
+catalog reads. It also requires PostgreSQL to reject plaintext and
+unrelated-database connections.
+
+Using the normal private HTTPS endpoint, log in with the synthetic user, call
+`/v1/me`, read the seeded organization and create a separate synthetic holding
+through `POST /v1/organizational-units`. Refresh the CSRF token after login
+before the POST. Read back the exact ID through the API and through the
+runtime's PostgreSQL connection. Dispatch one synthetic job to each existing
+worker queue and observe consumption. Check the scheduler's normal service.
+Capture the migration login authorization, ledger and object owners from
+PostgreSQL. Verify that the retired login and credential mount are absent from
+ordinary runtime processes.
+
+Repeat the API, SQL and permission checks after recreating the application
+containers, then after recreating PostgreSQL with its retained volume.
+Compare the original cluster ID, ledger and roles and verify that the
+migration unit stayed inactive. The observed PostgreSQL 18.6 lab run applied
+86 Laravel migrations in one batch. It passed the application and worker
+checks and rejected all 15 SQL denial probes before and after recreation.
+The raw qualification report remains in private evidence.
+
+The bootstrap socket is local to this disposable database container. The
+test uses one rootless host operator and synthetic, filesystem-scoped
+credentials. Production credential issuance and custody, rotation of an
+activated deployment, per-workload policy, and broader PG18 infrastructure
+qualification retain their existing owners.
+
 ## Cross-host logical restore
 
 The restore bundle runs only PostgreSQL, API and FPM on a new internal network
