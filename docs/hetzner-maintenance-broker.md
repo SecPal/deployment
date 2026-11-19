@@ -82,9 +82,11 @@ The wire format has no method, URL, route, command, protection or body field.
 
 ### Server read-back contract
 
-Each observed server retains the existing flat identity, type, architecture,
-status, protection, Rescue and lock fields. The same authenticated
-`GET /servers/{id}` supplies the following additional projection.
+The `servers list`, `server inspect` and `server status` replies retain the
+existing flat identity, type, architecture, status, protection, Rescue and lock
+fields. The same authenticated `GET /servers/{id}` supplies the following
+additional projection. Action inspection and mutation replies retain their
+original compact server fields and ledger behavior.
 [Hetzner server schema](https://github.com/hetznercloud/hcloud-go/blob/main/hcloud/schema/server.go)
 
 | Field                  | Closed representation                                                                                                                       |

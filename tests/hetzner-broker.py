@@ -361,6 +361,44 @@ class BrokerSecurityTests(unittest.TestCase):
             broker.execute({"operation": "servers list"}, self.policy, transport)
         self.assertEqual(caught.exception.stage, "socket.reply")
 
+    def test_large_inventory_does_not_change_action_replies_or_ledger(self):
+        policy = broker.Policy.from_dict(
+            {**self.data, "allowed_mutations": ["server reboot"]}
+        )
+        request = {
+            "operation": "server reboot",
+            "server_id": 101,
+            "request_id": "d" * 32,
+        }
+
+        def observe(_, method, path, body=None):
+            raw = self.transport(method, path, body)
+            if "server" in raw:
+                raw["server"]["volumes"] = list(range(601, 1001))
+            return raw
+
+        transport = type("Transport", (), {"request": observe})()
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            broker, "MAX_RESPONSE", 512
+        ):
+            ledger = broker.Ledger(Path(directory) / "ledger.sqlite")
+            try:
+                result = broker.execute(request, policy, transport, ledger)
+                replay = broker.execute(request, policy, transport, ledger)
+                action = broker.execute(
+                    {"operation": "server action-status", "server_id": 101, "action_id": 200},
+                    policy,
+                    transport,
+                )
+            finally:
+                ledger.db.close()
+        self.assertEqual(result["code"], "applied")
+        self.assertEqual(result, replay)
+        self.assertEqual(action["server"], result["server"])
+        self.assertNotIn("volumes", result["server"])
+        self.assertNotIn("public_net", result["server"])
+        self.assertEqual([call[0] for call in self.calls].count("POST"), 1)
+
     def test_wrong_identity_architecture_type_and_protection_fail_closed(self):
         edits = [
             ("id", 102),

@@ -400,7 +400,7 @@ def normalize_private_net(raw):
     return attachments
 
 
-def normalize_server(raw):
+def normalize_server(raw, *, inventory=False):
     require(type(raw) is dict and type(raw.get("server")) is dict, "provider.shape")
     s = raw["server"]
     require(integer(s.get("id")), "identity.mismatch")
@@ -436,6 +436,18 @@ def normalize_server(raw):
         type(s.get("rescue_enabled")) is bool and type(s.get("locked")) is bool,
         "provider.shape",
     )
+    facts = {
+        "id": s["id"],
+        "server_type": kind["name"],
+        "architecture": kind["architecture"],
+        "status": s["status"],
+        "delete_protection": protection["delete"],
+        "rebuild_protection": protection["rebuild"],
+        "rescue_enabled": s["rescue_enabled"],
+        "locked": s["locked"],
+    }
+    if not inventory:
+        return facts
     disk = s.get("primary_disk_size")
     volumes = s.get("volumes")
     require(
@@ -446,14 +458,7 @@ def normalize_server(raw):
         "provider.shape",
     )
     return {
-        "id": s["id"],
-        "server_type": kind["name"],
-        "architecture": kind["architecture"],
-        "status": s["status"],
-        "delete_protection": protection["delete"],
-        "rebuild_protection": protection["rebuild"],
-        "rescue_enabled": s["rescue_enabled"],
-        "locked": s["locked"],
+        **facts,
         "primary_disk_size": disk,
         "public_net": normalize_public_net(s.get("public_net")),
         "volumes": list(volumes),
@@ -561,7 +566,7 @@ def assemble_reply(code, server=None, servers=None, action=None):
     if action is not None:
         result["action"] = {key: action[key] for key in ("id", "command", "status")}
     # Use the same JSON encoding and newline budget as the socket and client.
-    if len(json.dumps(result)) + 1 > MAX_RESPONSE:
+    if code == "observed" and len(json.dumps(result)) + 1 > MAX_RESPONSE:
         raise Rejected("provider.shape", "socket.reply")
     return result
 
@@ -706,7 +711,9 @@ def execute(request, policy, transport, ledger=None, now=None):
             at_stage(
                 "server.inspect",
                 lambda sid=sid: admit_server(
-                    normalize_server(transport.request("GET", "/servers/" + sid)),
+                    normalize_server(
+                        transport.request("GET", "/servers/" + sid), inventory=True
+                    ),
                     int(sid),
                     policy,
                 ),
@@ -717,13 +724,16 @@ def execute(request, policy, transport, ledger=None, now=None):
         return assemble_reply("observed", servers=servers)
     sid = request["server_id"]
     path = "/servers/" + str(sid)
+    inventory = operation in {"server inspect", "server status"}
     observed = at_stage(
         "server.inspect",
         lambda: admit_server(
-            normalize_server(transport.request("GET", path)), sid, policy
+            normalize_server(transport.request("GET", path), inventory=inventory),
+            sid,
+            policy,
         ),
     )
-    if operation in {"server inspect", "server status"}:
+    if inventory:
         return assemble_reply("observed", server=observed)
     if operation == "server action-status":
         action = at_stage(
