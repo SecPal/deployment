@@ -80,6 +80,47 @@ the CLI never silently generates a fresh identity after an interrupted reply.
 A new ID means a separately authorized new attempt, not a safe retry.
 The wire format has no method, URL, route, command, protection or body field.
 
+### Server read-back contract
+
+The `servers list`, `server inspect` and `server status` replies retain the
+existing flat identity, type, architecture, status, protection, Rescue and lock
+fields. The same authenticated `GET /servers/{id}` supplies the following
+additional projection. Action inspection and mutation replies retain their
+original compact server fields and ledger behavior.
+[Hetzner server schema](https://github.com/hetznercloud/hcloud-go/blob/main/hcloud/schema/server.go)
+
+| Field                  | Closed representation                                                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `primary_disk_size`    | Positive size in GB from the server observation.                                                                                            |
+| `public_net.ipv4`      | Primary IP resource `id`, IPv4 `ip`, boolean `blocked` and DNS string `dns_ptr`.                                                            |
+| `public_net.ipv6`      | Primary IP resource `id`, IPv6 `ip` as a /64 network, boolean `blocked` and a `dns_ptr` list of `{ip, dns_ptr}` entries within that prefix. |
+| `public_net.firewalls` | List of `{id, status}` associations. Status is `applied` or `pending`.                                                                      |
+| `volumes`              | List of attached volume IDs.                                                                                                                |
+| `private_net`          | List of `{network, ip, alias_ips}` attachments using Hetzner's private IPv4 format.                                                         |
+
+The caller checks observed values against its independently approved target
+baseline. Preserve the legacy disk size, absence or exact identity of attached
+storage and networks, current primary IP identities and the required firewall
+states. PTR and blocked fields are retained for callers that compare complete
+primary IP assignments. Address text, including a provider-supplied IPv6 PTR
+suffix, is preserved after validation. The caller still owns strict SSH host-key
+and guest installation checks.
+
+Both primary IP assignments are required for this dual-stack contract. Empty
+attachment lists are valid. Missing fields, malformed entries, repeated IDs
+within an attachment kind and conflicting exclusive assignments across a
+`servers list` observation fail closed. Private address conflicts are checked
+within the same network, including aliases. A pending firewall is returned as
+pending; approval of an expected applied rule stays with the caller. The
+existing response byte limit also applies to the full list reply.
+
+Configuration details such as subnet gateways, guest MAC addresses and
+effective firewall rules need their own existing observation paths. The
+broker returns association state without firewall rules, arbitrary API fields,
+resource credentials or provider response bodies. It makes no additional
+provider requests for the projection. Audit continues to record only bounded
+operation diagnostics. Related resource IDs do not add any permitted request.
+
 ## Private policy and current non-mutation boundary
 
 Keep actual inventory outside all Git repositories. Its closed shape is:
@@ -258,6 +299,23 @@ reenable an older integration. No guest, provider resource, application service
 or NetBird service is changed by this rollback. Unit/source removal, account
 removal and credential revocation are separate administrator decisions, not
 automatic cleanup.
+
+For an update of the server read-back projection, the administrator seals and
+verifies the reviewed broker executable and retains a root-private copy of
+the previous executable. Replace only `/opt/secpal-hetzner/hetzner_broker.py`,
+preserve its root ownership and restore its label. Restart the broker service
+through its existing socket. Preserve the units, policy, credential and ledger.
+On acceptance failure, stop the new service, restore the exact previous
+executable and resume the previous socket service. Keep consumers on their
+previous interfaces until acceptance passes.
+
+Before the consumer cutover, verify the installed digest and current policy
+expiry, then run the caller custody, exact-ID inspection, negative request and
+restart checks. Independently compare every required projected field with
+fresh provider observations for the same approved targets. Preserve approved
+baseline comparisons, strict SSH identity and failure on loss of the socket,
+expired policy or a mismatched response. Renew an expiring authorization only
+through the administrator's existing bounded policy procedure.
 
 The old exposed token is deliberately not revoked by source preparation.
 Same-UID mock tests prove behavior, never credential isolation. The dedicated
