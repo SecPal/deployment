@@ -15,6 +15,27 @@ PREFIX = f"secpal-int-{INSTANCE}"
 
 
 class ApplicationPoC(unittest.TestCase):
+    def test_separate_database_mounts_and_explicit_owner_migration(self):
+        units, _ = build(
+            INSTANCE, "lab.example.invalid", "10.0.0.28", least_privilege=True
+        )
+        for role in ("php-fpm", "worker-general", "worker-hash-chain", "scheduler"):
+            unit = units[f"{PREFIX}-{role}.container"]
+            self.assertIn("subpath=runtime-database", unit)
+            self.assertIn("subpath=api", unit)
+            self.assertNotIn("migration-database", unit)
+            self.assertNotIn(f"{PREFIX}-migrate.service", unit)
+            self.assertNotIn(f"{PREFIX}-secrets.volume:/run/secpal/secrets", unit)
+        postgres = units[f"{PREFIX}-postgres.container"]
+        self.assertIn("POSTGRES_USER=secpal_fixture_admin", postgres)
+        self.assertIn("subpath=postgresql", postgres)
+        self.assertNotIn("subpath=migration-database", postgres)
+        migrate = units[f"{PREFIX}-migrate.container"]
+        self.assertIn("subpath=migration-database", migrate)
+        self.assertNotIn("subpath=runtime-database", migrate)
+        self.assertIn("Exec=/run/secpal/production-migrate.php", migrate)
+        self.assertNotIn("[Install]", migrate)
+
     def test_stack_preserves_roles_state_and_explicit_oneshots(self):
         units, caddy = build(INSTANCE, "lab.example.invalid", "10.0.0.28", 18443)
         for role in (

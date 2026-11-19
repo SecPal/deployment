@@ -13,7 +13,7 @@ $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 $password = trim(stream_get_contents(STDIN, 128));
 if (! $app->environment('local')
     || config('database.connections.pgsql.host') !== 'db.secpal.internal'
-    || config('database.connections.pgsql.username') !== 'secpal_local'
+    || ! in_array(config('database.connections.pgsql.username'), ['secpal_local', 'secpal_poc_runtime'], true)
     || ! preg_match('/^[a-f0-9]{48}$/D', $password)) {
     fwrite(STDERR, "Synthetic fixture seed rejected.\n");
     exit(64);

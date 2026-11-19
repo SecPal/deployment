@@ -41,6 +41,10 @@ PRIVATE_NETWORKS = tuple(
     map(ipaddress.IPv4Network, ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 )
 DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+DATABASE_ASSETS = {
+    "scripts/fcos-poc-db-roles.sh": "fcos-poc-db-roles.sh",
+    "scripts/production-migrate.php": "production-migrate.php",
+}
 
 
 def container_lines(content, prefix, root, role):
@@ -92,9 +96,77 @@ def container_lines(content, prefix, root, role):
     return lines
 
 
-def build(instance, domain=None, bind=None, port=18443, https_port=443):
+def database_role_mounts(lines, prefix, root, role):
+    source = f"{prefix}-secrets.volume"
+
+    def mount(subpath, destination):
+        return (
+            f"Mount=type=volume,source={source},target={destination},"
+            f"subpath={subpath},ro=true,relabel=shared"
+        )
+
+    if role == "postgres":
+        old = f"Volume={source}:/run/secpal-secrets:ro,z"
+        lines[lines.index(old)] = mount("postgresql", "/run/secpal-secrets/postgresql")
+        lines = [
+            line.replace("secpal_local", "secpal_fixture_admin").replace(
+                "/run/secpal-secrets/postgres-password",
+                "/run/secpal-secrets/postgresql/bootstrap-password",
+            )
+            for line in lines
+        ]
+        lines.insert(
+            lines.index("[Container]") + 1,
+            "Label=org.secpal.fcos.database-roles=separated",
+        )
+        lines = [
+            (
+                f"{line} -c log_connections=authorization"
+                if line.startswith("Exec=")
+                else line
+            )
+            for line in lines
+        ]
+    if role in ("migrate", "php-fpm", *BACKGROUND_ROLES):
+        old = f"Volume={source}:/run/secpal/secrets:ro,z"
+        credential = "migration" if role == "migrate" else "runtime"
+        index = lines.index(old)
+        lines[index : index + 1] = [
+            mount("api", "/run/secpal/secrets/api"),
+            mount(f"{credential}-database", "/run/secpal/secrets/database"),
+        ]
+        lines = [
+            (
+                f"Environment=DB_USERNAME=secpal_poc_{'migrate' if role == 'migrate' else 'runtime'}"
+                if line.startswith("Environment=DB_USERNAME=")
+                else line
+            )
+            for line in lines
+        ]
+        if role == "migrate":
+            lines[lines.index("Exec=artisan migrate --force")] = (
+                "Exec=/run/secpal/production-migrate.php"
+            )
+            lines.insert(
+                lines.index("[Service]"),
+                f"Volume={root}/assets/production-migrate.php:/run/secpal/production-migrate.php:ro",
+            )
+    return lines
+
+
+def build(
+    instance,
+    domain=None,
+    bind=None,
+    port=18443,
+    https_port=443,
+    *,
+    least_privilege=False,
+):
     INTEGRATION["validate_instance"](instance)
     restore = domain is None and bind is None
+    if restore and least_privilege:
+        raise ValueError("least-privilege qualification requires the stack profile")
     if not restore:
         if (
             not domain
@@ -122,6 +194,8 @@ def build(instance, domain=None, bind=None, port=18443, https_port=443):
             continue
         role = role_file.split(".")[0]
         lines = container_lines(content, prefix, root, role)
+        if least_privilege and name.endswith(".container"):
+            lines = database_role_mounts(lines, prefix, root, role)
         if role == "api" and restore:
             lines = [
                 line.replace(
@@ -187,7 +261,7 @@ def build(instance, domain=None, bind=None, port=18443, https_port=443):
     return units, caddy
 
 
-def write_bundle(destination, units, caddy):
+def write_bundle(destination, units, caddy, *, least_privilege=False):
     if destination.exists() or destination.is_symlink():
         raise ValueError("output already exists")
     with tempfile.TemporaryDirectory(dir=destination.parent) as directory:
@@ -195,7 +269,8 @@ def write_bundle(destination, units, caddy):
         staged.mkdir(mode=0o700)
         (staged / "assets").mkdir()
         (staged / "units").mkdir()
-        for source, target in ASSETS.items():
+        assets = ASSETS | DATABASE_ASSETS if least_privilege else ASSETS
+        for source, target in assets.items():
             shutil.copyfile(ROOT / source, staged / "assets" / target)
         for name, content in units.items():
             (staged / "units" / name).write_text(content, encoding="utf-8")
@@ -218,6 +293,7 @@ def main():
     parser.add_argument("--bind-ipv4")
     parser.add_argument("--port", type=int, default=18443)
     parser.add_argument("--https-port", type=int, default=443)
+    parser.add_argument("--least-privilege", action="store_true")
     args = parser.parse_args()
     if args.profile == "restore" and (
         args.domain or args.bind_ipv4 or args.port != 18443 or args.https_port != 443
@@ -226,12 +302,15 @@ def main():
     if args.profile == "stack" and not (args.domain and args.bind_ipv4):
         parser.error("stack requires --domain and --bind-ipv4")
     try:
-        write_bundle(
-            args.output,
-            *build(
-                args.instance, args.domain, args.bind_ipv4, args.port, args.https_port
-            ),
+        bundle = build(
+            args.instance,
+            args.domain,
+            args.bind_ipv4,
+            args.port,
+            args.https_port,
+            least_privilege=args.least_privilege,
         )
+        write_bundle(args.output, *bundle, least_privilege=args.least_privilege)
     except (ValueError, OSError) as error:
         parser.exit(1, f"FCOS application PoC bundle preparation failed: {error}\n")
 
