@@ -212,6 +212,19 @@ running container. In the PostgreSQL 18.6 run, the Docker Official
 `sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af`.
 The native image manifest was
 `sha256:4d155aa3f2c2cc1838bb70e81396f76373ec7275ec9ce9cf32873cd677c9a992`.
+Its configuration digest was
+`sha256:b85269e8c6aa961524542eb4dcca44c4aa1deba2cf507e9e28d5ba8f971aeab9`.
+The fixture's Podman start event identified the exact index reference.
+Podman resolved that reference to the configuration digest and reported
+`linux/arm64`. To check a running fixture, use its admitted container ID:
+
+```bash
+image_id="$(podman container inspect --format '{{.Image}}' "$container_id")"
+podman image inspect --format '{{.Id}} {{.Os}}/{{.Architecture}}' "$image_id"
+```
+
+Require the image ID to match the child configuration digest with or without
+the `sha256:` prefix, and require the platform to be `linux/arm64`.
 
 Use the application's PostgreSQL connection for both test transactions.
 Require `fsync`, `full_page_writes` and `synchronous_commit` to be on
