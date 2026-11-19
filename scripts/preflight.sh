@@ -113,6 +113,7 @@ python3 tests/public-findings.py
 python3 tests/provider-capability-contract.py
 python3 tests/fcos-prepare.py
 python3 tests/fcos-artifacts.py
+python3 tests/hetzner-broker.py
 python3 tests/provider-firewall-contract.py
 python3 tests/endpoint-switch.py
 python3 tests/cloudfront-viewer-edge.py

@@ -267,6 +267,206 @@
       }
     },
     {
+      "id": "hetzner-broker.action.inspect",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.action.inspect",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.action.submit",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.action.submit",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.audit.admission",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.audit.admission",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.audit.result",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.audit.result",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.custody.credential",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.custody.credential",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.custody.ledger",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.custody.ledger",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.custody.policy",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.custody.policy",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.custody.source",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.custody.source",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.ledger.finish",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.ledger.finish",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.ledger.open",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.ledger.open",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.ledger.reserve",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.ledger.reserve",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.request.admission",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.request.admission",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.server.inspect",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.server.inspect",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.server.readback",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.server.readback",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.socket.accept",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.socket.accept",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.socket.activation",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.socket.activation",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.socket.peer",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.socket.peer",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.socket.receive",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.socket.receive",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.socket.reply",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.socket.reply",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "hetzner-broker.transport.initialize",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "hetzner-broker.transport.initialize",
+        "kind": "semantic"
+      }
+    },
+    {
       "id": "inspect-dormant-host-services",
       "reachable": true,
       "fallible": true,
