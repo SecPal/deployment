@@ -178,6 +178,7 @@ class Policy:
         require(type(data["version"]) is int and data["version"] == 2, "policy.invalid")
         for key in ["service_uid", "caller_uid", "expires_at"]:
             require(integer(data[key]), "policy.invalid")
+        require(data["expires_at"] <= 4102444800, "policy.invalid")
         require(data["service_uid"] != data["caller_uid"], "policy.invalid")
         mutations = data["allowed_mutations"]
         require(
@@ -842,9 +843,10 @@ def serve(policy_path, credential_path, ledger_path):
                 signal.setitimer(signal.ITIMER_REAL, 0)
 
 
-def client_request(words):
+def client_request(words, request_id=None):
     require(len(words) >= 2, "request.invalid")
     if words == ["servers", "list"]:
+        require(request_id is None, "request.invalid")
         return {"operation": "servers list"}
     length = 3 if words[:2] == ["server", "rescue"] else 2
     operation = " ".join(words[:length])
@@ -861,7 +863,13 @@ def client_request(words):
     if operation == "server action-status":
         request["action_id"] = int(words[-1])
     if operation in ACTIONS:
-        request["request_id"] = uuid.uuid4().hex
+        require(
+            type(request_id) is str and re.fullmatch(r"[0-9a-f]{32}", request_id),
+            "request.invalid",
+        )
+        request["request_id"] = request_id
+    else:
+        require(request_id is None, "request.invalid")
     return request
 
 
@@ -871,13 +879,16 @@ def main():
     parser.add_argument("--policy")
     parser.add_argument("--credential")
     parser.add_argument("--ledger")
+    parser.add_argument("--request-id")
     parser.add_argument("--socket", default="/run/secpal-hetzner/control.sock")
     parser.add_argument("words", nargs="*")
     args = parser.parse_args()
     try:
         if args.serve:
             require(
-                all([args.policy, args.credential, args.ledger]) and not args.words,
+                all([args.policy, args.credential, args.ledger])
+                and not args.words
+                and args.request_id is None,
                 "request.invalid",
             )
             serve(args.policy, args.credential, args.ledger)
@@ -885,7 +896,7 @@ def main():
             require(
                 not any([args.policy, args.credential, args.ledger]), "request.invalid"
             )
-            request = client_request(args.words)
+            request = client_request(args.words, request_id=args.request_id)
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
                 connection.settimeout(90)
                 connection.connect(args.socket)

@@ -73,6 +73,11 @@ server action-status
 The CLI accepts the same words with IDs following the operation, for example
 `server inspect 101` or `server action-status 101 202`. `servers list` reads
 only the policy's exact IDs; it never scans and adopts discovered resources.
+Mutating CLI requests additionally require `--request-id` with an explicit
+32-character lowercase hexadecimal operation identity. Record it before dispatch
+and reuse it for a retry of that operation. Missing/malformed IDs fail closed;
+the CLI never silently generates a fresh identity after an interrupted reply.
+A new ID means a separately authorized new attempt, not a safe retry.
 The wire format has no method, URL, route, command, protection or body field.
 
 ## Private policy and current non-mutation boundary
@@ -97,7 +102,8 @@ Keep actual inventory outside all Git repositories. Its closed shape is:
 These are synthetic examples. The `codex` socket group and caller account in
 the installation example are replaceable operator choices, not required broker
 identities: policy uses the exact approved caller UID. The administrator resolves actual UIDs and a
-bounded expiry, verifies every immutable ID and the existing Rescue public-key
+bounded execution-window expiry (Unix seconds, at most `4102444800`),
+verifies every immutable ID and the existing Rescue public-key
 identity, and installs the private policy. Never expand it automatically.
 Initial installation requires `allowed_mutations=[]`; no client request can
 override it. Later authorization names only the exact approved operation strings

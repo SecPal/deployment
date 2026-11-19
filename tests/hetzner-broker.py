@@ -608,9 +608,33 @@ class BrokerSecurityTests(unittest.TestCase):
             with self.subTest(words=words), self.assertRaises(broker.Rejected):
                 broker.client_request(words)
         self.assertEqual(
-            broker.client_request(["server", "rescue", "enable", "101"])["operation"],
+            broker.client_request(
+                ["server", "rescue", "enable", "101"], request_id="a" * 32
+            )["operation"],
             "server rescue enable",
         )
+
+    def test_cli_mutation_requires_and_preserves_an_explicit_retry_identity(self):
+        with self.assertRaises(broker.Rejected):
+            broker.client_request(["server", "reboot", "101"])
+        first = broker.client_request(["server", "reboot", "101"], request_id="a" * 32)
+        retry = broker.client_request(["server", "reboot", "101"], request_id="a" * 32)
+        self.assertEqual(first, retry)
+        self.assertEqual(first["request_id"], "a" * 32)
+        for request_id in ("bad", "a" * 33, True):
+            with self.subTest(request_id=request_id), self.assertRaises(
+                broker.Rejected
+            ):
+                broker.client_request(
+                    ["server", "reboot", "101"], request_id=request_id
+                )
+        with self.assertRaises(broker.Rejected):
+            broker.client_request(["servers", "list"], request_id="a" * 32)
+
+    def test_policy_rejects_expiry_outside_supported_timestamp_range(self):
+        for expiry in (4102444801, 2**63 - 1):
+            with self.subTest(expiry=expiry), self.assertRaises(broker.Rejected):
+                broker.Policy.from_dict({**self.data, "expires_at": expiry})
 
 
 class TransportBudgetTests(unittest.TestCase):
