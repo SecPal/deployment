@@ -166,7 +166,8 @@ class BrokerSecurityTests(unittest.TestCase):
             result["server"]["primary_disk_size"] = 80
         if sid == 103:
             public["ipv6"]["dns_ptr"] = [
-                {"ip": "2001:db8:103::10", "dns_ptr": "arm.example.test"}
+                {"ip": "2001:db8:103::10/64", "dns_ptr": "arm.example.test"},
+                {"ip": "2001:db8:103::11", "dns_ptr": "other.example.test"},
             ]
             public["firewalls"].append({"id": 502, "status": "pending"})
             result["server"]["volumes"] = [601]
@@ -257,6 +258,32 @@ class BrokerSecurityTests(unittest.TestCase):
                 broker.execute({"operation": "servers list"}, self.policy, transport)
             self.assertEqual(caught.exception.stage, "server.inspect")
 
+    def test_inventory_detects_private_ip_and_alias_conflicts_within_one_network(self):
+        for network in (701, 702):
+
+            def observe(_, method, path):
+                raw = self.transport(method, path)
+                if path == "/servers/101":
+                    raw["server"]["private_net"] = [
+                        {"network": network, "ip": "10.0.0.3", "alias_ips": []}
+                    ]
+                if path == "/servers/103":
+                    raw["server"]["public_net"]["ipv6"]["dns_ptr"] = []
+                return raw
+
+            transport = type("Transport", (), {"request": observe})()
+            request = {"operation": "servers list"}
+            with self.subTest(network=network):
+                if network == 701:
+                    with self.assertRaisesRegex(broker.Rejected, "provider.shape") as caught:
+                        broker.execute(request, self.policy, transport)
+                    self.assertEqual(caught.exception.stage, "server.inspect")
+                else:
+                    self.assertEqual(
+                        broker.execute(request, self.policy, transport)["code"],
+                        "observed",
+                    )
+
     def test_missing_malformed_or_conflicting_inventory_is_rejected(self):
         missing = object()
         for path, value in (
@@ -278,6 +305,17 @@ class BrokerSecurityTests(unittest.TestCase):
             (("public_net", "ipv6", "dns_ptr"), None),
             (("public_net", "ipv6", "dns_ptr"),
              [{"ip": "2001:db8:102::1", "dns_ptr": "outside.example.test"}]),
+            (
+                ("public_net", "ipv6", "dns_ptr"),
+                [{"ip": "2001:db8:101::1/48", "dns_ptr": "wrong-prefix.example.test"}],
+            ),
+            (
+                ("public_net", "ipv6", "dns_ptr"),
+                [
+                    {"ip": "2001:db8:101::1", "dns_ptr": "first.example.test"},
+                    {"ip": "2001:db8:101::1/64", "dns_ptr": "duplicate.example.test"},
+                ],
+            ),
             (("public_net", "firewalls"), missing),
             (("public_net", "firewalls"), [{"id": 0, "status": "applied"}]),
             (("public_net", "firewalls"), [{"id": 501, "status": "unknown"}]),
@@ -712,7 +750,7 @@ class BrokerSecurityTests(unittest.TestCase):
         module_calls = {
             "json": {"loads", "dumps"},
             "re": {"fullmatch"},
-            "ipaddress": {"IPv4Address", "IPv6Address", "IPv6Network"},
+            "ipaddress": {"IPv4Address", "IPv6Interface", "IPv6Network"},
             "ACTIONS": {"values"},
         }
 

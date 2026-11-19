@@ -278,9 +278,9 @@ def admit_request(request, policy):
 
 
 def parse_address(value, parse):
-    # A full IPv6 address with an embedded IPv4 tail and /64 fits in 48 bytes.
+    # A full IPv6 address with an embedded IPv4 tail and /128 fits in 49 characters.
     require(
-        type(value) is str and 0 < len(value) <= 48 and "%" not in value,
+        type(value) is str and 0 < len(value) <= 49 and "%" not in value,
         "provider.shape",
     )
     try:
@@ -328,8 +328,14 @@ def normalize_public_net(raw):
     ptr_addresses = set()
     for record in records:
         require(type(record) is dict, "provider.shape")
-        address = parse_address(record.get("ip"), ipaddress.IPv6Address)
-        require(address in prefix and address not in ptr_addresses, "provider.shape")
+        interface = parse_address(record.get("ip"), ipaddress.IPv6Interface)
+        address = interface.ip
+        require(
+            interface.network.prefixlen in (prefix.prefixlen, 128)
+            and address in prefix
+            and address not in ptr_addresses,
+            "provider.shape",
+        )
         validate_dns_ptr(record.get("dns_ptr"))
         ptr_addresses.add(address)
         ptrs.append({"ip": record["ip"], "dns_ptr": record["dns_ptr"]})
@@ -477,8 +483,16 @@ def admit_server_list(servers):
         for family in ("ipv4", "ipv6")
     ]
     volumes = [volume for server in servers for volume in server["volumes"]]
+    private_addresses = [
+        (attachment["network"], address)
+        for server in servers
+        for attachment in server["private_net"]
+        for address in [attachment["ip"], *attachment["alias_ips"]]
+    ]
     require(
-        len(set(primary_ids)) == len(primary_ids) and len(set(volumes)) == len(volumes),
+        len(set(primary_ids)) == len(primary_ids)
+        and len(set(volumes)) == len(volumes)
+        and len(set(private_addresses)) == len(private_addresses),
         "provider.shape",
     )
     for family, parse in (

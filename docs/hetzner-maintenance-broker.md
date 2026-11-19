@@ -100,14 +100,15 @@ The caller checks observed values against its independently approved target
 baseline. Preserve the legacy disk size, absence or exact identity of attached
 storage and networks, current primary IP identities and the required firewall
 states. PTR and blocked fields are retained for callers that compare complete
-primary IP assignments. IPv4 addresses and IPv6 prefixes stay in the provider's
-validated textual representation. The caller still owns strict SSH host-key
+primary IP assignments. Address text, including a provider-supplied IPv6 PTR
+suffix, is preserved after validation. The caller still owns strict SSH host-key
 and guest installation checks.
 
 Both primary IP assignments are required for this dual-stack contract. Empty
 attachment lists are valid. Missing fields, malformed entries, repeated IDs
 within an attachment kind and conflicting exclusive assignments across a
-`servers list` observation fail closed. A pending firewall is returned as
+`servers list` observation fail closed. Private address conflicts are checked
+within the same network, including aliases. A pending firewall is returned as
 pending; approval of an expected applied rule stays with the caller. The
 existing response byte limit also applies to the full list reply.
 
