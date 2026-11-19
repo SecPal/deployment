@@ -149,3 +149,33 @@ PostgreSQL 18 container durability/credentials, HAProxy/CrowdSec placement,
 Patroni/etcd fencing, Barman/WAL, RecoverySets and Managed SINGLE/HA/CONTINUITY
 acceptance remain owned by their existing delivery contracts. A fixture, host
 boot or local CI pass is not their real-system or production qualification.
+
+## Platform qualification plan
+
+[SecPal/.github#1348](https://github.com/SecPal/.github/pull/1348) records the
+accepted Managed reference. It uses FCOS Stable, SELinux Enforcing, rootless
+Podman/Quadlet by default and PostgreSQL 18. Host Conformance, Host Enrollment
+and Workload Activation are separate. Provider-specific inventory, access and
+live Managed composition belong to the private operating environment.
+
+The retained lab has evidence for x86_64 and aarch64 installations, two
+successive rebuilds with peer replacement, direct WireGuard, rootless Quadlet
+and state across reboot. The independent application PoC adds PostgreSQL 18
+with TLS/SCRAM, separate frontend and API images, authenticated browser access
+over private HTTPS, scoped cookies and a same-host logical restore. The operator
+also verified the canonical application names from the workstation. These
+observations qualify the exact tested installations and application inputs.
+They do not establish qualification for different rendered bytes.
+
+| Stage | Owned work and advancement criterion |
+| --- | --- |
+| Portable host foundation | [#425](https://github.com/SecPal/deployment/issues/425) and [#428](https://github.com/SecPal/deployment/pull/428) own reproducible host input, deployment composition and host evidence. Advance when the exact native installer, rendered input and installation-bound bootstrap are admitted and the supported lifecycle has real-system evidence. [#427](https://github.com/SecPal/deployment/pull/427) delivered broker source; live custody requires independent installation, read-only acceptance and safe credential transition. |
+| Reproducible application PoC | Reuse the integration renderer and image pins under [#117](https://github.com/SecPal/deployment/issues/117). Admit the generated test bundle, start it on an authorized test slot using separate private runtime inputs, and prove readiness, authenticated data access, restart and teardown while preserving the installed stacks. This qualification can use already accepted lab hosts. |
+| Isolated cross-host restore | Transfer a consistent synthetic PostgreSQL archive over authenticated SSH, retain a protected off-source copy, and restore on an independent database and storage on a second authorized host. Compare schema and exact business records and prove authenticated API access and repeatability after container recreation. The restore proof supports the recovery program under [#91](https://github.com/SecPal/deployment/issues/91); production cross-state drills are owned by [#110](https://github.com/SecPal/deployment/issues/110). |
+| Production acceptance | Qualify the PG18 container seam under [#426](https://github.com/SecPal/deployment/issues/426), least-authority activation under [#100](https://github.com/SecPal/deployment/issues/100), and the state, edge, backup, update and recovery contracts under [#87](https://github.com/SecPal/deployment/issues/87). Require independent recovery-key custody, PostgreSQL WAL/PITR, private object recovery where applicable, and RecoverySet validation. HA and CONTINUITY require their own topology and failure-domain evidence. |
+
+Navigate by native issues and PRs for delivery status. The private FCOS audit
+index groups the rebuild and multiarch reports, application PoC and restore
+evidence, and canonical-domain browser qualification. Refer to those report
+names from public source. Keep inventory, credentials, source/target read-backs,
+archives and authenticator material private.
