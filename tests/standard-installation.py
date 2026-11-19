@@ -238,6 +238,15 @@ class InstallationContract(unittest.TestCase):
         native_inventory = importlib.util.module_from_spec(native_spec)
         native_spec.loader.exec_module(native_inventory)
         operations.update(native_inventory.native_operations())
+        # The independently reviewed closed provider broker owns its semantic
+        # stages separately; preserve exact repository-wide inventory coverage.
+        broker_tree = ast.parse((ROOT / "scripts/hetzner_broker.py").read_text())
+        broker_stages = next(ast.literal_eval(node.value.args[0])
+                             for node in broker_tree.body
+                             if isinstance(node, ast.Assign) and any(
+                                 isinstance(target, ast.Name) and target.id == "STAGES"
+                                 for target in node.targets))
+        operations.update("hetzner-broker." + stage for stage in broker_stages)
         entries = document["external_operations"]
         self.assertEqual({row["id"] for row in entries}, operations)
         self.assertEqual(len(entries), len(operations))

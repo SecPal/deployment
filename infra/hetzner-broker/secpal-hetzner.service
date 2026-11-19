@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Independent credential holder for closed Hetzner operations
+Requires=secpal-hetzner.socket
+After=secpal-hetzner.socket network-online.target
+Wants=network-online.target
+
+[Service]
+User=secpal-hetzner-broker
+Group=secpal-hetzner-broker
+ExecStart=/usr/bin/python3 -I /opt/secpal-hetzner/hetzner_broker.py --serve --policy /etc/secpal-hetzner/policy.json --credential %d/hetzner-token --ledger /var/lib/secpal-hetzner/requests.sqlite
+LoadCredential=hetzner-token:/etc/secpal-hetzner/token
+StateDirectory=secpal-hetzner
+StateDirectoryMode=0700
+UMask=0077
+MemoryMax=128M
+TasksMax=16
+CPUQuota=25%
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/secpal-hetzner /etc/secpal-hetzner
+ReadWritePaths=/var/lib/secpal-hetzner
+StandardOutput=journal
+StandardError=journal
