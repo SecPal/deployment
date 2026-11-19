@@ -35,11 +35,15 @@ try {
     $pdo->beginTransaction();
     $created = $pdo->query("INSERT INTO public.fcos_privilege_witness (marker)
         VALUES ('synthetic') RETURNING id")->fetchColumn();
-    $pdo->exec("UPDATE public.fcos_privilege_witness SET marker = 'updated' WHERE marker = 'synthetic'");
-    $observed = $pdo->query("SELECT marker FROM public.fcos_privilege_witness")->fetchColumn();
-    $deleted = $pdo->exec("DELETE FROM public.fcos_privilege_witness WHERE marker = 'updated'");
+    $update = $pdo->prepare("UPDATE public.fcos_privilege_witness SET marker = 'updated' WHERE id = ?");
+    $update->execute([$created]);
+    $read = $pdo->prepare("SELECT marker FROM public.fcos_privilege_witness WHERE id = ?");
+    $read->execute([$created]);
+    $observed = $read->fetchColumn();
+    $delete = $pdo->prepare("DELETE FROM public.fcos_privilege_witness WHERE id = ?");
+    $delete->execute([$created]);
     $pdo->rollBack();
-    if ((int) $created < 1 || $observed !== 'updated' || $deleted !== 1) {
+    if ((int) $created < 1 || $update->rowCount() !== 1 || $observed !== 'updated' || $delete->rowCount() !== 1) {
         throw new RuntimeException();
     }
 
