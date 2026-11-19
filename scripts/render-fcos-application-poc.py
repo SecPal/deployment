@@ -4,6 +4,7 @@
 """Prepare a disposable FCOS application stack or an internal restore bundle."""
 
 import argparse
+import hashlib
 import ipaddress
 import json
 from pathlib import Path
@@ -48,6 +49,16 @@ DATABASE_ASSETS = {
     "scripts/production-migrate.php": "production-migrate.php",
 }
 DATABASE_DIAGNOSTIC_PREFIX = "fcos-db-roles."
+# SecPal/.github protected main a9a502fb8c07580074852fc0689a10cd732ab290.
+VALIDATOR_SOURCE = {
+    "scripts/secpal-evidence-architecture.py": "75b8b70bf386284ead5a3e92289fdfb07a1fa914580037b0667c28eea8e7222e",
+    "scripts/secpal_evidence_architecture/__init__.py": "6f2a2ab09af8a78df93f65e6e3c32df59e3c054468fde0b999b6a9fd6efab096",
+    "scripts/secpal_evidence_architecture/execution.py": "997ceb8472f531b3bd427b6cbe6171135c79f07f4b72fd91eb41cbf9f8facc6c",
+    "scripts/secpal_evidence_architecture/governance.py": "853c0f813fd356e81c5c00612c4aa6b961c3f8016e498c2537d61dee6e66461f",
+    "scripts/secpal_evidence_architecture/markdown_references.mjs": "5952dbd7116e965ec0ee7bbf1c634afea4d0d6a77261670a5f3588ec8f0c2b00",
+    "package.json": "ee6cac84272c0806c4e69e6acaef318487e65e1e4cc513c467b78268f19703b8",
+    "package-lock.json": "3f5a76b90b0c3403c7b7e25ce20912db79693664a31afab1ccbc3cb77f17dd28",
+}
 
 
 def database_diagnostic_ids(helper):
@@ -91,12 +102,29 @@ def admit_database_dispatch(validator):
         raise ValueError(
             "least privilege requires the maintained evidence architecture validator"
         )
+    validator = validator.absolute()
+    if validator.parent.name != "scripts":
+        raise ValueError(
+            "database role evidence validator source is outside the pinned layout"
+        )
+    checkout = validator.parent.parent
+    for relative, expected in VALIDATOR_SOURCE.items():
+        path = checkout / relative
+        if not path.is_file() or path.is_symlink():
+            raise ValueError("database role evidence validator source is incomplete")
+        with path.open("rb") as source:
+            content = source.read(65_537)
+        if len(content) > 65_536 or hashlib.sha256(content).hexdigest() != expected:
+            raise ValueError(
+                "database role evidence validator source differs from the pin"
+            )
     try:
         accepted = subprocess.run(
             [
                 sys.executable,
                 "-I",
-                str(validator.resolve()),
+                "-S",
+                str(validator),
                 "--repository-root",
                 str(ROOT),
                 "--repository",

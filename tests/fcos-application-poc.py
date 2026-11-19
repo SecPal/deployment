@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import runpy
 import subprocess
+import tempfile
 import unittest
 
 
@@ -18,6 +19,17 @@ PREFIX = f"secpal-int-{INSTANCE}"
 
 
 class ApplicationPoC(unittest.TestCase):
+    def test_same_named_validator_is_rejected_before_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "executed"
+            (root / "scripts").mkdir()
+            fake = root / "scripts" / "secpal-evidence-architecture.py"
+            fake.write_text(f"open({str(marker)!r}, 'w').close()\n")
+            with self.assertRaisesRegex(ValueError, "validator source"):
+                renderer["admit_database_dispatch"](fake)
+            self.assertFalse(marker.exists())
+
     def test_database_diagnostic_contract_fails_closed(self):
         helper = (ROOT / "scripts/fcos-poc-db-roles.sh").read_text()
         declaration = json.loads(
