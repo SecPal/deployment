@@ -238,6 +238,13 @@ class InstallationContract(unittest.TestCase):
         native_inventory = importlib.util.module_from_spec(native_spec)
         native_spec.loader.exec_module(native_inventory)
         operations.update(native_inventory.native_operations())
+        artifact_tree = ast.parse((ROOT / "scripts/verify_fcos_artifacts.py").read_text())
+        artifact_stages = next(ast.literal_eval(node.value.args[0])
+                               for node in artifact_tree.body
+                               if isinstance(node, ast.Assign) and any(
+                                   isinstance(target, ast.Name) and target.id == "STAGES"
+                                   for target in node.targets))
+        operations.update("fcos-artifacts." + stage for stage in artifact_stages)
         entries = document["external_operations"]
         self.assertEqual({row["id"] for row in entries}, operations)
         self.assertEqual(len(entries), len(operations))

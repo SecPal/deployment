@@ -1,0 +1,32 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "release": "44.20261023.3.1",
+  "stream": "stable",
+  "platform": "metal",
+  "fedora_signer": "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
+  "butane": {
+    "version": "0.29.0",
+    "spec": "1.6.0",
+    "x86_64_sha256": "53a20d820fbaa7fda4f1afd1814974badc8e448db4c151d3f1ba005dc29bc4c9"
+  },
+  "ignition_validator": {
+    "version": "2.28.0",
+    "x86_64_sha256": "06d9d80280803137a4bfbeb1eb82a9dbf04aaf84e6b9c760323f5156724ea448"
+  },
+  "installer": {
+    "version": "0.27.0",
+    "image": "quay.io/coreos/coreos-installer@sha256:c4667e07d14a69523c8bfd77d245b390cfbf719d4c4ee62ad3f76ecde24b5ba2",
+    "x86_64_manifest": "sha256:21b6cf5c5ca805c3abb5a3644a751c3b9460464a80b1da69f1de7c002ce358be",
+    "aarch64_manifest": "sha256:ba370bed6b76a3fe18d4afda4a816948be6178a7abac423d467010b33808d9f7"
+  },
+  "architectures": {
+    "x86_64": {
+      "image_sha256": "463d18ff2f3686c1cf66ebc5948f32430675d6de005b403a576740c8abbd18ca",
+      "uncompressed_sha256": "1256ca78886844002bcb023e842f3946cd0bd4010bd2e128b29b08ca238e6c0c"
+    },
+    "aarch64": {
+      "image_sha256": "fd1009765dba884d74cfc00710bfb30d4bc4b9262b5341ccd76ab6b8ff17f4c0",
+      "uncompressed_sha256": "fef54fdbb6458256ced6e39b0fc33bbea34a306f3525b04e41bc88042e9bf358"
+    }
+  }
+}
