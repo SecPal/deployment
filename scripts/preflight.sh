@@ -56,6 +56,7 @@ shellcheck "${shell_files[@]}"
 php -l scripts/production-secret-bootstrap.php
 php -l scripts/production-migrate.php
 php -l scripts/phase-b-runtime-probe.php
+php -l scripts/seed-fcos-application-poc.php
 php -l scripts/ci-cloud/postgresql-application-bootstrap.php
 php -l scripts/ci-cloud/postgresql-application-probe.php
 python3 tests/dependabot-ci-enrollment.py
@@ -68,6 +69,7 @@ python3 tests/postgres-fixture-contract.py
 python3 tests/postgresql-qualification-contract.py
 python3 tests/postgresql-reference-host.py
 python3 tests/quadlet-integration-contract.py
+python3 tests/fcos-application-poc.py
 python3 tests/quadlet-integration-lifecycle.py
 python3 tests/ci-cloud-contract.py
 python3 tests/ci-cloud-rocky-control.py
