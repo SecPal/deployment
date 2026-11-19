@@ -200,6 +200,12 @@ d /etc/containers/systemd/users/{mapping['service_uid']} 0755 root root -
         "storage": {
             "files": files,
             "directories": [],
+            "links": [
+                {
+                    "path": "/etc/systemd/system/multi-user.target.wants/network-online.target",
+                    "target": "/usr/lib/systemd/system/network-online.target",
+                }
+            ],
         },
         "systemd": {"units": []},
     }

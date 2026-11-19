@@ -79,6 +79,10 @@ directory and the script/state in the runtime-owned external qualification path.
 The helper neither writes those files nor enables a unit. It is test workload
 preparation, not product or database activation.
 
+The system `multi-user.target` pulls in `network-online.target` so rootless
+Quadlet's wait service can observe host network readiness. The guest reboot
+proof checks this dependency through the ordinary boot path.
+
 Zincati is explicitly disabled during controlled qualification. Production
 update/reboot authorization, rolling order, health admission and rollback remain
 owned by the existing lifecycle and HA contracts; a time window alone does not
@@ -138,10 +142,10 @@ not be represented as the exact Ignition previously installed on accepted hosts.
 A changed installation template/configuration is an invalidator for that
 configuration's installation proof, not for unrelated existing host observations.
 
-The independently privileged provider broker is a separate capability. A
-same-user guard plus an exposed unrestricted token cannot establish isolation.
-Actual administrator-owned installation, protected fresh credential handoff,
-read-only acceptance and safe old-token revocation remain live boundaries.
+The independently privileged provider broker is administrator-installed and
+has live read-only acceptance. Live mutation qualification, independently
+authenticated Rescue bootstrap for the broker path and safe old-token
+revocation remain separate acceptance boundaries.
 The provider broker has no general SSH, Console forwarding or disk-writing API;
 installation-bound bootstrap must retain its independently reviewed authority.
 
@@ -186,3 +190,19 @@ host. Both verified authenticated application reads after database container
 recreation. The restore used encrypted off-source retention, an internal
 network and independent PostgreSQL storage. These results cover synthetic data
 and do not establish RecoverySet, WAL or production key recovery.
+
+The private CX23 end-to-end reprovision report belongs to #425. It records a
+fresh Ignition render from Foundation revision `d6bdfa7867ca`, a reinstall on
+the existing protected resource, and new independently verified SSH and
+WireGuard identities. The application was recreated from the merged PoC
+with a fresh PostgreSQL 18 cluster, separated migration/runtime identities
+and synthetic data. Authenticated HTTPS, the same committed application row,
+the database roles, and both worker queues passed after container recreation
+and a controlled guest reboot. The provider mutation path was the authorized
+legacy test workflow. Broker mutation acceptance remains outstanding.
+
+The run exposed an absent system network-online dependency on the fresh guest.
+The operator added the persistent systemd wants link on the guest. The
+renderer now declares the equivalent link, with strict Butane and Ignition
+validation on both architectures. The private report retains the exact
+installed Ignition and the subsequent guest correction.
