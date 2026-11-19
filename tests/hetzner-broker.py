@@ -310,6 +310,36 @@ class BrokerSecurityTests(unittest.TestCase):
                     with self.assertRaises(broker.Rejected):
                         broker.inspect_ledger_custody(self.policy, ledger)
 
+    def test_new_ledger_rejects_symlink_ancestor_before_creation(self):
+        import stat
+        from types import SimpleNamespace
+
+        ledger = Path("/var/lib/secpal-hetzner/requests.sqlite")
+
+        def metadata(path):
+            if path == ledger.parent:
+                return SimpleNamespace(
+                    st_mode=stat.S_IFDIR | 0o700, st_uid=self.policy.service_uid
+                )
+            return SimpleNamespace(st_mode=stat.S_IFLNK | 0o777, st_uid=0)
+
+        with patch.object(broker.Path, "lstat", metadata), patch.object(
+            broker.Path, "is_symlink", return_value=False
+        ), patch.object(broker.Path, "exists", return_value=False), patch.object(
+            broker.os, "open", side_effect=AssertionError("must reject before create")
+        ), self.assertRaises(
+            broker.Rejected
+        ):
+            broker.inspect_ledger_custody(self.policy, ledger)
+
+    def test_readonly_policy_accepts_empty_optional_lists_without_rescue_fallback(self):
+        data = {**self.data, "excluded_server_ids": [], "rescue_ssh_key_ids": []}
+        broker.Policy.from_dict(data)
+        with self.assertRaises(broker.Rejected):
+            broker.Policy.from_dict(
+                {**data, "allowed_mutations": ["server rescue enable"]}
+            )
+
     def test_ipc_does_not_log_or_return_attacker_or_provider_secrets(self):
         transport = type(
             "Transport", (), {"request": lambda _, *a: self.transport(*a)}

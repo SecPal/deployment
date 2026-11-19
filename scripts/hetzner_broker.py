@@ -211,11 +211,15 @@ class Policy:
             values = data[key]
             require(
                 type(values) is list
-                and 1 <= len(values) <= 64
+                and len(values) <= 64
                 and all(integer(v) for v in values)
                 and len(set(values)) == len(values),
                 "policy.invalid",
             )
+        require(
+            "server rescue enable" not in mutations or bool(data["rescue_ssh_key_ids"]),
+            "policy.invalid",
+        )
         require(
             not set(map(int, servers)).intersection(data["excluded_server_ids"]),
             "policy.invalid",
@@ -621,18 +625,23 @@ def execute(request, policy, transport, ledger=None, now=None):
     return result
 
 
-def trusted_file(path, owners, *, secret=False, limit=16384, ancestor_owners=None):
-    """Check every ancestor, no symlinks, then verify the opened regular inode."""
+def trusted_ancestors(path, owners):
     path = Path(path)
     require(path.is_absolute() and ".." not in path.parts, "custody.invalid")
     for parent in reversed(path.parents):
         info = parent.lstat()
         require(
             stat.S_ISDIR(info.st_mode)
-            and info.st_uid in (owners if ancestor_owners is None else ancestor_owners)
+            and info.st_uid in owners
             and info.st_mode & 0o022 == 0,
             "custody.invalid",
         )
+
+
+def trusted_file(path, owners, *, secret=False, limit=16384, ancestor_owners=None):
+    """Check every ancestor, no symlinks, then verify the opened regular inode."""
+    path = Path(path)
+    trusted_ancestors(path, owners if ancestor_owners is None else ancestor_owners)
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         info = os.fstat(fd)
@@ -755,6 +764,7 @@ def inspect_policy_custody(policy, policy_path):
 
 
 def inspect_ledger_custody(policy, ledger_path):
+    trusted_ancestors(ledger_path, {0, policy.service_uid})
     parent = Path(ledger_path).parent
     info = parent.lstat()
     require(
@@ -764,14 +774,20 @@ def inspect_ledger_custody(policy, ledger_path):
         "custody.invalid",
     )
     require(not Path(ledger_path).is_symlink(), "custody.invalid")
-    if Path(ledger_path).exists():
-        trusted_file(
+    if not Path(ledger_path).exists():
+        fd = os.open(
             ledger_path,
-            {policy.service_uid},
-            secret=True,
-            limit=None,
-            ancestor_owners={0, policy.service_uid},
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
         )
+        os.close(fd)
+    trusted_file(
+        ledger_path,
+        {policy.service_uid},
+        secret=True,
+        limit=None,
+        ancestor_owners={0, policy.service_uid},
+    )
 
 
 def activated_socket():

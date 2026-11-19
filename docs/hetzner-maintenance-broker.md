@@ -102,7 +102,11 @@ identity, and installs the private policy. Never expand it automatically.
 Initial installation requires `allowed_mutations=[]`; no client request can
 override it. Later authorization names only the exact approved operation strings
 from the closed mutation set; a Rescue-only grant does not enable reboot or
-power-off. Version 1 boolean mutation policies are rejected rather than widened. Both provider protection flags must remain true even for reads.
+power-off. Version 1 boolean mutation policies are rejected rather than widened.
+Excluded-server and Rescue-key lists may be empty when the approved project and
+operation scope require none. Rescue enable specifically requires configured
+SSH key IDs; an empty list never authorizes password-based bootstrap fallback.
+Both provider protection flags must remain true even for reads.
 Unexpected identity, architecture, type, protection or policy expiry fails closed.
 
 When separately authorized later, Rescue uses fixed `linux64` and only
@@ -135,6 +139,10 @@ Installation belongs to the established host administrator. Do not grant Codex
 sudo, a shared service UID, access to the credential group, or write access to
 installed source, units or policy. Review source and its SHA-256 first; install
 only from the reviewed revision. Do not run the daemon from a user checkout.
+First seal candidate source/units in root-private staging and verify their
+reviewed hashes there. Publish only verified bytes to readable installation
+paths; checking after a public copy could disclose a root-readable file through
+a user-controlled source symlink.
 
 An administrator, in their existing authorized root session, performs:
 
@@ -152,12 +160,19 @@ An administrator, in their existing authorized root session, performs:
    approved existing project. It must never enter Codex, Git, shell arguments or service
    definitions. Supply it using a protected administrator prompt, for example:
 
-   ```sh
-   systemd-ask-password 'Fresh Hetzner approved-project token' |
-     install -o root -g root -m 0600 /dev/stdin /etc/secpal-hetzner/token
+   ```bash
+   (
+     set -euo pipefail
+     umask 077
+     temporary_key="$(mktemp /run/secpal-hetzner-key.XXXXXXXX)"
+     trap 'rm -f -- "$temporary_key"' EXIT
+     systemd-ask-password 'Fresh Hetzner approved-project token' > "$temporary_key"
+     test -s "$temporary_key"
+     install -o root -g root -m 0600 "$temporary_key" /etc/secpal-hetzner/token
+   )
    ```
 
-   Use a shell without tracing and check both pipeline exit statuses. Read
+   Use Bash without tracing. Producer failure aborts before token installation. Read
    permission suffices for initial acceptance; future autonomous Rescue/power
    requires an independently approved Read & Write credential. Never broaden
    the broker's operation allowlist to match the credential's provider powers.
