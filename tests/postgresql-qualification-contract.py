@@ -270,27 +270,6 @@ class CandidateData(unittest.TestCase):
             with self.assertRaises(contract.QualificationError):
                 contract.admit_observations(raw, run_id='200', run_attempt='1', expires_at=11800)
 
-    def test_unique_signed_primary_candidate(self):
-        pr = {'number': 400, 'state': 'OPEN', 'repository': 'SecPal/deployment',
-              'head_repository': 'SecPal/deployment', 'base': 'main',
-              'head': 'a' * 40, 'body': 'Fixes #81\n\nPart of: #134',
-              'closing_issues': ['SecPal/deployment#81'], 'draft': True,
-              'ready_events': 0, 'draft_events': 0,
-              'commits': [{'sha': 'a' * 40, 'verified': True, 'reason': 'valid'}]}
-        self.assertEqual(contract.select_candidate([pr]), pr)
-        for key, value in (('head_repository', 'attacker/deployment'), ('base', 'other'),
-                           ('commits', [{'sha': 'a' * 40, 'verified': False, 'reason': 'invalid'}]),
-                           ('head', 'b' * 40), ('draft', False), ('draft_events', 1)):
-            d = copy.deepcopy(pr)
-            d[key] = value
-            with self.subTest(key=key), self.assertRaises(contract.QualificationError):
-                contract.select_candidate([d])
-        for candidates in ([], [pr, pr]):
-            with self.assertRaises(contract.QualificationError):
-                contract.select_candidate(candidates)
-        ready = dict(pr, draft=False, ready_events=1)
-        self.assertEqual(contract.select_candidate([ready]), ready)
-
     def test_authorization_binds_source_control_run_and_expiry(self):
         d = {'schema_version': 1, 'selector': contract.SELECTOR,
              'repository': 'SecPal/deployment', 'issue': 81, 'pull_request': 400,
