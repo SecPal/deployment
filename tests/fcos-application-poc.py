@@ -23,18 +23,18 @@ class ApplicationPoC(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "separate database authorities"):
             build(INSTANCE, "lab.example.invalid", "10.0.0.28", gateway="haproxy")
         units, config = build(
-            INSTANCE, "lab.example.invalid", "10.0.0.28", 18443, 443,
+            INSTANCE, "lab.example.invalid", "10.0.0.28", 19443, 443,
             least_privilege=True, gateway="haproxy",
         )
         socket = units[f"{PREFIX}-gateway.socket"]
         gateway = units[f"{PREFIX}-gateway.container"]
-        self.assertIn("ListenStream=10.0.0.28:18443", socket)
+        self.assertIn("ListenStream=10.0.0.28:19443", socket)
         self.assertIn(f"Sockets={PREFIX}-gateway.socket", gateway)
         self.assertNotIn("PublishPort=", gateway)
         self.assertIn("DropCapability=all", gateway)
         self.assertIn("ReadOnly=true", gateway)
         self.assertIn("Environment=SECPAL_TLS_SOCKET=fd@3", gateway)
-        self.assertIn("exec --env SECPAL_TLS_SOCKET=127.0.0.1:18443", gateway)
+        self.assertIn("exec --user 99:99 --env SECPAL_TLS_SOCKET=127.0.0.1:19443", gateway)
         self.assertIn('bind "$SECPAL_TLS_SOCKET" ssl', config)
         self.assertIn("set-uri %[pathq] if { req.ver 2.0 }", config)
         self.assertNotIn("accept-proxy", config)

@@ -102,7 +102,7 @@ with the same ownership, mode and label. From the runtime account validate it
 using the admitted running image:
 
 ```bash
-podman exec --env SECPAL_TLS_SOCKET=127.0.0.1:18443 "$prefix-gateway" \
+podman exec --user 99:99 --env "SECPAL_TLS_SOCKET=127.0.0.1:$edge_port" "$prefix-gateway" \
   haproxy -c -f /usr/local/etc/haproxy/candidate.cfg
 ```
 

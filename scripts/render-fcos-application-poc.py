@@ -23,7 +23,6 @@ from haproxy_base_contract import Routing, routing_sections, runtime_preamble
 INTEGRATION = runpy.run_path(str(ROOT / "scripts/render-integration-quadlets.py"))
 HAPROXY_IMAGE = "docker.io/library/haproxy@sha256:5ddf08c89c95a311f4bfb761d74016597fdca76ecfcdf169ed1bab117f3da1ea"
 HAPROXY_CONFIG = "/usr/local/etc/haproxy/haproxy.cfg"
-HAPROXY_CHECK_SOCKET = "SECPAL_TLS_SOCKET=127.0.0.1:18443"
 RESTORE_ROLES = frozenset(
     {
         "secrets-init.container",
@@ -292,7 +291,7 @@ def haproxy_gateway(instance, root, domain, bind, port, https_port):
         f"Sockets={name}.socket",
         "Restart=on-failure",
         "RestartSec=5",
-        f"ExecReload=/usr/bin/podman exec --env {HAPROXY_CHECK_SOCKET} {name} haproxy -c -f {HAPROXY_CONFIG}",
+        f"ExecReload=/usr/bin/podman exec --user 99:99 --env SECPAL_TLS_SOCKET=127.0.0.1:{port} {name} haproxy -c -f {HAPROXY_CONFIG}",
         f"ExecReload=/usr/bin/podman kill --signal=USR2 {name}",
     ]) + section("Install", ["WantedBy=default.target"])
     socket = section("Unit", ["Description=SecPal FCOS lab HTTPS socket"]) + section(
