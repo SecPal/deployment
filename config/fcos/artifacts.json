@@ -15,7 +15,20 @@
   },
   "installer": {
     "version": "0.27.0",
-    "image": "quay.io/coreos/coreos-installer@sha256:c4667e07d14a69523c8bfd77d245b390cfbf719d4c4ee62ad3f76ecde24b5ba2",
+    "release": "1.fc44",
+    "epoch": 0,
+    "architectures": {
+      "x86_64": {
+        "rpm_sha256": "f288dc4c83ed4612bf75c87784ff6af97880502cd0a1b858bdee06f88c1de270",
+        "binary_sha256": "d23258f9530864e8f5dab2da7e8bde51ad5c9e318228c817ed230d8b57e9a0ca"
+      },
+      "aarch64": {
+        "rpm_sha256": "b6d72ac30eef5aec0c714ec3d22a7e1a55c0025e760c0d6a9f75108c0a4be8fe",
+        "binary_sha256": "0ed1927b9c9563ecc068a40cdf1ce4a46312d3726aad9ae8b3cfa2f36add9ef3"
+      }
+    }
+  },
+  "qualification_fixture": {
     "x86_64_manifest": "sha256:21b6cf5c5ca805c3abb5a3644a751c3b9460464a80b1da69f1de7c002ce358be",
     "aarch64_manifest": "sha256:ba370bed6b76a3fe18d4afda4a816948be6178a7abac423d467010b33808d9f7"
   },

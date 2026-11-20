@@ -118,7 +118,7 @@ class PreparationTests(unittest.TestCase):
             unit = fixture["quadlet"]
             self.assertIn(
                 "Image=quay.io/coreos/coreos-installer@"
-                + lock["installer"][arch + "_manifest"],
+                + lock["qualification_fixture"][arch + "_manifest"],
                 unit,
             )
             for setting in (

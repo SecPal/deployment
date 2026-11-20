@@ -96,8 +96,8 @@ Object, crypto and RecoverySet guarantees from
 1. Advance **#425 / Draft #428** using the accepted CX23 end-to-end
    reprovision and synthetic application recreation. The private report binds
    the original installed Ignition and the guest's network-readiness correction
-   to the corrected renderer. Complete native-installer publisher admission and
-   the administrator-owned broker mutation, independent Rescue bootstrap and
+   to the corrected renderer. Use the Fedora-signed native installer RPM and bind it to the qualified
+   Rescue execution. Complete administrator-owned broker mutation, independent Rescue bootstrap and
    credential transition under #425 before final delivery.
 2. Advance **#100 / [Draft #337](https://github.com/SecPal/deployment/pull/337)** through the smallest purpose-scoped Activation
    and independent crypto recovery witness using the completed #241 contract.

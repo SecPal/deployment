@@ -13,28 +13,45 @@ admit FCOS. Self-Hosted portability does not require FCOS.
 
 `config/fcos/artifacts.json` retains the accepted FCOS Stable release and the
 architecture-specific Metal image digests for x86_64 and aarch64. Butane,
-Ignition validation and the official coreos-installer OCI index/native child
-manifests are pinned. Resolve neither `latest` nor a moving stream during an
+Ignition validation and the Fedora 44 coreos-installer RPMs are pinned. Resolve
+neither `latest` nor a moving stream during an
 installation. Verify each complete Metal image SHA-256 and detached Fedora
 signature against the exact pinned full signer fingerprint, authenticated from
 [Fedora Security](https://fedoraproject.org/security/).
 
 `python3 scripts/verify_fcos_artifacts.py /private/verified-cache` checks local
-cached images and preparation tools with a temporary GnuPG home. It never
-changes host package/key databases. Its installer-index check proves only that
-index digest: native child/blob and publisher admission remain separately
-required before installation. An existing accepted signature/artifact record
+cached images and preparation tools with a temporary GnuPG home. Put both
+`coreos-installer-0.27.0-1.fc44.<architecture>.rpm` files beside the existing
+Fedora key and other cached assets. The verifier admits each exact RPM
+digest, signed header and payload, package identity, native ELF architecture,
+and executable digest using an isolated RPM database containing only the
+full pinned Fedora release signing key. An existing accepted signature/artifact record
 can be reused while its bytes, pins, signer authority and verification inputs
 are unchanged. A prompt, issue or another host cycle is not an invalidator.
 
-The private installer verification report binds the pinned index, both Linux
-child manifests, configurations and ordered layers to the retained native
-archives. For the CX23 run it also binds the archive hash and configuration ID
-to the actual installation receipt. The upstream version tag and its build
-workflow establish the distribution channel. Admission still requires
-publisher-signed evidence that names the pinned OCI subject. Fedora Metal
-signature verification applies to the OS image.
-[Upstream release workflow](https://github.com/coreos/coreos-installer/blob/v0.27.0/.github/workflows/containers.yml)
+On the trusted preparation host, use the installer-only operation to
+reverify and extract an admitted binary to a new private file:
+
+```sh
+python3 scripts/verify_fcos_artifacts.py /private/verified-cache \
+  --installer-only x86_64 --output-binary /private/run/installer.x86_64
+```
+
+Use an authenticated Rescue session and a private RAM-backed directory.
+Compare the transferred binary hash with the verification receipt. Check
+native architecture, the expected ELF loader and its resolved libraries,
+and the `gpg`, `lsblk`, `blkid` and `udevadm` helpers. Run the admitted
+binary with a clean environment and require version 0.27.0 before disk
+admission. The Fedora package requires GLIBC_2.39 and OpenSSL 3 symbols.
+Record the actual Rescue runtime and check compatibility per architecture.
+The Fedora RPM is extracted on the preparation host.
+[Fedora package and dependencies](https://packages.fedoraproject.org/pkgs/rust-coreos-installer/coreos-installer/fedora-44-updates.html)
+
+The earlier OCI archive, index, native manifests, configuration and ordered
+layers remain bound to the historical installation receipts. The native
+child digests retained under `qualification_fixture` are used for the
+existing isolated non-installation Quadlet fixture. The RPM signature
+authenticates the separately packaged native executable.
 
 The base introduces no additional VPN, package layer, enrollment service or
 identity database. Reuse the already qualified native NetworkManager WireGuard
@@ -113,8 +130,13 @@ arbitrary-command endpoint:
 3. Observe the actual disk, size, sector size, mounts, boot mode, NIC and network
    facts. Bind them, verified image/installer identities, Ignition hash and fresh
    installation ID before any disk write. Do not guess a previous device name.
-4. Run only the official native coreos-installer on that admitted guest disk.
-   No provider rebuild, replacement resource or protection change is needed.
+4. Revalidate the Rescue disk and the hashes of the native executable,
+   signed Metal image, detached signature and Ignition immediately before
+   launching the installer. Invoke the pinned executable with the admitted
+   device, local image and Ignition, the exact architecture, Metal platform,
+   offline mode and the installation identity kernel argument. The installer
+   verifies the Metal signature again. Preserve the provider identity and
+   both protection flags.
 5. Authenticate the new SSH host key through the controlled bootstrap path;
    verify FCOS version/CPU, Ignition, machine-id, SELinux, underlay IPv4/IPv6 and
    DNS before direct peer registration.
@@ -182,7 +204,7 @@ They do not establish qualification for different rendered bytes.
 
 | Stage                        | Owned work and advancement criterion                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Portable host foundation     | [#425](https://github.com/SecPal/deployment/issues/425) and [#428](https://github.com/SecPal/deployment/pull/428) own reproducible host input, deployment composition and host evidence. The private CX23 report binds the live guest and the network-readiness correction. Publisher-signed evidence for the exact native installer and live mutation/bootstrap and credential transition on the administrator-installed broker remain open.                                                                                              |
+| Portable host foundation     | [#425](https://github.com/SecPal/deployment/issues/425) and [#428](https://github.com/SecPal/deployment/pull/428) own reproducible host input, deployment composition and host evidence. The private CX23 report binds the live guest and the network-readiness correction. Bind the Fedora-signed native RPM to the admitted Rescue runtime. Live mutation/bootstrap and credential transition on the administrator-installed broker remain separate.                                                                                     |
 | Reproducible application PoC | [#429](https://github.com/SecPal/deployment/issues/429) and [#430](https://github.com/SecPal/deployment/pull/430) compose the integration renderer and image pins under [#117](https://github.com/SecPal/deployment/issues/117). Admit the generated test bundle, start it on an authorized test slot using separate private runtime inputs, and prove readiness, authenticated data access, restart and teardown while preserving the installed stacks. This qualification can use already accepted lab hosts.                            |
 | Isolated cross-host restore  | Transfer a consistent synthetic PostgreSQL archive over authenticated SSH, retain a protected off-source copy, and restore on an independent database and storage on a second authorized host. Compare schema and exact business records and prove authenticated API access and repeatability after container recreation. The restore proof supports the recovery program under [#91](https://github.com/SecPal/deployment/issues/91); production cross-state drills are owned by [#110](https://github.com/SecPal/deployment/issues/110). |
 | Production acceptance        | Qualify the PG18 container seam under [#426](https://github.com/SecPal/deployment/issues/426), least-authority activation under [#100](https://github.com/SecPal/deployment/issues/100), and the state, edge, backup, update and recovery contracts under [#87](https://github.com/SecPal/deployment/issues/87). Require independent recovery-key custody, PostgreSQL WAL/PITR, private object recovery where applicable, and RecoverySet validation. HA and CONTINUITY require their own topology and failure-domain evidence.            |

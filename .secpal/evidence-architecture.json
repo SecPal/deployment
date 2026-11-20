@@ -377,12 +377,42 @@
       }
     },
     {
-      "id": "fcos-artifacts.installer.index",
+      "id": "fcos-artifacts.installer.aarch64.rpm",
       "reachable": true,
       "fallible": true,
       "trusted": true,
       "diagnostic_identity": {
-        "id": "fcos-artifacts.installer.index",
+        "id": "fcos-artifacts.installer.aarch64.rpm",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.installer.key",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.installer.key",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.installer.output",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.installer.output",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.installer.x86_64.rpm",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.installer.x86_64.rpm",
         "kind": "semantic"
       }
     },

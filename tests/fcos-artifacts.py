@@ -4,6 +4,7 @@
 """Digest and signer admission reject altered artifacts and wrong signers."""
 import importlib.util
 import hashlib
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -24,6 +25,33 @@ spec.loader.exec_module(module)
 
 
 class ArtifactTests(unittest.TestCase):
+    def test_native_rpm_admission_requires_signature_metadata_digest_and_elf(self):
+        lock = json.loads((ROOT / "config/fcos/artifacts.json").read_text())
+        signer = lock["fedora_signer"]
+        status = (
+            f"    Header V4 RSA/SHA256 Signature, key ID {signer[-8:].lower()}: OK\n"
+            "    Payload SHA256 digest: OK\n"
+        )
+        for architecture, machine in (("x86_64", 62), ("aarch64", 183)):
+            with self.subTest(architecture=architecture):
+                binary = b"\x7fELF\x02\x01\x01" + b"\0" * 11 + machine.to_bytes(2, "little")
+                identity = f"coreos-installer|0|0.27.0|1.fc44|{architecture}"
+                digest = hashlib.sha256(binary).hexdigest()
+                module.admit_rpm_signature(status, signer)
+                module.admit_rpm_payload(identity, identity, binary, digest, architecture)
+                for altered in ("", status.replace("6d9f90a6", "deadbeef"),
+                                status.replace("Payload SHA256 digest: OK", "")):
+                    with self.assertRaises(module.VerificationError):
+                        module.admit_rpm_signature(altered, signer)
+                for wrong_identity, wrong_binary, wrong_digest in (
+                    ("wrong", binary, digest),
+                    (identity, binary + b"x", digest),
+                    (identity, b"\0" * len(binary), hashlib.sha256(b"\0" * len(binary)).hexdigest()),
+                ):
+                    with self.assertRaises(module.VerificationError):
+                        module.admit_rpm_payload(wrong_identity, identity, wrong_binary,
+                                                 wrong_digest, architecture)
+
     def test_artifact_normalization_admission_and_assembly_are_pure(self):
         allowed = {"tuple", "VerificationError"}
         for function in (

@@ -214,7 +214,7 @@ d /etc/containers/systemd/users/{mapping['service_uid']} 0755 root root -
 def qualification(settings, lock):
     """Prepare the existing disposable fixture; do not activate a workload."""
     s = admit(settings)
-    image = lock["installer"][s["architecture"] + "_manifest"]
+    image = lock["qualification_fixture"][s["architecture"] + "_manifest"]
     check(type(image) is str and re.fullmatch(r"sha256:[0-9a-f]{64}", image))
     return {
         "quadlet": f"""[Unit]
