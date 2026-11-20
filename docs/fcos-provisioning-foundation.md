@@ -27,6 +27,15 @@ required before installation. An existing accepted signature/artifact record
 can be reused while its bytes, pins, signer authority and verification inputs
 are unchanged. A prompt, issue or another host cycle is not an invalidator.
 
+The private installer verification report binds the pinned index, both Linux
+child manifests, configurations and ordered layers to the retained native
+archives. For the CX23 run it also binds the archive hash and configuration ID
+to the actual installation receipt. The upstream version tag and its build
+workflow establish the distribution channel. Admission still requires
+publisher-signed evidence that names the pinned OCI subject. Fedora Metal
+signature verification applies to the OS image.
+[Upstream release workflow](https://github.com/coreos/coreos-installer/blob/v0.27.0/.github/workflows/containers.yml)
+
 The base introduces no additional VPN, package layer, enrollment service or
 identity database. Reuse the already qualified native NetworkManager WireGuard
 and restricted peer-generation lifecycle. Existing management identities,
@@ -173,7 +182,7 @@ They do not establish qualification for different rendered bytes.
 
 | Stage                        | Owned work and advancement criterion                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Portable host foundation     | [#425](https://github.com/SecPal/deployment/issues/425) and [#428](https://github.com/SecPal/deployment/pull/428) own reproducible host input, deployment composition and host evidence. Advance when the exact native installer, rendered input and installation-bound bootstrap are admitted and the supported lifecycle has real-system evidence. [#427](https://github.com/SecPal/deployment/pull/427) delivered broker source; live custody requires independent installation, read-only acceptance and safe credential transition.   |
+| Portable host foundation     | [#425](https://github.com/SecPal/deployment/issues/425) and [#428](https://github.com/SecPal/deployment/pull/428) own reproducible host input, deployment composition and host evidence. The private CX23 report binds the live guest and the network-readiness correction. Publisher-signed evidence for the exact native installer and live mutation/bootstrap and credential transition on the administrator-installed broker remain open.                                                                                              |
 | Reproducible application PoC | [#429](https://github.com/SecPal/deployment/issues/429) and [#430](https://github.com/SecPal/deployment/pull/430) compose the integration renderer and image pins under [#117](https://github.com/SecPal/deployment/issues/117). Admit the generated test bundle, start it on an authorized test slot using separate private runtime inputs, and prove readiness, authenticated data access, restart and teardown while preserving the installed stacks. This qualification can use already accepted lab hosts.                            |
 | Isolated cross-host restore  | Transfer a consistent synthetic PostgreSQL archive over authenticated SSH, retain a protected off-source copy, and restore on an independent database and storage on a second authorized host. Compare schema and exact business records and prove authenticated API access and repeatability after container recreation. The restore proof supports the recovery program under [#91](https://github.com/SecPal/deployment/issues/91); production cross-state drills are owned by [#110](https://github.com/SecPal/deployment/issues/110). |
 | Production acceptance        | Qualify the PG18 container seam under [#426](https://github.com/SecPal/deployment/issues/426), least-authority activation under [#100](https://github.com/SecPal/deployment/issues/100), and the state, edge, backup, update and recovery contracts under [#87](https://github.com/SecPal/deployment/issues/87). Require independent recovery-key custody, PostgreSQL WAL/PITR, private object recovery where applicable, and RecoverySet validation. HA and CONTINUITY require their own topology and failure-domain evidence.            |
@@ -201,8 +210,10 @@ the database roles, and both worker queues passed after container recreation
 and a controlled guest reboot. The provider mutation path was the authorized
 legacy test workflow. Broker mutation acceptance remains outstanding.
 
-The run exposed an absent system network-online dependency on the fresh guest.
-The operator added the persistent systemd wants link on the guest. The
-renderer now declares the equivalent link, with strict Butane and Ignition
-validation on both architectures. The private report retains the exact
-installed Ignition and the subsequent guest correction.
+The original installed Ignition omitted the system network-online dependency.
+The persistent systemd wants link was added on the guest after installation
+and observed active after reboot. The corrected renderer produces the same
+link. With the original CX23 settings and site overlays, the compiled Ignition
+differs semantically only by that link. Both architecture fixtures passed
+strict Butane and Ignition validation. The private report retains the original
+installed bytes, guest correction and corrected renderer outputs separately.
