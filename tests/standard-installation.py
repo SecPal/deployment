@@ -11,6 +11,7 @@ import json
 import importlib.util
 import os
 from pathlib import Path
+import runpy
 import sys
 import subprocess
 import tempfile
@@ -254,6 +255,10 @@ class InstallationContract(unittest.TestCase):
                                  isinstance(target, ast.Name) and target.id == "STAGES"
                                  for target in node.targets))
         operations.update("hetzner-broker." + stage for stage in broker_stages)
+        # The FCOS role helper owns its diagnostics and admission coverage.
+        fcos_renderer = runpy.run_path(str(ROOT / "scripts/render-fcos-application-poc.py"))
+        operations.update(fcos_renderer["database_diagnostic_ids"](
+            (ROOT / "scripts/fcos-poc-db-roles.sh").read_text()))
         entries = document["external_operations"]
         self.assertEqual({row["id"] for row in entries}, operations)
         self.assertEqual(len(entries), len(operations))
