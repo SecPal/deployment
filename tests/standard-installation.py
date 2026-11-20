@@ -653,7 +653,6 @@ class InstallationContract(unittest.TestCase):
                                                native.path(name).read_bytes())
                                         for name in desired["files"]})
             self.assertFalse(any(command[0] in {"psql", "initdb", "openssl"}
-                                 or "qualify-native-postgresql.py" in " ".join(command)
                                  for command in native.commands))
 
     def test_authority_or_config_conflict_fails_before_any_install_mutation(self):

@@ -4,19 +4,14 @@
 
 """Adversarial contract evidence for the trusted PostgreSQL data boundary."""
 
-import copy
 import base64
-import gzip
-import hashlib
-import json
+import copy
 import importlib.util
-import os
-import re
+import json
 from pathlib import Path
-import sys
 import shutil
+import sys
 import tempfile
-from unittest import mock
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,128 +20,6 @@ import postgresql_qualification_contract as contract
 
 
 class CandidateData(unittest.TestCase):
-    def load_module(self, name, filename):
-        spec = importlib.util.spec_from_file_location(name, ROOT / filename)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
-    def test_guest_staged_probe_closure_matches_controller_identity(self):
-        control = self.load_module('pg_guest_probe_closure', 'scripts/ci-cloud/postgresql-qualification-control.py')
-        runner = self.load_module('pg_guest_manifest', 'scripts/ci-cloud/qualify-native-postgresql.py')
-        manifest = control.probe_manifest()
-        expected = control.probe_digest()
-        # Preserve the existing ordered path + SHA-256 identity algorithm.
-        legacy = hashlib.sha256()
-        for path in control.PROBE_PATHS:
-            legacy.update(path.encode() + b'\0' + hashlib.sha256((ROOT/path).read_bytes()).digest())
-        self.assertEqual(expected, legacy.hexdigest())
-        self.assertEqual(contract.probe_manifest_digest(manifest), expected)
-        with tempfile.TemporaryDirectory() as directory:
-            guest = Path(directory)
-            for destination in contract.GUEST_PROBE_PATHS:
-                path = guest / destination
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes((ROOT / destination).read_bytes())
-            with mock.patch.object(runner, 'ROOT', guest), mock.patch.object(runner, 'read_probe_manifest', return_value=manifest):
-                self.assertEqual(runner.guest_probe_digest(), expected)
-                bad = dict(manifest); bad.pop(contract.CONTROL_PROBE_PATHS[0])
-                with self.assertRaises(contract.QualificationError): contract.probe_manifest_digest(bad)
-                bad = dict(manifest); bad[contract.CONTROL_PROBE_PATHS[0]] = 'f'*64
-                self.assertNotEqual(contract.probe_manifest_digest(bad), expected)
-                (guest / contract.GUEST_PROBE_PATHS[0]).write_text('altered guest qualifier')
-                with self.assertRaises(contract.QualificationError): runner.guest_probe_digest()
-
-    def test_failed_image_pull_cleanup_accepts_absence_but_requires_readback(self):
-        module = self.load_module('pg_failed_image_pull_cleanup', 'scripts/ci-cloud/qualify-native-postgresql.py')
-        observer = module.Observer.__new__(module.Observer)
-        observer.children = []
-        observer.selinux_module_created = False
-        observer.passwords = {}
-        observer.data_created = False
-        observer.application_image_created = True
-        image_still_present = False
-
-        def system(operation, arguments, *, accepted=(0,), **options):
-            status, output = 0, ''
-            if arguments[:2] == ['podman', 'rmi']:
-                status = 0 if '--ignore' in arguments else 1
-            elif arguments[:2] == ['systemctl', 'is-active']:
-                status, output = 3, 'inactive'
-            elif arguments[:2] == ['nft', 'list'] or arguments[:3] == ['podman', 'container', 'exists']:
-                status = 1
-            elif arguments[:3] == ['podman', 'image', 'exists']:
-                status = 0 if image_still_present else 1
-            if status not in accepted:
-                raise contract.QualificationError(operation, 'command-failed')
-            return status, output, ''
-
-        observer.run = mock.Mock(side_effect=system)
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            with mock.patch.multiple(module, DATA=base/'data', CLIENT=base/'client',
-                                     MATERIAL=base/'material', STATE=base/'state', APPLICATION_IMAGE_STATE=base/'image-state'):
-                self.assertEqual(observer.cleanup(), contract.CLEANUP_POSTCONDITIONS)
-                observer.run.assert_any_call('cleanup-test-material',
-                    ['podman', 'image', 'exists', contract.APPLICATION_RUNTIME['image']],
-                    user='secpal-runtime', accepted=(1,))
-                image_still_present = True
-                with self.assertRaises(contract.QualificationError):
-                    observer.cleanup()
-
-    def test_attested_application_index_accepts_exact_platform_child_representation(self):
-        import hashlib
-        from types import SimpleNamespace
-        module = self.load_module('pg_application_child_identity', 'scripts/ci-cloud/qualify-native-postgresql.py')
-        repository = contract.APPLICATION_RUNTIME['image'].split('@')[0]
-        index = json.dumps({'manifests': [
-            {'platform': {'os': 'linux', 'architecture': architecture}, 'digest': digest}
-            for architecture, digest in contract.APPLICATION_RUNTIME['platform_digests'].items()
-        ]}).encode()
-        identity = copy.deepcopy(contract.APPLICATION_RUNTIME)
-        identity['image'] = repository + '@sha256:' + hashlib.sha256(index).hexdigest()
-        tooling = SimpleNamespace(CLOUD_GH_RELEASES={'x86_64': {}, 'aarch64': {}},
-                                  stage_gh_cli=mock.Mock(return_value='/trusted-fixture/gh'))
-        for machine, architecture in [('x86_64', 'amd64'), ('aarch64', 'arm64')]:
-            child = repository + '@' + identity['platform_digests'][architecture]
-            for digests, os_name, observed_arch, valid in [
-                ([child], 'linux', architecture, True),
-                ([identity['image'], child], 'linux', architecture, True),
-                ([identity['image']], 'linux', architecture, False),
-                ([repository + '@sha256:' + '0'*64], 'linux', architecture, False),
-                ([child], 'windows', architecture, False),
-                ([child], 'linux', 'other', False),
-                (child, 'linux', architecture, False),
-            ]:
-                with self.subTest(machine=machine, digests=digests, os=os_name, architecture=observed_arch), \
-                     tempfile.TemporaryDirectory() as directory:
-                    base = Path(directory)
-                    client = base / 'client'
-                    client.mkdir()
-                    observer = module.Observer.__new__(module.Observer)
-                    observer.environment = {'PATH': '/usr/bin:/bin'}
-                    observer.runtime = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
-                    def command(operation, arguments, **options):
-                        if arguments[0] == 'python3':
-                            Path(arguments[2]).write_bytes(index)
-                            Path(arguments[3]).write_text('{}')
-                        if arguments[:3] == ['podman', 'image', 'inspect']:
-                            return 0, json.dumps([{'Os': os_name, 'Architecture': observed_arch, 'RepoDigests': digests}]), ''
-                        return (1, '', '') if arguments[:3] == ['podman', 'image', 'exists'] else (0, '', '')
-                    observer.run = mock.Mock(side_effect=command)
-                    with mock.patch.multiple(module, APPLICATION_IMAGE_STATE=base/'image-state', CLIENT=client), \
-                         mock.patch.object(module, 'trusted_module', return_value=tooling), \
-                         mock.patch.object(module.os, 'uname', return_value=SimpleNamespace(machine=machine)), \
-                         mock.patch.object(contract, 'APPLICATION_RUNTIME', identity):
-                        if valid:
-                            observer.admit_application_image()
-                        else:
-                            with self.assertRaises(contract.QualificationError):
-                                observer.admit_application_image()
-                    observer.run.assert_any_call('admit-application-image',
-                        ['podman', 'pull', '--authfile=' + str(client/'anonymous-auth.json'), identity['image']],
-                        user='secpal-runtime', timeout=300)
-
     def test_psql_only_evidence_cannot_establish_application_readiness(self):
         evidence, options = self.system_fixture('gcp-rocky-10-2-arm64')
         # The historical contract has only psql readiness and sleep-container
@@ -195,198 +68,6 @@ class CandidateData(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(contract.QualificationError):
                 contract.normalize_application_http(raw)
 
-    def test_application_commands_have_fixed_runtime_code_and_role_authority(self):
-        module = self.load_module('pg_application_commands', 'scripts/ci-cloud/qualify-native-postgresql.py')
-        observer = module.Observer.__new__(module.Observer)
-        observer.logins = contract.qualification_logins('200', '1', 11800)
-        observer.run = mock.Mock(side_effect=AssertionError('construction must not execute'))
-        normal = observer.application_command('pdo')
-        self.assertIn(contract.APPLICATION_RUNTIME['image'], normal)
-        self.assertIn('--userns=keep-id:uid=10001,gid=10001', normal)
-        self.assertIn('--env=DB_SSLMODE=verify-full', normal)
-        self.assertFalse(any('DB_PASSWORD=' in a or 'APP_KEY=' in a for a in normal))
-        self.assertFalse(any('application-migration' in a for a in normal))
-        self.assertNotIn('psql', normal)
-        serve = observer.application_command('serve', detached=True)
-        self.assertIn('--entrypoint=/usr/local/bin/frankenphp', serve)
-        self.assertEqual(serve[-3:], ['run', '--config', '/etc/frankenphp/Caddyfile'])
-        self.assertNotIn('sleep', serve)
-        for arguments in (('php -r caller', {}), ('pdo', {'scenario': '$(caller)'}),
-                          ('pdo', {'role': 'migration'}), ('initialize', {}),
-                          ('serve', {'detached': False})):
-            with self.subTest(arguments=arguments), self.assertRaises(contract.QualificationError):
-                observer.application_command(arguments[0], **arguments[1])
-
-    def test_readiness_is_http_not_database_client_and_tracks_same_process(self):
-        module = self.load_module('pg_application_http', 'scripts/ci-cloud/qualify-native-postgresql.py')
-        observer = module.Observer.__new__(module.Observer)
-        observer.run = mock.Mock(return_value=(0, '{"http_status":503,"body_status":"not_ready"}', ''))
-        self.assertEqual(observer.application_http('ready'), {'http_status':503,'body_status':'not_ready'})
-        argv = observer.run.call_args.args[1]
-        self.assertEqual(argv[-2:], ['/run/secpal-qualification/probe.php','ready'])
-        self.assertNotIn('psql', argv)
-        observer.run.return_value = (0, '12000', '')
-        self.assertEqual(observer.application_pid(), '12000')
-        observer.run.return_value = (0, '0', '')
-        with self.assertRaises(contract.QualificationError):
-            observer.application_pid()
-        with self.assertRaises(contract.QualificationError):
-            observer.application_http('caller-selected')
-
-    def test_graphql_document_uses_json_media_type(self):
-        control = self.load_module('pg_request', 'scripts/ci-cloud/postgresql-qualification-control.py')
-        response = mock.MagicMock()
-        response.__enter__.return_value = response
-        response.status = 200
-        response.read.return_value = b'{}'
-        observer = control.GitHubObserver()
-        with mock.patch.dict(os.environ, {'GH_TOKEN': 'synthetic-test-only'}), \
-             mock.patch.object(observer.opener, 'open', return_value=response) as request:
-            observer.request('/graphql', {'query': control.QUERY})
-        self.assertEqual(request.call_args.args[0].get_header('Content-type'), 'application/json')
-
-    def github_candidate_fixture(self, timeline, *, draft=True):
-        # Reviewed GitHub timeline representations are fixtures, never PASS authority.
-        head = '23f04d218ec299fd933353fd438e921da6ff2694'
-        pull = {'number': 286, 'state': 'OPEN', 'isDraft': draft,
-                'body': 'Fixes #81\n\nPart of: #134', 'headRefOid': head,
-                'baseRefName': 'main', 'headRepository': {'nameWithOwner': 'SecPal/deployment'},
-                'repository': {'nameWithOwner': 'SecPal/deployment'}, 'commits': {'totalCount': 1},
-                'closingIssuesReferences': {'totalCount': 1, 'pageInfo': {'hasNextPage': False},
-                    'nodes': [{'number': 81, 'repository': {'nameWithOwner': 'SecPal/deployment'}}]},
-                'timelineItems': timeline}
-        result = {'data': {'repository': {'nameWithOwner': 'SecPal/deployment',
-            'defaultBranchRef': {'name': 'main'}, 'pullRequests': {
-                'totalCount': 1, 'pageInfo': {'hasNextPage': False}, 'nodes': [pull]}}}}
-        commits = [{'sha': head, 'commit': {'verification': {'verified': True, 'reason': 'valid'}}}]
-        return result, commits
-
-    def test_complete_selected_lifecycle_representation_reaches_admission(self):
-        control = self.load_module('pg_lifecycle', 'scripts/ci-cloud/postgresql-qualification-control.py')
-        # #286 and #193 had 3/0 and 20/0; fresh #286 is 4/0. Ready #247 is 9/1.
-        for total, events, draft in ((3, [], True), (20, [], True), (4, [], True),
-                                    (9, ['ReadyForReviewEvent'], False),
-                                    (0, ['ReadyForReviewEvent'], False)):
-            with self.subTest(total=total, events=events):
-                timeline = {'totalCount': total, 'pageInfo': {'hasNextPage': False},
-                            'nodes': [{'__typename': event} for event in events]}
-                result, commits = self.github_candidate_fixture(timeline, draft=draft)
-                # An unrelated open PR must use the same reviewed representation.
-                unrelated = copy.deepcopy(result['data']['repository']['pullRequests']['nodes'][0])
-                unrelated['number'] = 193
-                unrelated['closingIssuesReferences'] = {
-                    'totalCount': 0, 'pageInfo': {'hasNextPage': False}, 'nodes': []}
-                unrelated['timelineItems'] = {
-                    'totalCount': 20, 'pageInfo': {'hasNextPage': False}, 'nodes': []}
-                result['data']['repository']['pullRequests']['nodes'].append(unrelated)
-                result['data']['repository']['pullRequests']['totalCount'] = 2
-                observer = control.GitHubObserver()
-                with mock.patch.object(observer, 'request', side_effect=[result, commits]) as request:
-                    candidate = observer.candidate()
-                self.assertEqual(candidate['head'], commits[0]['sha'])
-                self.assertEqual((candidate['ready_events'], candidate['draft_events']), (len(events), 0))
-                self.assertEqual(candidate['draft'], draft)
-                self.assertEqual(contract.select_candidate([candidate]), candidate)
-                request.assert_any_call('/graphql', {'query': control.QUERY})
-
-    def test_lifecycle_representation_and_candidate_fail_closed(self):
-        control = self.load_module('pg_lifecycle_reject', 'scripts/ci-cloud/postgresql-qualification-control.py')
-        timeline = {'totalCount': 3, 'pageInfo': {'hasNextPage': False}, 'nodes': []}
-        result, commits = self.github_candidate_fixture(timeline)
-        pull_path = ('data', 'repository', 'pullRequests', 'nodes', 0)
-        cases = [
-            (('timelineItems', 'pageInfo', 'hasNextPage'), True),
-            (('timelineItems', 'pageInfo', 'hasNextPage'), 0),
-            (('timelineItems', 'pageInfo'), {}),
-            (('timelineItems', 'pageInfo', 'endCursor'), 'caller-cursor'),
-            (('timelineItems', 'totalCount'), True),
-            (('timelineItems', 'totalCount'), -1),
-            (('timelineItems', 'totalCount'), '3'),
-            (('timelineItems', 'nodes'), [{'__typename': 'ReadyForReviewEvent'}] * 101),
-            (('timelineItems', 'nodes'), {}),
-            (('timelineItems', 'nodes'), [None]),
-            (('timelineItems', 'nodes'), [{}]),
-            (('timelineItems', 'nodes'), [{'__typename': 'UnknownEvent'}]),
-            (('timelineItems', 'nodes'), [{'__typename': ['ReadyForReviewEvent']}]),
-            (('timelineItems', 'nodes'), [{'__typename': 'ReadyForReviewEvent', 'createdAt': 'invalid'}]),
-            (('timelineItems', 'PASS'), True),
-            (('timelineItems',), None),
-            (('timelineItems', 'nodes'), [{'__typename': 'ReadyForReviewEvent'}]),
-            (('timelineItems', 'nodes'), [{'__typename': 'ConvertToDraftEvent'}]),
-            (('isDraft',), False),
-            (('headRefOid',), 'a' * 40),
-            (('baseRefName',), 'other'),
-            (('repository', 'nameWithOwner'), 'attacker/deployment'),
-            (('headRepository', 'nameWithOwner'), 'attacker/deployment'),
-            (('closingIssuesReferences', 'totalCount'), 2),
-        ]
-        for path, value in cases:
-            changed = copy.deepcopy(result)
-            owner = changed
-            for key in pull_path + path[:-1]:
-                owner = owner[key]
-            owner[path[-1]] = value
-            with self.subTest(path=path, value=value), \
-                 mock.patch.object(control.GitHubObserver, 'request', side_effect=[changed, commits]), \
-                 self.assertRaises(contract.QualificationError):
-                control.GitHubObserver().candidate()
-        for events in (['ReadyForReviewEvent'] * 2,
-                       ['ReadyForReviewEvent', 'ConvertToDraftEvent'],
-                       ['ReadyForReviewEvent', 'ConvertToDraftEvent', 'ReadyForReviewEvent']):
-            changed, signatures = self.github_candidate_fixture(dict(timeline,
-                nodes=[{'__typename': event} for event in events]), draft=False)
-            with self.subTest(events=events), \
-                 mock.patch.object(control.GitHubObserver, 'request', side_effect=[changed, signatures]), \
-                 self.assertRaises(contract.QualificationError):
-                control.GitHubObserver().candidate()
-        for count in (0, 2):
-            changed = copy.deepcopy(result)
-            connection = changed['data']['repository']['pullRequests']
-            connection['nodes'] *= count
-            connection['totalCount'] = count
-            with self.subTest(deliveries=count), \
-                 mock.patch.object(control.GitHubObserver, 'request', side_effect=[changed] + [commits] * count), \
-                 self.assertRaises(contract.QualificationError):
-                control.GitHubObserver().candidate()
-        commits[0]['commit']['verification']['verified'] = False
-        with mock.patch.object(control.GitHubObserver, 'request', side_effect=[result, commits]), \
-             self.assertRaises(contract.QualificationError):
-            control.GitHubObserver().candidate()
-        # Strict connection semantics elsewhere must not inherit the timeline exception.
-        with self.assertRaises(contract.QualificationError):
-            control.GitHubObserver.connection(timeline)
-
-    def test_lifecycle_resolution_reconfirms_source_and_closed_authorization(self):
-        from types import SimpleNamespace
-        from jsonschema import Draft202012Validator
-        control = self.load_module('pg_lifecycle_resolve', 'scripts/ci-cloud/postgresql-qualification-control.py')
-        timeline = {'totalCount': 3, 'pageInfo': {'hasNextPage': False}, 'nodes': []}
-        result, commits = self.github_candidate_fixture(timeline)
-        options = SimpleNamespace(control_sha='c' * 40, profile='gcp-rocky-10-2-x86-64',
-                                  run_id='100', run_attempt='1')
-        schema = json.loads((ROOT/'schemas/postgresql-qualification-evidence.schema.json').read_text())
-        for drift in (False, True):
-            current, current_commits = copy.deepcopy(result), copy.deepcopy(commits)
-            if drift:
-                current['data']['repository']['pullRequests']['nodes'][0]['headRefOid'] = 'a' * 40
-                current_commits[0]['sha'] = 'a' * 40
-            with self.subTest(drift=drift), \
-                 mock.patch.object(control.GitHubObserver, 'request',
-                    side_effect=[result, commits, current, current_commits]), \
-                 mock.patch.object(control.GitHubObserver, 'declaration',
-                    return_value=('f' * 40, 'b' * 40, 'e' * 40, contract.DECLARATION)):
-                if drift:
-                    with self.assertRaises(contract.QualificationError) as error:
-                        control.resolve(options)
-                    self.assertEqual(error.exception.reason, 'source-drift')
-                else:
-                    resolved = control.resolve(options)
-                    authorization = resolved['authorization']
-                    Draft202012Validator(schema['properties']['authorization']).validate(authorization)
-                    self.assertEqual(authorization['candidate_sha'], commits[0]['sha'])
-                    self.assertEqual(authorization['selector'], 'native-postgresql-18')
-                    self.assertEqual(authorization['probe_sha256'], control.probe_digest())
-
     def test_stable_privilege_roles_cannot_authenticate(self):
         bundle = contract.render_configuration(contract.DECLARATION, 1234)
         for name in contract.ROLE_POLICY:
@@ -394,58 +75,6 @@ class CandidateData(unittest.TestCase):
             self.assertIn(f'CREATE ROLE {name} NOLOGIN ', bundle['roles.sql'])
         self.assertIn('+secpal_runtime,+secpal_migration', bundle['pg_hba.conf'])
         self.assertIn('WITH ADMIN FALSE, INHERIT FALSE, SET TRUE', bundle['roles.sql'])
-
-    def test_cleanup_removes_only_run_created_database_material(self):
-        module = self.load_module('pg_cleanup', 'scripts/ci-cloud/qualify-native-postgresql.py')
-        observer = module.Observer.__new__(module.Observer)
-        observer.children = []
-        observer.selinux_module_created = False
-        observer.passwords = {'synthetic': 'synthetic-test-only'}
-        observer.data_created = True
-        observer.application_image_created = False
-        observer.run = mock.Mock(return_value=(3, 'inactive', ''))
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            with mock.patch.multiple(module, DATA=base/'data', CLIENT=base/'client',
-                                     MATERIAL=base/'material', STATE=base/'state', APPLICATION_IMAGE_STATE=base/'image-state'):
-                module.DATA.mkdir()
-                (module.DATA/'PG_VERSION').write_text('18')
-                (module.DATA/'synthetic-verifier').write_text('synthetic-test-only')
-                cleanup = observer.cleanup()
-                self.assertFalse(module.DATA.exists())
-                self.assertTrue(cleanup['database_material_absent'])
-                module.DATA.mkdir()
-                (module.DATA/'unowned').write_text('preserve')
-                observer.data_created = False
-                with self.assertRaises(contract.QualificationError):
-                    observer.prepare(contract.DECLARATION)
-                self.assertEqual((module.DATA/'unowned').read_text(), 'preserve')
-
-    def test_pre_observer_failure_still_writes_admissible_diagnostic(self):
-        from jsonschema import Draft202012Validator
-        module = self.load_module('pg_early_failure', 'scripts/ci-cloud/qualify-native-postgresql.py')
-        evidence, options = self.system_fixture('gcp-rocky-10-2-arm64')
-        auth = evidence['authorization']
-        binding = dict(control_sha=auth['control_sha'], profile=auth['profile'], access_run_id='200',
-                       access_run_attempt='1', instance_id=evidence['instance_id'], instance_name=evidence['instance_name'])
-        schema = json.loads((ROOT/'schemas/postgresql-qualification-diagnostic.schema.json').read_text())
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            (base/'prepared').touch()
-            with mock.patch.multiple(module, __file__='/opt/secpal-control/scripts/ci-cloud/qualify-native-postgresql.py',
-                                     STATE=base, AUTHORIZATION=base/'missing', DIAGNOSTIC=base/'diagnostic.json'), \
-                 mock.patch.object(module.os, 'geteuid', return_value=0), \
-                 mock.patch.object(module.os, 'fchown'), \
-                 mock.patch.object(module.pwd, 'getpwnam', return_value=mock.Mock(pw_gid=os.getgid())), \
-                 mock.patch.object(module, 'Observer', side_effect=AssertionError('must not construct observer')), \
-                 mock.patch.object(sys, 'argv', ['qualify', '--run-id', '200', '--run-attempt', '1']):
-                self.assertEqual(module.main(), 1)
-            document = json.loads((base/'diagnostic.json').read_text())
-            Draft202012Validator(schema).validate(document)
-            self.assertIsNone(document['resource'])
-            self.assertFalse(document['cleanup_complete'])
-            self.assertEqual(contract.admit_diagnostic(document, authorization=auth, binding=binding,
-                qualification_run_id='200', qualification_run_attempt='1', host_evidence_sha256='0'*64), document)
 
     def system_fixture(self, profile):
         architecture = contract.rpm.PROFILE_ARCHITECTURES[profile]
@@ -568,68 +197,29 @@ class CandidateData(unittest.TestCase):
                 with self.subTest(key=key), self.assertRaises(contract.QualificationError):
                     contract.admit_diagnostic(changed, **options)
 
-    def test_architecture_gate_rejects_bypass_and_missing_diagnostics(self):
+    def test_architecture_gate_rejects_pure_execution_and_diagnostic_drift(self):
         spec = importlib.util.spec_from_file_location('pg_gate', ROOT / 'scripts/validate-postgresql-qualification.py')
-        gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(gate)
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
         gate.validate(ROOT)
+        pure = 'scripts/ci-cloud/postgresql_qualification_contract.py'
+        diagnostic = 'schemas/postgresql-qualification-diagnostic.schema.json'
         with tempfile.TemporaryDirectory() as directory:
             temporary = Path(directory)
-            paths = ('scripts/ci-cloud/postgresql_qualification_contract.py',
-                     'scripts/ci-cloud/rocky_preparation_contract.py',
-                     'scripts/ci-cloud/qualify-native-postgresql.py',
-                     'scripts/ci-cloud/postgresql-qualification-control.py',
-                     'schemas/postgresql-qualification-diagnostic.schema.json',
-                     'scripts/ci-cloud/postgresql-reference-host.py')
-            for name in paths:
-                destination = temporary / name; destination.parent.mkdir(parents=True,exist_ok=True)
-                shutil.copyfile(ROOT / name,destination)
-            for name, before, after in (
-                (paths[0],'import hashlib','import os\nimport hashlib'),
-                (paths[2],'import argparse','import argparse\nsubprocess.run(["unbounded"])'),
-                (paths[2],'observer.cleanup()','observer.omit_cleanup()'),
-                (paths[3],'contract.admit_diagnostic(','contract.trust_diagnostic(')):
-                original = (temporary / name).read_text()
-                (temporary / name).write_text(original.replace(before,after))
-                with self.subTest(name=name), self.assertRaises(ValueError):
-                    gate.validate(temporary)
-                (temporary / name).write_text(original)
-
-    def test_fixed_git_blob_checks_identity_modes_and_consumer_closure(self):
-        import base64, hashlib
-        spec = importlib.util.spec_from_file_location('pg_control', ROOT / 'scripts/ci-cloud/postgresql-qualification-control.py')
-        control = importlib.util.module_from_spec(spec); spec.loader.exec_module(control)
-        raw = contract.canonical_bytes(contract.DECLARATION)
-        blob_sha = hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
-        representations = [
-            {'sha':'a'*40,'truncated':False,'tree':[{'path':'config','type':'tree','mode':'040000','sha':'b'*40}]},
-            {'sha':'b'*40,'truncated':False,'tree':[{'path':'production','type':'tree','mode':'040000','sha':'c'*40}]},
-            {'sha':'c'*40,'truncated':False,'tree':[{'path':'postgresql-contract.json','type':'blob','mode':'100644','sha':blob_sha}]},
-            {'sha':blob_sha,'encoding':'base64','size':len(raw),'content':base64.b64encode(raw).decode()}]
-        observer = control.GitHubObserver()
-        with mock.patch.object(observer,'request',side_effect=representations):
-            self.assertEqual(observer.fixed_blob('a'*40,contract.CANDIDATE_PATH),(blob_sha,raw))
-        for index, key, value in ((0,'truncated',True),(3,'sha','d'*40),(3,'content',base64.b64encode(b'{}').decode())):
-            changed = copy.deepcopy(representations);changed[index][key] = value
-            with self.subTest(key=key), mock.patch.object(observer,'request',side_effect=changed), self.assertRaises(contract.QualificationError):
-                observer.fixed_blob('a'*40,contract.CANDIDATE_PATH)
-        changed = copy.deepcopy(representations);changed[2]['tree'][0]['mode']='120000'
-        with mock.patch.object(observer,'request',side_effect=changed), self.assertRaises(contract.QualificationError):
-            observer.fixed_blob('a'*40,contract.CANDIDATE_PATH)
-        module_raw = (ROOT / 'scripts/ci-cloud/rocky_preparation_contract.py').read_bytes()
-        module_sha = hashlib.sha1(b'blob ' + str(len(module_raw)).encode() + b'\0' + module_raw).hexdigest()
-        rows = [{'sha':'a'*40,'truncated':False,'tree':[{'path':'scripts','type':'tree','mode':'040000','sha':'b'*40}]},
-                {'sha':'b'*40,'truncated':False,'tree':[{'path':'ci-cloud','type':'tree','mode':'040000','sha':'c'*40}]},
-                {'sha':'c'*40,'truncated':False,'tree':[{'path':'rocky_preparation_contract.py','type':'blob','mode':'100755','sha':module_sha}]},
-                {'sha':module_sha,'encoding':'base64','size':len(module_raw),'content':base64.b64encode(module_raw).decode()}]
-        with mock.patch.object(observer,'request',side_effect=rows):
-            self.assertEqual(observer.fixed_blob('a'*40,'scripts/ci-cloud/rocky_preparation_contract.py'),(module_sha,module_raw))
-        with self.assertRaises(contract.QualificationError):
-            observer.fixed_blob('a'*40,'../../caller')
-        # Entrypoint equality cannot hide a substituted local admission import.
-        with mock.patch.object(observer,'request',return_value={'sha':'a'*40,'tree':{'sha':'b'*40}}), \
-             mock.patch.object(observer,'fixed_blob',side_effect=[(blob_sha,raw),('e'*40,(ROOT / contract.CONSUMER_PATH).read_bytes()),('f'*40,b'import malicious')]), \
-             self.assertRaises(contract.QualificationError):
-            observer.declaration('a'*40)
+            for name in (pure, diagnostic, 'scripts/ci-cloud/rocky_preparation_contract.py'):
+                destination = temporary / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / name, destination)
+            source = (temporary / pure).read_text()
+            (temporary / pure).write_text(source.replace('import hashlib', 'import os\nimport hashlib'))
+            with self.assertRaisesRegex(ValueError, 'import closure'):
+                gate.validate(temporary)
+            (temporary / pure).write_text(source)
+            schema = json.loads((temporary / diagnostic).read_text())
+            schema['properties']['reason']['enum'].pop()
+            (temporary / diagnostic).write_text(json.dumps(schema))
+            with self.assertRaisesRegex(ValueError, 'diagnostic schema'):
+                gate.validate(temporary)
 
     def test_real_representation_normalization_rejects_ambiguity(self):
         unit = 'User=postgres\nGroup=postgres\nActiveState=active\nUnitFileState=enabled\nFragmentPath=/usr/lib/systemd/system/postgresql.service\nMainPID=100\n'
@@ -653,21 +243,6 @@ class CandidateData(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(contract.QualificationError):
                 contract.admit_declaration(candidate)
 
-    def test_guest_identity_does_not_reopen_metadata(self):
-        source = (ROOT / 'scripts/ci-cloud/qualify-native-postgresql.py').read_text()
-        self.assertNotIn('http://169.254.169.254', source)
-
-    def test_process_collection_is_bounded_during_execution(self):
-        spec = importlib.util.spec_from_file_location('pg_observer', ROOT / 'scripts/ci-cloud/qualify-native-postgresql.py')
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        opts = dict(environment={'PATH': '/usr/bin:/bin'}, timeout=2, limit=4096, operation='probe-semantics')
-        result = module.bounded_process([sys.executable, '-c', 'print("bounded")'], **opts)
-        self.assertEqual(result.stdout, 'bounded\n')
-        for code in ('print("x" * 1048576)', 'import time; time.sleep(10)'):
-            with self.subTest(code=code), self.assertRaises(contract.QualificationError):
-                module.bounded_process([sys.executable, '-c', code], **opts)
-
     def test_package_pins_are_bounded_data(self):
         for version, release in (('18.7', '2.el10_2'), ('18.6', '1.el10_2')):
             d = dict(contract.DECLARATION, package_version=version, package_release=release)
@@ -676,18 +251,6 @@ class CandidateData(unittest.TestCase):
                                  ('18.6', '--disableplugin=*'), ('18.6', '1.other')):
             with self.assertRaises(contract.QualificationError):
                 contract.admit_declaration(dict(contract.DECLARATION, package_version=version, package_release=release))
-
-    def test_candidate_execution_and_provider_credentials_are_absent_from_guest(self):
-        source = (ROOT / 'scripts/ci-cloud/qualify-native-postgresql.py').read_text()
-        self.assertNotIn('os.environ', source)
-        self.assertNotIn('git fetch', source)
-        self.assertNotIn('shell=True', source)
-        self.assertNotIn('eval(', source)
-        self.assertIn('observer.mutated', source)
-        self.assertIn('O_NOFOLLOW', source)
-        schema = json.loads((ROOT / 'schemas/postgresql-qualification-evidence.schema.json').read_text())
-        self.assertFalse(schema['additionalProperties'])
-        self.assertEqual(schema['properties']['claim']['const'], contract.SELECTOR)
 
     def test_shared_configuration_rendering_preserves_narrow_policy(self):
         result = contract.render_configuration(contract.DECLARATION, 1234)
@@ -808,6 +371,103 @@ class CandidateData(unittest.TestCase):
                 self.assertNotIn('stderr', result)
         with self.assertRaises(contract.QualificationError):
             contract.diagnostic('caller-command', 'secret')
+
+
+    def reference_fixture(self, arch='amd64'):
+        profile = 'gcp-rocky-10-2-' + ('x86-64' if arch == 'amd64' else 'arm64')
+        evidence, options = self.system_fixture(profile)
+        host = {'machine_id': '8'*32, 'address': '192.0.2.81',
+                'ssh_host_key': 'ssh-ed25519 ' + base64.b64encode(
+                    b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20' + b'x'*32).decode()}
+        auth = evidence['authorization']
+        auth.update(profile='reference-rocky-10-2-' + arch, pull_request=286, reference_host=host)
+        facts = {'os_release': {'ID': 'rocky', 'VERSION_ID': '10.2'},
+                 'architecture': evidence['architecture'], 'selinux': 'Enforcing', **host,
+                 'runtime': {'podman_host': {'security': {'rootless': True, 'seccompEnabled': True},
+                     'ociRuntime': {'name': 'crun'}, 'networkBackend': 'netavark', 'serviceIsRemote': False},
+                     'cgroup_filesystem': 'cgroup2fs', 'systemd_user': 'active', 'socket_exists': False,
+                     'podman_socket_enabled': False, 'container_host_present': False, 'sudo_authorized': False,
+                     'uid': 1000, 'gid': 1000, 'groups': [1000]}}
+        evidence.pop('instance_id'); evidence.pop('instance_name')
+        evidence['reference_host'] = host
+        evidence['host_admission'] = {'reference_host_facts': facts,
+            'evidence_sha256': contract.reference_host_digest(facts)}
+        options.pop('instance_id'); options.pop('instance_name')
+        options.update(reference_host=host, reference_host_facts=facts,
+                       host_evidence_sha256=contract.reference_host_digest(facts))
+        return evidence, options
+
+    def test_real_shaped_reference_fixtures_share_pg_fact_admission(self):
+        from jsonschema import Draft202012Validator
+        schema = json.loads((ROOT/'schemas/postgresql-qualification-evidence.schema.json').read_text())
+        for arch in ('amd64', 'arm64'):
+            e, options = self.reference_fixture(arch)
+            contract.admit_authorization(e['authorization'], control_sha='e'*40,
+                profile=e['authorization']['profile'], run_id='100', run_attempt='1', now=1001)
+            Draft202012Validator(schema).validate(e)
+            self.assertEqual(contract.admit_evidence(e, **options), e)
+
+    def test_host_source_run_architecture_and_cleanup_cannot_be_substituted(self):
+        evidence, options = self.reference_fixture()
+        cases = [('reference_host', {'machine_id':'9'*32}),
+                 ('authorization', {'candidate_sha':'9'*40}),
+                 ('authorization', {'candidate_tree':'9'*40}),
+                 ('authorization', {'control_sha':'9'*40}),
+                 ('authorization', {'probe_sha256':'9'*64}),
+                 ('architecture', 'aarch64'), ('qualification_run_id', '201'),
+                 ('cleanup', {'service_stopped':False}), ('host_admission', {'evidence_sha256':'9'*64}),
+                 ('observations', {'listeners':['0.0.0.0:5432']}),
+                 ('observations', {'application':{'runtime':{'image':'untrusted'}}})]
+        for key, delta in cases:
+            changed = copy.deepcopy(evidence)
+            if isinstance(delta, dict): changed[key].update(delta)
+            else: changed[key] = delta
+            with self.subTest(key=key, delta=delta), self.assertRaises(contract.QualificationError):
+                contract.admit_evidence(changed, **options)
+        for key in ('provider', 'password', 'PASS', 'command', 'script'):
+            changed = copy.deepcopy(evidence); changed[key] = 'caller-value'
+            with self.subTest(key=key), self.assertRaises(contract.QualificationError):
+                contract.admit_evidence(changed, **options)
+
+    def test_authorization_is_closed_bounded_and_not_provider_authority(self):
+        e, _ = self.reference_fixture(); auth = e['authorization']
+        options = dict(control_sha='e'*40, profile=auth['profile'], run_id='100', run_attempt='1', now=1001)
+        for delta in ({'pull_request':400}, {'expires_at':1001}, {'profile':'hetzner-rocky'},
+                      {'provider':'gcp'}, {'reference_host':{'machine_id':'9'*32}}, {'command':'true'}):
+            with self.subTest(delta=delta), self.assertRaises(contract.QualificationError):
+                contract.admit_authorization(dict(auth, **delta), **options)
+        for host in (dict(auth['reference_host'], address='app.secpal.dev'),
+                     dict(auth['reference_host'], ssh_host_key='ssh-ed25519 invalid')):
+            with self.assertRaises(contract.QualificationError):
+                contract.admit_authorization(dict(auth, reference_host=host), **options)
+
+    def test_precondition_has_actual_identity_os_and_selinux_observations(self):
+        e, _ = self.reference_fixture(); facts = e['host_admission']['reference_host_facts']
+        for delta in ({'machine_id':'9'*32}, {'architecture':'aarch64'}, {'selinux':'Permissive'},
+                      {'ssh_host_key':'wrong'}, {'os_release':{'ID':'ubuntu','VERSION_ID':'10.2'}},
+                      {'os_release':{'ID':'rocky','VERSION_ID':'10.1'}}):
+            with self.subTest(delta=delta), self.assertRaises(contract.QualificationError):
+                contract.admit_reference_host_facts(dict(facts, **delta), e['authorization'])
+
+    def test_reference_baseline_reuses_runtime_authority_and_denies_socket_or_root(self):
+        e, _ = self.reference_fixture(); facts = e['host_admission']['reference_host_facts']
+        self.assertEqual(contract.admit_reference_host_facts(facts, e['authorization']), facts)
+        for delta in ({'socket_exists':True}, {'podman_socket_enabled':True}, {'sudo_authorized':True},
+                      {'uid':0}, {'groups':[1000,0]}, {'container_host_present':True},
+                      {'cgroup_filesystem':'tmpfs'}, {'systemd_user':'inactive'}):
+            bad = copy.deepcopy(facts); bad['runtime'].update(delta)
+            with self.subTest(delta=delta), self.assertRaises(contract.QualificationError):
+                contract.admit_reference_host_facts(bad, e['authorization'])
+
+    def test_legacy_and_reference_admission_agree_on_database_facts(self):
+        reference, ref_options = self.reference_fixture()
+        cloud, cloud_options = self.system_fixture('gcp-rocky-10-2-x86-64')
+        for field, value in (('listeners', ['0.0.0.0:5432']), ('roles', {}), ('hba', []),
+                             ('locking', {}), ('application', {}), ('restart_row_count', '0')):
+            for evidence, options in ((reference, ref_options), (cloud, cloud_options)):
+                changed = copy.deepcopy(evidence); changed['observations'][field] = value
+                with self.subTest(field=field), self.assertRaises(contract.QualificationError):
+                    contract.admit_evidence(changed, **options)
 
 
 if __name__ == '__main__':

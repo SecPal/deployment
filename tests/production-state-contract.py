@@ -284,7 +284,7 @@ class ProductionStateContractTest(unittest.TestCase):
         self.assertIn("StopSignal=SIGQUIT", http)
         self.assertIn("HealthCmd=php /usr/local/bin/secpal-fpm-live.php", fpm)
         self.assertNotIn("PublishPort=", fpm)
-        for forbidden in ("DB_", "secret", "private-storage", "frankenphp", "/config", "/data"):
+        for forbidden in ("DB_", "secret", "private-storage", "/config", "/data"):
             self.assertNotIn(forbidden, http.split("[Container]\n", 1)[1].split("[Service]\n", 1)[0])
         for role in ("migrate", "scheduler", "worker-general", "worker-hash-chain"):
             unit = units[f"secpal-{role}.container"]

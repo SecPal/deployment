@@ -30,40 +30,6 @@ SELECTOR = 'native-postgresql-18'
 REFERENCE_PROFILES = {'reference-rocky-10-2-amd64': 'x86_64',
                       'reference-rocky-10-2-arm64': 'aarch64'}
 PROFILE_ARCHITECTURES = {**rpm.PROFILE_ARCHITECTURES, **REFERENCE_PROFILES}
-PROBE_PATHS = (
-    'scripts/ci-cloud/postgresql_qualification_contract.py',
-    'scripts/ci-cloud/postgresql-qualification-control.py',
-    'scripts/ci-cloud/qualify-native-postgresql.py',
-    'scripts/ci-cloud/postgresql-application-bootstrap.php',
-    'scripts/ci-cloud/postgresql-application-probe.php',
-    'scripts/image_attestation_runtime.py',
-    'scripts/fetch-oci-attestation.py',
-    'scripts/ci-cloud/run-native-postgresql-qualification.sh',
-    'scripts/ci-cloud/rocky_preparation_contract.py',
-    'scripts/ci-cloud/collect-rocky-preparation.py',
-    'scripts/integration_runtime_contract.py',
-    'scripts/render-native-postgresql.py',
-    'config/production/selinux/secpal_native_postgresql.cil',
-    'schemas/postgresql-qualification-evidence.schema.json',
-    'schemas/postgresql-qualification-diagnostic.schema.json',
-)
-# Controller-only resolver and validators remain in the source identity, but
-# their bytes are not executable guest inputs. The manifest carries their hashes.
-CONTROL_PROBE_PATHS = ('scripts/ci-cloud/postgresql-qualification-control.py',
-                       'schemas/postgresql-qualification-evidence.schema.json',
-                       'schemas/postgresql-qualification-diagnostic.schema.json')
-GUEST_PROBE_PATHS = tuple(path for path in PROBE_PATHS if path not in CONTROL_PROBE_PATHS)
-
-
-def probe_manifest_digest(manifest: object) -> str:
-    if (not isinstance(manifest, dict) or set(manifest) != set(PROBE_PATHS)
-            or any(not isinstance(value, str) or DIGEST.fullmatch(value) is None for value in manifest.values())):
-        raise QualificationError('validate-authorization', 'representation-invalid')
-    digest = hashlib.sha256()
-    for name in PROBE_PATHS:
-        digest.update(name.encode() + b'\0' + bytes.fromhex(manifest[name]))
-    return digest.hexdigest()
-
 
 NATIVE_DATA_DIRECTORY = '/var/lib/pgsql/data'
 NATIVE_STORAGE_MINIMUMS = {'free_bytes': 20 * 1024**3, 'free_inodes': 200000,
