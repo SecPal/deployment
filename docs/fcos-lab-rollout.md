@@ -114,14 +114,23 @@ reviewing the protected-main candidate.
 ## Separate Fedora CoreOS maintenance
 
 The lab uses Zincati with automatic updates disabled. Keep the container
-rollout paused during an OS update. The OS lane must admit the Fedora-signed
-Stable native artifact independently, stage the exact deployment through
-rpm-ostree and check the staged identity and previous boot deployment before
-reboot. Reboot one host, then verify rpm-ostree status, WireGuard, SELinux,
-the rootless user services and the complete application/security checks.
-Proceed to the next host only after acceptance. Keep the previous deployment
-and independent recovery path until the new boot is accepted. A central
-timer must coordinate this sequence if the OS lane is automated. A local
-Zincati window cannot prove serialization across three hosts. OS maintenance
-uses a separate authority and neither reads nor changes the container
-release journal.
+rollout paused during an OS update. A separate maintenance job should use
+the same three-host order and stop on failed acceptance.
+
+1. Admit the Fedora-signed Stable artifact and its exact native digest for
+   both architectures. Verify the guest booted from the expected deployment
+   and that a known-good previous boot and independent recovery are available.
+2. Stage one host with
+   `rpm-ostree rebase --disallow-downgrade ostree-image-signed:docker://quay.io/fedora/fedora-coreos@sha256:<native-digest>`.
+   Check `rpm-ostree status --json` for the staged version and
+   `container-image-reference-digest`. Stop if a driver blocks staging.
+3. Reboot that host. Check the booted digest, WireGuard, SELinux, the rootless
+   user services and the complete application and security acceptance. Keep
+   the previous deployment available until these checks succeed.
+4. Continue only after acceptance. On failure, keep the other hosts at their
+   current revisions and use the previous deployment or independent recovery
+   on the failing host.
+
+A local [Zincati maintenance window](https://coreos.github.io/zincati/usage/updates-strategy/)
+schedules node-local reboots. The separate maintenance job owns fleet
+serialization and uses a distinct authority and journal.
