@@ -16,6 +16,13 @@ try {
         || config('database.connections.pgsql.username') !== 'secpal_poc_runtime') {
         throw new RuntimeException();
     }
+    $stage = 'tls-identity-configuration';
+    $ca = '/run/secpal/secrets/database/postgres-ca.crt';
+    if (config('database.connections.pgsql.sslmode') !== 'verify-full'
+        || config('database.connections.pgsql.sslrootcert') !== $ca
+        || ! is_readable($ca)) {
+        throw new RuntimeException();
+    }
     $pdo = $app->make('db')->connection()->getPdo();
     $stage = 'runtime-identity';
     $identity = $pdo->query("SELECT current_user AS principal,
@@ -93,6 +100,22 @@ try {
             continue;
         }
         throw new RuntimeException();
+    }
+
+    $stage = 'tls-wrong-hostname';
+    $address = gethostbyname('db.secpal.internal');
+    if (! filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+        throw new RuntimeException();
+    }
+    try {
+        new PDO('pgsql:host='.$address.';dbname=secpal;sslmode=verify-full;sslrootcert='.$ca,
+            'secpal_poc_runtime', config('database.connections.pgsql.password'));
+        throw new RuntimeException();
+    } catch (PDOException $error) {
+        if (! str_contains($error->getMessage(), 'does not match host name')) {
+            throw $error;
+        }
+        $denied[$stage] = 'certificate hostname mismatch';
     }
 
     echo json_encode([
