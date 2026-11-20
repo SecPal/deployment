@@ -188,9 +188,10 @@ class SourceAndProtocolTest(unittest.TestCase):
             (repo / "README.md").write_text("documentation")
             self.assertEqual(source_release(repo, commit()).fingerprint, first.fingerprint)
             (repo / "scripts/integration_runtime_contract.py").write_text("updated image")
-            self.assertNotEqual(source_release(repo, commit()).fingerprint, first.fingerprint)
+            image_update = source_release(repo, commit())
+            self.assertNotEqual(image_update.fingerprint, first.fingerprint)
             (repo / "config/quadlet/fcos-security/config.yaml").write_text("changed")
-            self.assertNotEqual(source_release(repo, commit()).fingerprint, first.fingerprint)
+            self.assertNotEqual(source_release(repo, commit()).fingerprint, image_update.fingerprint)
             (repo / "scripts/integration_runtime_contract.py").unlink()
             with self.assertRaises(RolloutError):
                 source_release(repo, commit())
