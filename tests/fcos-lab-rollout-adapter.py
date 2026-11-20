@@ -92,8 +92,29 @@ class GuestContract(unittest.TestCase):
                                         capture_output=True, check=False)
                 self.assertEqual(result.returncode == 0, accepted)
 
+    def test_guest_image_config_id_accepts_native_podman_forms(self):
+        command = ('source "$1"; normalize_image "$2"; '
+                   'normalize_image "$3"')
+        value = "a" * 64
+        result = subprocess.run(["bash", "-c", command, "test", self.guest, value, "sha256:" + value],
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.stdout.splitlines(), [value, value])
+
+    def test_guest_rejects_extra_frontend_override_and_duplicate_worker(self):
+        expected = "secpal-int-haproxy01-scheduler\nsecpal-int-haproxy01-worker-general\nsecpal-int-haproxy01-worker-hash-chain"
+        command = ('source "$1"; dropin_dir="$2"; names="$3"; '
+                   'runtime() { printf "%s\n" "$names"; }; exact_rollout_dropin && singleton_roles')
+        with tempfile.TemporaryDirectory() as directory:
+            def check(names):
+                return subprocess.run(["bash", "-c", command, "test", self.guest, directory, names],
+                                      capture_output=True, check=False).returncode
+            self.assertEqual(check(expected), 0)
+            self.assertNotEqual(check(expected + "\nsecpal-int-duplicate-worker-hash-chain"), 0)
+            (Path(directory) / "99-extra.conf").touch()
+            self.assertNotEqual(check(expected), 0)
+
     def test_guest_needs_exact_publisher_evidence(self):
-        command = ('source "$1"; scratch=$2; peer="$scratch"; '
+        command = ('source "$1"; scratch=$2; peer="$scratch"; platform=linux/amd64; '
                    'verify_publisher "$3" "$4"')
         digest = "sha256:" + hashlib.sha256(b"index").hexdigest()
         with tempfile.TemporaryDirectory() as temp:
@@ -103,6 +124,8 @@ class GuestContract(unittest.TestCase):
                             'else [[ $* == *"--source-digest ' + SOURCE + '"* && '
                             '$(cat "$3") == index && $(cat "$5") == bundle ]]; fi\n')
             fake.chmod(0o700)
+            executable_hash = hashlib.sha256(fake.read_bytes()).hexdigest()
+            (path / "gh-binary-sha256.txt").write_text(f"linux/amd64 {executable_hash}\n")
             for proof, expected_digest, accepted in (
                 (b"aW5kZXg=\nYnVuZGxl\n", digest, True),
                 (b"aW5kZXg=\nYnVuZGxl\n", DIGEST, False),
@@ -116,6 +139,12 @@ class GuestContract(unittest.TestCase):
                     result = subprocess.run(["bash", "-c", command, "test", self.guest, path,
                                              expected_digest, SOURCE], capture_output=True, check=False)
                     self.assertEqual(result.returncode == 0, accepted)
+            (path / "proof").write_bytes(b"aW5kZXg=\nYnVuZGxl\n")
+            with fake.open("a") as altered:
+                altered.write("# modified after approval\n")
+            result = subprocess.run(["bash", "-c", command, "test", self.guest, path, digest, SOURCE],
+                                    capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
 
     def test_guest_and_coordinator_agree_on_reviewed_inputs_and_frontend_only_scope(self):
         with tempfile.TemporaryDirectory() as temp:

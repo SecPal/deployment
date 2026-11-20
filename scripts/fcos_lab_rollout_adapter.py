@@ -6,12 +6,14 @@
 
 import base64
 from dataclasses import dataclass
+import hashlib
 import http.client
 import http.cookiejar
 import ipaddress
 import json
 import os
 from pathlib import Path
+from platform import machine
 import re
 import socket
 import ssl
@@ -135,6 +137,15 @@ def publisher_children(frontend):
             GH_NO_UPDATE_NOTIFIER="1", GH_NO_EXTENSION_UPDATE_NOTIFIER="1", GH_TELEMETRY="false",
         )
         gh = TOOLS / "gh"
+        local_platform = {"x86_64": "linux/amd64", "aarch64": "linux/arm64"}[machine()]
+        expected, = (
+            line.split()[1] for line in
+            Path(__file__).with_name("fcos-lab-gh-binary-sha256.txt").read_text(encoding="ascii").splitlines()
+            if line.startswith(local_platform + " ")
+        )
+        with gh.open("rb") as executable:
+            if hashlib.file_digest(executable, "sha256").hexdigest() != expected:
+                raise ValueError("wrong GitHub CLI executable digest")
         version = subprocess.check_output([gh, "--version"], timeout=15, env=environment).splitlines()[0]
         if not version.startswith(f"gh version {EXPECTED_GH_VERSION} ".encode()):
             raise ValueError("wrong GitHub CLI version")

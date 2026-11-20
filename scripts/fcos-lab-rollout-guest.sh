@@ -97,6 +97,7 @@ trusted_directory() {
 }
 
 frozen_layout() {
+    exact_rollout_dropin || return 1
     # These fixture inputs contain configuration and code. The private
     # runtime, data, certificate and credential directories are outside them.
     local -a paths=("$units"/"$slot"-*.* "$security_units"/"$slot"-*.*)
@@ -111,15 +112,30 @@ frozen_layout() {
     find "$assets/security/config" -type f -print0 | sort -z | xargs -0 sha256sum
 }
 
+exact_rollout_dropin() {
+    local extra
+    extra=$(find "$dropin_dir" -mindepth 1 -maxdepth 1 ! -name '90-rollout.conf' -print -quit) &&
+        [[ -z $extra ]]
+}
+
+normalize_image() {
+    local config=${1#sha256:}
+    [[ $config =~ ^$hash$ ]] || return 1
+    printf '%s\n' "$config"
+}
+
 inspect_role() {
-    local role=$1 account=runtime directory=$units path
+    local role=$1 account=runtime directory=$units path raw ref indexed config running privileged read_only
     case "$role" in crowdsec|spoa) account=security; directory=$security_units;; esac
     "$account" systemctl --user is-active --quiet "$slot-$role.service" || return 1
     path=$("$account" systemctl --user show --value -p SourcePath "$slot-$role.service") || return 1
     [[ $path == "$directory/$slot-$role.container" ]] || return 1
-    "$account" podman container inspect --format \
+    raw=$("$account" podman container inspect --format \
         '{{.ImageName}} {{.ImageDigest}} {{.Image}} {{.State.Running}} {{.HostConfig.Privileged}} {{.HostConfig.ReadonlyRootfs}}' \
-        "$slot-$role"
+        "$slot-$role") || return 1
+    read -r ref indexed config running privileged read_only <<< "$raw"
+    config=$(normalize_image "$config") || return 1
+    printf '%s\n' "$ref $indexed $config $running $privileged $read_only"
 }
 
 unchanged_roles() {
@@ -206,8 +222,16 @@ sql() {
     runtime podman exec "$slot-postgres" psql -X -At -v ON_ERROR_STOP=1 -U secpal_fixture_admin -d secpal -c "$1"
 }
 
+singleton_roles() {
+    local observed expected
+    observed=$(runtime podman ps --format '{{.Names}}' |
+        grep -E '^secpal-int-.*-(scheduler|worker-general|worker-hash-chain)$' | sort) || return 1
+    expected=$(printf '%s\n' "$slot-scheduler" "$slot-worker-general" "$slot-worker-hash-chain")
+    [[ $observed == "$expected" ]]
+}
+
 health() {
-    local expected=$1 queue worker key reply i name seed
+    local expected=$1 queue worker key reply i seed
     [[ $(getenforce) == Enforcing ]] &&
         [[ $(runtime podman info --format '{{.Host.Security.Rootless}}') == true ]] &&
         [[ $(security podman info --format '{{.Host.Security.Rootless}}') == true ]] &&
@@ -217,8 +241,7 @@ health() {
         [[ $(sql 'SELECT system_identifier FROM pg_control_system()') == "$(cat "$store/cluster-id")" ]] &&
         [[ $(sql "SELECT count(*) FROM organizational_units WHERE id='$witness' AND name='FCOS lab rollout witness'") == 1 ]] &&
         [[ $(sql 'SHOW ssl; SHOW password_encryption;') == $'on\nscram-sha-256' ]] || return 1
-    name=$(runtime podman ps --format '{{.Names}}' | grep -E '^secpal-int-.*-scheduler$') || return 1
-    [[ $name == "$slot-scheduler" ]] || return 1
+    singleton_roles || return 1
     seed=$(jq -er .fingerprint <<< "$expected") || return 1
     for queue in default activity-hash-chain; do
         case "$queue" in default) worker=general;; activity-hash-chain) worker="hash-chain";; esac
@@ -247,9 +270,11 @@ decode_publisher_evidence() {
 }
 
 verify_publisher() {
-    local index=$1 publisher=$2 version
+    local index=$1 publisher=$2 version expected_hash
     decode_publisher_evidence "$scratch/proof" || return 1
     [[ $(sha256sum < "$scratch/index.json") == "${index#sha256:}  -" ]] || return 1
+    expected_hash=$(awk -v platform="$platform" '$1 == platform { print $2 }' "$peer/gh-binary-sha256.txt") || return 1
+    [[ $expected_hash =~ ^$hash$ && $(sha256sum < "$peer/gh") == "$expected_hash  -" ]] || return 1
     version=$("$peer/gh" --version) || return 1
     [[ $version == 'gh version 2.97.0 '* ]] || return 1
     env -i PATH=/usr/bin:/bin HOME="$scratch" GH_CONFIG_DIR="$scratch" GH_PROMPT_DISABLED=1 \
@@ -280,8 +305,8 @@ prepare() {
     ref="$image@$child"
     runtime env DOCKER_CONFIG="$scratch" podman pull --quiet --authfile "$scratch/auth.json" --platform "$platform" "$ref" >/dev/null || return 1
     config=$(runtime podman image inspect --format '{{.Id}} {{.Digest}} {{.Architecture}} {{.Config.User}}' "$ref") || return 1
-    [[ $config =~ ^($hash)\ "$child"\ "${platform#linux/}"\ 101:101$ ]] || return 1
-    config=${BASH_REMATCH[1]}
+    [[ $config =~ ^([^[:space:]]+)\ "$child"\ "${platform#linux/}"\ 101:101$ ]] || return 1
+    config=$(normalize_image "${BASH_REMATCH[1]}") || return 1
     validate_quadlet "$ref" || return 1
     candidate=$(record "$revision" "$wanted" "$ref" "$config" update "$pin_ref") || return 1
     save prepared.json "$(jq -cn --argjson before "$installed" --argjson next "$candidate" '{before:$before,next:$next}')"

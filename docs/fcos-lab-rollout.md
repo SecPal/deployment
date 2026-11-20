@@ -94,7 +94,8 @@ before installing the exact reviewed source revision.
    helper and enroll the existing fixture. Replace `/secure` with the
    administrator's protected transfer directory. Stage the checksum-verified native
    GitHub CLI described below on the controller for each architecture and
-   transfer the appropriate executable as `/secure/gh`. The guest does not need
+   transfer the appropriate executable as `/secure/gh`. The helper checks the native
+   executable digest before each attestation. The guest does not need
    Python or GitHub credentials.
 
    ```sh
@@ -102,6 +103,7 @@ before installing the exact reviewed source revision.
    install -d -o root -g root -m 0755 "$guest_lib"
    install -m 0755 -o root -g root scripts/fcos-lab-rollout-guest.sh "$guest_lib/guest"
    install -m 0644 -o root -g root scripts/fcos-lab-release-paths.txt "$guest_lib/release-paths.txt"
+   install -m 0644 -o root -g root scripts/fcos-lab-gh-binary-sha256.txt "$guest_lib/gh-binary-sha256.txt"
    install -m 0755 -o root -g root /secure/gh "$guest_lib/gh"
    install -d -o root -g root -m 0700 /etc/secpal-fcos-lab-rollout /var/lib/secpal-fcos-lab-rollout
    install -d -o root -g root -m 0755 /etc/containers/systemd/users/20000/secpal-int-haproxy01-frontend.container.d
@@ -165,7 +167,7 @@ install -d "$HOME/.config/systemd/user"
 install -m 0700 scripts/fcos_lab_rollout_adapter.py "$rollout_lib/"
 install -m 0600 scripts/fcos_lab_rollout.py scripts/fcos-lab-release-paths.txt \
   scripts/fetch-oci-attestation.py scripts/integration_runtime_contract.py \
-  scripts/image_attestation_runtime.py "$rollout_lib/"
+  scripts/image_attestation_runtime.py scripts/fcos-lab-gh-binary-sha256.txt "$rollout_lib/"
 install -m 0644 config/quadlet/fcos-lab-rollout/secpal-fcos-lab-rollout.{service,timer} \
   "$HOME/.config/systemd/user/"
 ssh-keygen -q -t ed25519 -N "" -f "$rollout_config/rollout_ed25519"
