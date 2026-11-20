@@ -1,0 +1,38 @@
+---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+name: FCOS Lab Release Discovery
+
+on:
+  schedule:
+    - cron: "37 8 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  candidate-report:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Report eligible upstream candidates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          candidates="$(python3 scripts/fcos_lab_discovery.py)"
+          {
+            printf '## FCOS lab candidates\n\n'
+            printf 'Resolve and verify exact artifacts before preparing a deployment change.\n\n'
+            printf '%s\n' "$candidates" | sed 's/^/    /'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -9,6 +9,22 @@ with private HTTPS and persistent rootless volumes. The fixture is synthetic.
 Use the normal Host Enrollment, Workload Activation and recovery contracts
 for deployments with customer data.
 
+## Upstream release candidates
+
+The **FCOS Lab Release Discovery** workflow on protected main compares SecPal
+publish runs against the admitted product source commits. A result of
+`ahead` identifies an upgrade candidate. The workflow also reports exact
+stable tags from the PostgreSQL 18 Bookworm and HAProxy 3.2 Trixie Docker
+Official Images catalog, and the upstream CrowdSec Engine/AppSec, SPOA and
+OWASP CRS release catalogs. The report can be reproduced with
+`python3 scripts/fcos_lab_discovery.py` using the GitHub CLI.
+
+The report grants no deployment authority. A reviewed change still needs the
+admitted product attestations, exact immutable digests, native amd64 and
+arm64 children, and the signed CRS release assets where applicable. The
+workflow creates only a run summary. Preparing and reviewing pin changes
+continues through the existing GitHub pull request workflow.
+
 ## Render and stage
 
 Record the exact reviewed Git revision and retain the private inputs and bundle
