@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+---
+name: secpal/lab-haproxy-auth-v1
+type: leaky
+description: Detect repeated API authentication failures without host enforcement
+filter: evt.Meta.log_type == 'secpal_http' && evt.Parsed.http_status == '401' && evt.Parsed.origin == 'api' && evt.Parsed.security == 'accepted'
+groupby: evt.Meta.source_ip
+capacity: 3
+leakspeed: 10s
+blackhole: 1m
+labels:
+  service: http
+  remediation: false

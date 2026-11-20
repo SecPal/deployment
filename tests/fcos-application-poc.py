@@ -19,6 +19,31 @@ PREFIX = f"secpal-int-{INSTANCE}"
 
 
 class ApplicationPoC(unittest.TestCase):
+    def test_appsec_has_named_local_interfaces_and_no_application_authority(self):
+        with self.assertRaisesRegex(ValueError, "AppSec requires the HAProxy profile"):
+            build(INSTANCE, "lab.example.invalid", "10.0.0.28", appsec=True)
+        units, config = build(
+            INSTANCE, "lab.example.invalid", "10.0.0.28",
+            gateway="haproxy", least_privilege=True, appsec=True,
+        )
+        engine = units[f"{PREFIX}-crowdsec.container"]
+        spoa = units[f"{PREFIX}-spoa.container"]
+        self.assertIn("Internal=true", units[f"{PREFIX}-security.network"])
+        for service in (engine, spoa):
+            self.assertIn("User=65532", service)
+            self.assertIn("DropCapability=all", service)
+            self.assertIn("Pull=never", service)
+            self.assertIn("PodmanArgs=--image-volume=ignore", service)
+            self.assertNotIn("PublishPort=", service)
+            self.assertNotIn("-application.network", service)
+        gateway = units[f"{PREFIX}-gateway.container"]
+        self.assertIn("/run/secpal-spoa:ro", gateway)
+        self.assertNotIn("/run/secpal-credentials", gateway)
+        self.assertNotIn(f"{PREFIX}-spoa.service", gateway)
+        self.assertIn("security_degraded", config)
+        self.assertIn("req.body_size le 32768", config)
+        self.assertIn("crowdsec-http-no-body unless within_inspection_limit", config)
+
     def test_haproxy_keeps_the_original_private_socket_and_split_backends(self):
         with self.assertRaisesRegex(ValueError, "separate database authorities"):
             build(INSTANCE, "lab.example.invalid", "10.0.0.28", gateway="haproxy")

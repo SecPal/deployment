@@ -116,6 +116,96 @@ candidate leaves the active file and worker alone. For disposal stop both the
 gateway service and socket, then remove their administrator-owned units and
 the exact fixture-owned resources as described below.
 
+### Private CrowdSec and AppSec
+
+Add `--appsec` to the private HAProxy command. The additional `security-units/`
+Quadlets run in a separate unprivileged, lingering user manager, under an
+administrator-allocated UID with its own subordinate IDs. Stage them in
+`/etc/containers/systemd/users/<security-uid>/`. HAProxy and the product keep
+their existing runtime. The internal security network carries only Engine/LAPI,
+AppSec and SPOA requests. SPOA accepts HAProxy through one Unix socket. The
+security network publishes no ports and needs no external service while running.
+
+Use CrowdSec 1.8.2 Debian and SPOA 0.3.1. The generated Quadlets contain their
+exact indexes. Verify the selected native child, its config architecture and
+publisher source revision before staging both images into the security user's
+store. The releases map to [CrowdSec `3d369d64`](https://github.com/crowdsecurity/crowdsec/commit/3d369d64eb3e9ba770ed39aedc83ffd3170aef4c)
+and [SPOA `4705eac0`](https://github.com/crowdsecurity/cs-haproxy-spoa-bouncer/commit/4705eac0452d406d26f31bdc575763f54c55f858).
+
+Before startup, stage the generated `security-config/` as `security/config/`
+under the fixture root, owned by the guest administrator and readable by the
+mapped security identity. Copy `patterns/` from `/staging/etc/crowdsec/patterns`
+of the admitted engine image. Create an empty `postoverflows/` and write `{}`
+to `hub/.index.json`. Use the configuration directly with the engine binary.
+That keeps dependencies local and avoids a moving Hub or Central registration.
+
+Use the [signed OWASP CRS 4.30.0 minimal release](https://github.com/coreruleset/coreruleset/releases/tag/v4.30.0).
+Verify the detached signature with the [pinned publisher fingerprint](https://coreruleset.org/docs/1-getting-started/1-1-crs-installation/)
+`36006F0E0BA167832158821138EEACA1AB8A6E72` and verify the compressed SHA-256
+`3d678a41fd5aade34760127fef5dd64fd7a77848913fc0f70dde0cf467c94427`.
+Stage the release's `rules/` files and copy `crs-setup.conf.example` as
+`crs-setup.conf` under `security/state/data/`. Keep the rules administrator
+owned, with `state/data/trace/` writable by the mapped Engine UID. The config
+requires request-body inspection and turns off raw audit capture. External
+GeoIP and request fingerprint dumps are outside this private fixture.
+
+Keep the security state and credentials directories at mode `0700`, owned by
+the host-mapped security UID for container UID 65532. Use read-only bind mounts
+for configuration and apply the shared SELinux `container_file_t` label:
+
+| Relative path                    | Host-side authority                                                                                                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `security/spoe/`                 | Mapped SPOA UID owns it. Setgid mode `2750`, group equal to the HAProxy container's mapped GID 99. SPOA creates `spoa.sock` with mode `0660`. HAProxy mounts the directory read-only. |
+| `security/audit/haproxy.log`     | Runtime account owns the file. Mode `0640`, group equal to the security container's mapped GID 65532. Stage the file before startup. Engine reads only the audit directory.           |
+| `security/state/`                | SQLite and machine credential file. Keep across container recreation.                                                                                                                 |
+| `security/credentials/spoa.yaml` | Mode `0400` or `0600` for the mapped security UID. Only SPOA mounts this directory.                                                                                                   |
+
+For a fresh security slot, use `/usr/local/bin/cscli` from the exact admitted
+engine image. Run it with `--network=none`, `--user 65532:65532`, internal
+`/state:rw` and `/etc/crowdsec:ro` mounts, and
+`-c /etc/crowdsec/config.yaml`. Run `machines add --auto --file
+/state/machine.yaml --url http://127.0.0.1:8080`, then
+`bouncers add <fixture-bouncer-name> --output json`. Capture the key in protected
+runtime custody and supply the following shape as `spoa.yaml`. Keep command
+tracing off. Validate the engine configuration with the same image and mounts
+using `/usr/local/bin/crowdsec -c /etc/crowdsec/config.yaml -t`.
+
+```yaml
+log_mode: stdout
+log_level: info
+api_url: http://engine:8080/
+api_key: <protected fixture credential>
+update_frequency: 10s
+insecure_skip_verify: false
+listen_unix: /run/secpal-spoa/spoa.sock
+appsec_url: http://engine:7422/
+appsec_timeout: 500ms
+prometheus:
+  enabled: false
+```
+
+In the **security** user manager run `systemctl --user daemon-reload` and
+`systemctl --user start "$prefix-spoa.service"`. Start the gateway via the
+**application** user manager with the generated `edge/spoe.cfg` staged beside
+its HAProxy configuration. Check the valid HTTPS backends and a controlled
+AppSec rejection. The engine's read-only log acquisition uses the fixed HAProxy
+metadata record to detect repeated authentication failures. That detection
+generates local alerts without sending firewall rules. Host nftables owns all
+host network enforcement.
+
+The lab body limit is 32 KiB. Larger requests send metadata and record
+`appsec_headers_only`. A WAF block returns 403. If the SPOA listener is down,
+the gateway logs `security_degraded` and continues application traffic. If
+SPOA is online but AppSec is unreachable, SPOA 0.3.1 records the AppSec failure
+in its own journal and retains existing remediation. Treat this diagnostic as
+Security DEGRADED. Gateway `accepted` describes routing and does not certify
+inspection. Check the security health independently of `/health/ready`.
+
+At cleanup stop the gateway and socket, then stop the exact security slot's
+SPOA and Engine user services. Remove only that slot's security units, internal
+network and `security/` directory after preserving the bounded evidence. A
+disposable security account can then be removed if it owns no other slots.
+
 ## Initialize, verify and restart
 
 Run through the host's admitted runtime user and user manager. The examples

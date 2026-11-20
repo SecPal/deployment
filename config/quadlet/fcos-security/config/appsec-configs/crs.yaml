@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+---
+name: secpal/crs
+default_remediation: ban
+inband_rules:
+  - secpal/crs-rules

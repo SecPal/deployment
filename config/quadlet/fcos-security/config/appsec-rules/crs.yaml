@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+---
+name: secpal/crs-rules
+seclang_rules:
+  - SecRuleEngine On
+  - SecRequestBodyAccess On
+  - SecAuditEngine Off
+  - SecRule REQUEST_HEADERS:Content-Type "@beginsWith application/json" "id:10001,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON"
+seclang_files_rules:
+  - crs-setup.conf
+  - REQUEST-*.conf
+  - RESPONSE-*.conf

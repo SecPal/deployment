@@ -19,6 +19,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from haproxy_base_contract import Routing, routing_sections, runtime_preamble
+import fcos_lab_security
 
 INTEGRATION = runpy.run_path(str(ROOT / "scripts/render-integration-quadlets.py"))
 HAPROXY_IMAGE = "docker.io/library/haproxy@sha256:5ddf08c89c95a311f4bfb761d74016597fdca76ecfcdf169ed1bab117f3da1ea"
@@ -256,10 +257,16 @@ def database_role_mounts(lines, prefix, root, role):
     return lines
 
 
-def haproxy_gateway(instance, root, domain, bind, port, https_port):
+def haproxy_gateway(instance, root, domain, bind, port, https_port, *, appsec=False):
     prefix = f"secpal-int-{instance}"
     name = f"{prefix}-gateway"
     section = INTEGRATION["section"]
+    logging = ["LogDriver=journald"]
+    mounts = []
+    if appsec:
+        logging = ["LogDriver=k8s-file", f"LogOpt=path={root}/security/audit/haproxy.log",
+                   "LogOpt=max-size=16mb"]
+        mounts.append(f"Volume={root}/security/spoe:/run/secpal-spoa:ro")
     dependencies = f"{name}.socket {prefix}-api.service {prefix}-frontend.service"
     unit = section("Unit", [
         "Description=SecPal FCOS lab HAProxy",
@@ -277,7 +284,7 @@ def haproxy_gateway(instance, root, domain, bind, port, https_port):
         "ReadOnlyTmpfs=false",
         "DropCapability=all",
         "NoNewPrivileges=true",
-        "LogDriver=journald",
+        *logging,
         "PodmanArgs=--preserve-fds=1",
         "Environment=SECPAL_TLS_SOCKET=fd@3",
         f"Label=org.secpal.integration.instance={instance}",
@@ -285,6 +292,7 @@ def haproxy_gateway(instance, root, domain, bind, port, https_port):
         f"Network={prefix}-edge.network",
         f"Volume={root}/edge:/usr/local/etc/haproxy:ro",
         f"Volume={root}/tls:/run/secpal-viewer:ro",
+        *mounts,
         "Entrypoint=/usr/local/sbin/haproxy",
         f"Exec=-W -db -f {HAPROXY_CONFIG}",
     ]) + section("Service", [
@@ -297,17 +305,25 @@ def haproxy_gateway(instance, root, domain, bind, port, https_port):
     socket = section("Unit", ["Description=SecPal FCOS lab HTTPS socket"]) + section(
         "Socket", [f"ListenStream={bind}:{port}", "FreeBind=true", "Accept=false"]
     )
-    config = runtime_preamble(direct_tcp_peer=True) + (
+    preamble = runtime_preamble(direct_tcp_peer=True)
+    if appsec:
+        preamble = preamble.replace("tune.bufsize 16384", "tune.bufsize 65536")
+    listener = (
         "resolvers podman\n"
         "    parse-resolv-conf\n"
         "    hold valid 1s\n\n"
         "frontend secpal_viewer\n"
         '    bind "$SECPAL_TLS_SOCKET" ssl crt /run/secpal-viewer/viewer.pem strict-sni ssl-min-ver TLSv1.2 alpn h2,http/1.1\n'
-    ) + routing_sections(
+    )
+    if appsec:
+        listener += ("    option http-buffer-request\n"
+                     "    filter spoe engine crowdsec config /usr/local/etc/haproxy/spoe.cfg\n")
+    config = preamble + listener + routing_sections(
         Routing(f"app.{domain}", f"api.{domain}"),
         fixture_network=True,
         fixture_https_port=https_port,
         normalize_http2=True,
+        inspection_rules=fcos_lab_security.INSPECTION if appsec else (),
         identity_rules=(
             "http-request set-header X-Forwarded-For %[src]",
             "http-request set-header X-Forwarded-Proto https",
@@ -316,7 +332,11 @@ def haproxy_gateway(instance, root, domain, bind, port, https_port):
             "http-request set-header X-Request-ID %[unique-id]",
         ),
     )
-    return {f"{name}.container": unit, f"{name}.socket": socket}, config
+    units = {f"{name}.container": unit, f"{name}.socket": socket}
+    if appsec:
+        config += "\nbackend secpal_spoa\n    mode tcp\n    server spoa /run/secpal-spoa/spoa.sock\n"
+        units.update(fcos_lab_security.render_units(prefix, root / "security", section))
+    return units, config
 
 
 def build(
@@ -328,9 +348,12 @@ def build(
     *,
     least_privilege=False,
     gateway="caddy",
+    appsec=False,
 ):
     INTEGRATION["validate_instance"](instance)
     restore = domain is None and bind is None
+    if appsec and gateway != "haproxy":
+        raise ValueError("AppSec requires the HAProxy profile")
     if gateway not in {"caddy", "haproxy"} or (restore and gateway != "caddy"):
         raise ValueError("invalid gateway for the selected profile")
     if gateway == "haproxy" and not least_privilege:
@@ -422,7 +445,8 @@ def build(
     if restore:
         return units, None
     if gateway == "haproxy":
-        edge_units, config = haproxy_gateway(instance, root, domain, bind, port, https_port)
+        edge_units, config = haproxy_gateway(instance, root, domain, bind, port, https_port,
+                                             appsec=appsec)
         return units | edge_units, config
     units[f"{prefix}-caddy-data.volume"] = f"[Volume]\nVolumeName={prefix}-caddy-data\n"
     caddy = "{\n    admin off\n    auto_https off\n}\n"
@@ -436,7 +460,7 @@ def build(
     return units, caddy
 
 
-def write_bundle(destination, units, config, *, least_privilege=False, gateway="caddy"):
+def write_bundle(destination, units, config, *, least_privilege=False, gateway="caddy", appsec=False):
     if destination.exists() or destination.is_symlink():
         raise ValueError("output already exists")
     with tempfile.TemporaryDirectory(dir=destination.parent) as directory:
@@ -444,16 +468,22 @@ def write_bundle(destination, units, config, *, least_privilege=False, gateway="
         staged.mkdir(mode=0o700)
         (staged / "assets").mkdir()
         (staged / "units").mkdir()
+        if appsec:
+            (staged / "security-units").mkdir()
         assets = ASSETS | DATABASE_ASSETS if least_privilege else ASSETS
         for source, target in assets.items():
             shutil.copyfile(ROOT / source, staged / "assets" / target)
         for name, content in units.items():
-            (staged / "units" / name).write_text(content, encoding="utf-8")
+            group = "security-units" if name.endswith(fcos_lab_security.SECURITY_UNITS) else "units"
+            (staged / group / name).write_text(content, encoding="utf-8")
         if config is not None and gateway == "haproxy":
             (staged / "edge").mkdir()
             (staged / "edge/haproxy.cfg").write_text(config, encoding="utf-8")
             for socket in (staged / "units").glob("*.socket"):
                 socket.rename(staged / "edge" / socket.name)
+            if appsec:
+                shutil.copytree(fcos_lab_security.ASSETS / "config", staged / "security-config")
+                shutil.copyfile(fcos_lab_security.ASSETS / "spoe.cfg", staged / "edge/spoe.cfg")
         elif config is not None:
             (staged / "assets/Caddyfile").write_text(config, encoding="utf-8")
             (staged / "gateway").mkdir()
@@ -474,6 +504,7 @@ def main():
     parser.add_argument("--port", type=int, default=18443)
     parser.add_argument("--https-port", type=int, default=443)
     parser.add_argument("--gateway", choices=("caddy", "haproxy"), default="caddy")
+    parser.add_argument("--appsec", action="store_true")
     parser.add_argument("--least-privilege", action="store_true")
     parser.add_argument("--evidence-validator", type=Path)
     args = parser.parse_args()
@@ -492,10 +523,12 @@ def main():
             args.https_port,
             least_privilege=args.least_privilege,
             gateway=args.gateway,
+            appsec=args.appsec,
         )
         if args.least_privilege:
             admit_database_dispatch(args.evidence_validator)
-        write_bundle(args.output, *bundle, least_privilege=args.least_privilege, gateway=args.gateway)
+        write_bundle(args.output, *bundle, least_privilege=args.least_privilege, gateway=args.gateway,
+                     appsec=args.appsec)
     except (ValueError, OSError) as error:
         parser.exit(1, f"FCOS application PoC bundle preparation failed: {error}\n")
 

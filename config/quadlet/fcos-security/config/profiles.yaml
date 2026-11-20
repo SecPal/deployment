@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+---
+name: lab_local_only
+filters:
+  - Alert.Remediation == true
+decisions: []
+on_success: break

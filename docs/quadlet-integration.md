@@ -326,3 +326,8 @@ gateway. The administrator-owned user systemd socket supplies the original
 TCP listener and the rootless gateway joins only the fixture's private edge
 network. PostgreSQL and application listeners remain internal. The production
 DIRECT and PROTECTED contracts retain their independent acceptance criteria.
+
+The optional [CrowdSec and AppSec profile](fcos-application-poc.md#private-crowdsec-and-appsec)
+has a separate rootless user manager. The application does not mount its
+control interfaces, state or credentials. HAProxy receives one Unix SPOA
+endpoint and the engine reads the selected HAProxy log file.
