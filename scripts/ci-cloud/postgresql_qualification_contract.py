@@ -30,40 +30,6 @@ SELECTOR = 'native-postgresql-18'
 REFERENCE_PROFILES = {'reference-rocky-10-2-amd64': 'x86_64',
                       'reference-rocky-10-2-arm64': 'aarch64'}
 PROFILE_ARCHITECTURES = {**rpm.PROFILE_ARCHITECTURES, **REFERENCE_PROFILES}
-PROBE_PATHS = (
-    'scripts/ci-cloud/postgresql_qualification_contract.py',
-    'scripts/ci-cloud/postgresql-qualification-control.py',
-    'scripts/ci-cloud/qualify-native-postgresql.py',
-    'scripts/ci-cloud/postgresql-application-bootstrap.php',
-    'scripts/ci-cloud/postgresql-application-probe.php',
-    'scripts/image_attestation_runtime.py',
-    'scripts/fetch-oci-attestation.py',
-    'scripts/ci-cloud/run-native-postgresql-qualification.sh',
-    'scripts/ci-cloud/rocky_preparation_contract.py',
-    'scripts/ci-cloud/collect-rocky-preparation.py',
-    'scripts/integration_runtime_contract.py',
-    'scripts/render-native-postgresql.py',
-    'config/production/selinux/secpal_native_postgresql.cil',
-    'schemas/postgresql-qualification-evidence.schema.json',
-    'schemas/postgresql-qualification-diagnostic.schema.json',
-)
-# Controller-only resolver and validators remain in the source identity, but
-# their bytes are not executable guest inputs. The manifest carries their hashes.
-CONTROL_PROBE_PATHS = ('scripts/ci-cloud/postgresql-qualification-control.py',
-                       'schemas/postgresql-qualification-evidence.schema.json',
-                       'schemas/postgresql-qualification-diagnostic.schema.json')
-GUEST_PROBE_PATHS = tuple(path for path in PROBE_PATHS if path not in CONTROL_PROBE_PATHS)
-
-
-def probe_manifest_digest(manifest: object) -> str:
-    if (not isinstance(manifest, dict) or set(manifest) != set(PROBE_PATHS)
-            or any(not isinstance(value, str) or DIGEST.fullmatch(value) is None for value in manifest.values())):
-        raise QualificationError('validate-authorization', 'representation-invalid')
-    digest = hashlib.sha256()
-    for name in PROBE_PATHS:
-        digest.update(name.encode() + b'\0' + bytes.fromhex(manifest[name]))
-    return digest.hexdigest()
-
 
 NATIVE_DATA_DIRECTORY = '/var/lib/pgsql/data'
 NATIVE_STORAGE_MINIMUMS = {'free_bytes': 20 * 1024**3, 'free_inodes': 200000,
@@ -93,7 +59,6 @@ def admit_native_storage(facts):
 
 
 CANDIDATE_PATH = 'config/production/postgresql-contract.json'
-CONSUMER_PATH = 'scripts/render-native-postgresql.py'
 PACKAGES = ('postgresql18-server', 'postgresql18', 'postgresql18-private-libs')
 DECLARATION = {
     'schema_version': 1, 'major': 18,
@@ -399,71 +364,6 @@ def admit_postgresql_package(name: str, raw: dict[str, Any], architecture: str,
             or result['architecture'] != architecture):
         raise QualificationError('observe-packages', 'invariant-failed')
     return result
-
-
-def normalize_lifecycle_timeline(document: object) -> dict[str, int]:
-    """Normalize the fixed GitHub Ready/Draft selection for select_candidate.
-
-    GitHub totalCount describes provider-wide timeline metadata, not the
-    selected nodes. Completeness and the selected-event bound are independent.
-    """
-    if (not isinstance(document, dict) or set(document) != {'totalCount', 'pageInfo', 'nodes'}
-            or type(document['totalCount']) is not int or document['totalCount'] < 0
-            or not isinstance(document['pageInfo'], dict)
-            or set(document['pageInfo']) != {'hasNextPage'}
-            or not isinstance(document['nodes'], list)):
-        raise QualificationError('resolve-candidate', 'representation-invalid')
-    nodes = document['nodes']
-    if document['pageInfo']['hasNextPage'] is not False or len(nodes) > 100:
-        raise QualificationError('resolve-candidate', 'observation-limit-exceeded')
-    counts = {'ready_events': 0, 'draft_events': 0}
-    for node in nodes:
-        if (not isinstance(node, dict) or set(node) != {'__typename'}
-                or node['__typename'] not in ('ReadyForReviewEvent', 'ConvertToDraftEvent')):
-            raise QualificationError('resolve-candidate', 'representation-invalid')
-        counts['ready_events' if node['__typename'] == 'ReadyForReviewEvent' else 'draft_events'] += 1
-    return counts
-
-
-def select_candidate(pulls: object) -> dict[str, Any]:
-    """Admit bounded trusted GitHub observations, never caller dispatch selectors."""
-    if not isinstance(pulls, list) or len(pulls) > 100:
-        raise QualificationError('resolve-candidate', 'representation-invalid')
-    fields = {'number', 'state', 'repository', 'head_repository', 'base', 'head',
-              'body', 'closing_issues', 'draft', 'ready_events', 'draft_events', 'commits'}
-    matching = []
-    for pull in pulls:
-        if not isinstance(pull, dict) or set(pull) != fields:
-            raise QualificationError('resolve-candidate', 'representation-invalid')
-        closing = pull['closing_issues']
-        if not isinstance(closing, list) or len(closing) > 100:
-            raise QualificationError('resolve-candidate', 'representation-invalid')
-        if 'SecPal/deployment#81' in closing:
-            matching.append(pull)
-    if len(matching) != 1:
-        raise QualificationError('resolve-candidate', 'identity-mismatch')
-    pull = matching[0]
-    if (type(pull['number']) is not int or not 1 <= pull['number'] <= 1000000
-            or pull['state'] != 'OPEN' or pull['repository'] != 'SecPal/deployment'
-            or pull['head_repository'] != 'SecPal/deployment' or pull['base'] != 'main'
-            or pull['closing_issues'] != ['SecPal/deployment#81']
-            or not isinstance(pull['head'], str) or SHA.fullmatch(pull['head']) is None
-            or not isinstance(pull['body'], str) or len(pull['body'].encode()) > 65536
-            or re.search(r'(?m)^Fixes #81\s*$', pull['body']) is None
-            or type(pull['draft']) is not bool
-            or type(pull['ready_events']) is not int or type(pull['draft_events']) is not int
-            or pull['draft_events'] != 0
-            or pull['ready_events'] != (0 if pull['draft'] else 1)):
-        raise QualificationError('resolve-candidate', 'identity-mismatch')
-    commits = pull['commits']
-    if (not isinstance(commits, list) or not 1 <= len(commits) <= 300
-            or any(not isinstance(c, dict) or set(c) != {'sha', 'verified', 'reason'}
-                   or not isinstance(c['sha'], str) or SHA.fullmatch(c['sha']) is None
-                   or c['verified'] is not True or c['reason'] != 'valid' for c in commits)
-            or len({c['sha'] for c in commits}) != len(commits)
-            or commits[-1]['sha'] != pull['head']):
-        raise QualificationError('resolve-candidate', 'identity-mismatch')
-    return dict(pull)
 
 
 ROLE_ATTRIBUTES = ('superuser', 'create_db', 'create_role', 'inherit', 'replication', 'bypass_rls', 'login')

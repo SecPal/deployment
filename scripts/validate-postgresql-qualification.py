@@ -45,29 +45,6 @@ def validate(root: Path):
             or set(failure['properties']['operation']['enum']) != contract.OPERATIONS
             or set(failure['properties']['reason']['enum']) != contract.REASONS):
         raise ValueError('closed semantic diagnostic schema disagrees with trusted operations')
-    runner = (root / 'scripts/ci-cloud/qualify-native-postgresql.py').read_text()
-    control = (root / 'scripts/ci-cloud/postgresql-qualification-control.py').read_text()
-    reference = (root / 'scripts/ci-cloud/postgresql-reference-host.py').read_text()
-    for source in (runner, control, reference):
-        parsed = ast.parse(source)
-        for node in ast.walk(parsed):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {'eval', 'exec', 'compile', '__import__'}:
-                raise ValueError('trusted operation has arbitrary execution')
-            if isinstance(node, ast.Call) and any(k.arg == 'shell' and not isinstance(k.value, ast.Constant) or k.arg == 'shell' and k.value.value is not False for k in node.keywords):
-                raise ValueError('trusted command acquires shell execution')
-    for required in ('StrictHostKeyChecking=yes', 'GlobalKnownHostsFile=/dev/null', 'authenticate_control(', 'claim(directory,', 'contract.admit_evidence(', 'contract.admit_diagnostic('):
-        if required not in reference:
-            raise ValueError('reference-host authenticated transport/admission boundary missing')
-    if 'subprocess.run(' in runner or 'capture_output=True' in runner:
-        raise ValueError('trusted observation bypasses bounded process collection')
-    if 'http://169.254.169.254' in runner:
-        raise ValueError('test guest attempts metadata access')
-    for required in ('bound_diagnostic(', 'observer.cleanup()', 'CLEANUP_POSTCONDITIONS', 'resource_binding()', 'bounded_process('):
-        if required not in runner:
-            raise ValueError('guest failure/resource/cleanup boundary missing')
-    for required in ('contract.admit_diagnostic(', 'consumer !=', "'candidate_tree': tree", 'NoRedirect'):
-        if required not in control:
-            raise ValueError('trusted source/diagnostic binding missing')
     if len(contract.rpm.PACKAGES) != 22:
         raise ValueError('frozen host package claim widened')
 

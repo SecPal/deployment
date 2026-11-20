@@ -12,13 +12,14 @@ No current workflow can discover/provision/prepare/resume a GCP test guest or
 execute a GCP qualification target. No IAP, NAT, OS Login or KMS replacement is
 introduced.
 
-## Maintained native qualification
+## Retained native contracts
 
-Rocky Linux 10.2+, AMD64/x86-64-v3 and ARM64, effective Enforcing SELinux,
-rootless Podman/systemd/Quadlet, signed package provenance, PostgreSQL 18 with
-TLS/SCRAM and distinct roles, and HAProxy/nftables/backend isolation remain
-mandatory. The existing production host harness, native observers, reference-host
-transport, closed admission and negative/failure/recovery/cleanup tests remain.
+The historical Rocky reference established AMD64/x86-64-v3 and ARM64,
+effective Enforcing SELinux, rootless Podman/systemd/Quadlet, signed package
+provenance, PostgreSQL 18 with TLS/SCRAM and distinct roles, and HAProxy/nftables
+isolation. The production host harness and its active conformance contracts
+remain separately owned. The #81 PostgreSQL execution path is archived.
+Its shared native configuration, validation and evidence admission remain.
 
 Accepted [#286](https://github.com/SecPal/deployment/pull/286) and
 [#248](https://github.com/SecPal/deployment/issues/248) retain actual CX33/AMD64 and
@@ -29,7 +30,7 @@ this source retirement. Existing dedicated hosts, identities, data and services
 remain unchanged.
 
 See [native PostgreSQL](architecture/native-postgresql.md),
-[reference-host qualification](postgresql-qualification.md),
+[PostgreSQL qualification and historical reference](postgresql-qualification.md),
 [product backends](product-backends.md) and
 [production host](architecture/production-host.md). Their existing owners and
 security boundaries are unchanged.

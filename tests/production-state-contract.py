@@ -274,6 +274,7 @@ class ProductionStateContractTest(unittest.TestCase):
         units = self.renderer.build_units(self.contract)
         fpm = units["secpal-php-fpm.container"]
         http = units["secpal-api.container"]
+        http_container = http.split("[Container]\n", 1)[1].split("[Service]\n", 1)[0]
         self.assertIn("Image=ghcr.io/secpal/api@sha256:e6bd9bb7608298e2d4ac807883cbb378d58134025a9b5e8dbec88af919112024", fpm)
         self.assertIn("Image=ghcr.io/secpal/api@sha256:4bfeca7ead5436c5c4b9d51823d2438be91e5f88c25d07b8695a0a5c614a8b90", http)
         self.assertIn("Requires=secpal-php-fpm.service", http)
@@ -282,10 +283,12 @@ class ProductionStateContractTest(unittest.TestCase):
         self.assertIn("Volume=secpal-fpm.volume:/run/secpal-fpm:ro,z", http)
         self.assertIn("StopSignal=SIGQUIT", fpm)
         self.assertIn("StopSignal=SIGQUIT", http)
+        self.assertIn("HealthCmd=/usr/local/bin/secpal-http-live", http_container)
+        self.assertNotRegex(http_container, r"(?m)^(Exec|Entrypoint)=")
         self.assertIn("HealthCmd=php /usr/local/bin/secpal-fpm-live.php", fpm)
         self.assertNotIn("PublishPort=", fpm)
-        for forbidden in ("DB_", "secret", "private-storage", "frankenphp", "/config", "/data"):
-            self.assertNotIn(forbidden, http.split("[Container]\n", 1)[1].split("[Service]\n", 1)[0])
+        for forbidden in ("DB_", "secret", "private-storage", "/config", "/data"):
+            self.assertNotIn(forbidden, http_container)
         for role in ("migrate", "scheduler", "worker-general", "worker-hash-chain"):
             unit = units[f"secpal-{role}.container"]
             self.assertIn("Image=ghcr.io/secpal/api@sha256:e6bd9bb7608298e2d4ac807883cbb378d58134025a9b5e8dbec88af919112024", unit)
