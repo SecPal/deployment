@@ -212,8 +212,10 @@ Under `$rollout_config`, install the following private inputs mode `0600`:
   IPv4 `address` values and their existing `domain` parents, for example
   `{"cx23":{"address":"<private IPv4>","domain":"<cx23 DNS parent>"}}`
   with the other two entries present.
-- One `<host>.known_hosts` per guest. Each entry uses the exact alias as its
-  hostname and the independently authenticated ED25519 host key.
+- One `<host>.known_hosts` per guest. Each file contains one line in the form
+  `<alias> ssh-ed25519 <key>` using the independently authenticated host key.
+  A host replacement requires independent authentication and explicit pin
+  replacement before rollouts can continue.
 - One `<host>.health.json` per guest with exactly `email`, `password` and
   `organisation`. Use only the synthetic account and witness UUID from
   enrollment. Do not put these credentials in the unit's environment.

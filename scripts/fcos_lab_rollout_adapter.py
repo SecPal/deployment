@@ -40,6 +40,7 @@ OPERATIONS = {"observe", "prepare", "activate", "accept", "rollback"}
 RUNTIME_SOURCE = "scripts/integration_runtime_contract.py"
 PRIVATE = Path.home() / ".config/secpal-fcos-lab-rollout"
 TOOLS = Path(__file__).resolve().parent
+ED25519_WIRE_PREFIX = b"\0\0\0\x0bssh-ed25519\0\0\0\x20"
 PRIVATE_IPV4 = tuple(map(ipaddress.IPv4Network, ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")))
 
 
@@ -89,6 +90,14 @@ def ssh_arguments(host, address, directory):
         "-o", f"HostKeyAlias={host}", "-i", str(directory / "rollout_ed25519"),
         f"secpal-lab-rollout@{address}",
     ]
+
+
+def check_host_pin(host, contents):
+    if host not in HOSTS:
+        raise ValueError("unknown SSH host alias")
+    row = re.fullmatch(host.encode("ascii") + rb" ssh-ed25519 ([A-Za-z0-9+/]{68})\n", contents)
+    if row is None or not base64.b64decode(row[1], validate=True).startswith(ED25519_WIRE_PREFIX):
+        raise ValueError("expected one exact ED25519 host pin")
 
 
 def request_line(operation, host, platform, candidate, previous, child=None):
@@ -266,7 +275,7 @@ def main():
         address, domain = config[host]["address"], config[host]["domain"]
         if not re.fullmatch(rf"{host}(?:\.[a-z0-9](?:[a-z0-9-]{{0,61}}[a-z0-9])?){{2,4}}", domain):
             return 1
-        private_file(PRIVATE, host + ".known_hosts")
+        check_host_pin(host, private_file(PRIVATE, host + ".known_hosts").read_bytes())
         private_file(PRIVATE, "rollout_ed25519")
         ssh = ssh_arguments(host, address, PRIVATE)
         if operation == "prepare":

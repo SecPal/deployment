@@ -4,6 +4,7 @@
 
 """Test the FCOS lab adapter without guest credentials or external services."""
 
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -14,7 +15,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from fcos_lab_rollout_adapter import Frontend, native_children, prepare_request, request_line, ssh_arguments
+from fcos_lab_rollout_adapter import Frontend, check_host_pin, native_children, prepare_request, request_line, ssh_arguments
 from fcos_lab_rollout import RELEASE_PATHS, Release, source_release
 
 OLD = Release("1" * 40, "2" * 64)
@@ -44,6 +45,19 @@ class AdapterContract(unittest.TestCase):
         ):
             with self.subTest(op=op, host=host, platform=platform, child=child), self.assertRaises(ValueError):
                 request_line(op, host, platform, NEW, OLD, child)
+
+    def test_only_one_exact_ed25519_host_pin_is_admitted(self):
+        raw = b"\0\0\0\x0bssh-ed25519\0\0\0\x20" + bytes(range(32))
+        public = base64.b64encode(raw)
+        entry = b"cx23 ssh-ed25519 " + public + b"\n"
+        self.assertIsNone(check_host_pin("cx23", entry))
+        for host_pin in (
+            entry.replace(b"cx23 ", b"* "), entry.replace(b"cx23 ", b"cx33 "),
+            entry.replace(b"cx23 ", b"cx23,cx33 "), entry + entry, b"@cert-authority " + entry,
+            entry.replace(public, b"A" * 68),
+        ):
+            with self.subTest(host_pin=host_pin), self.assertRaises(ValueError):
+                check_host_pin("cx23", host_pin)
 
     def test_prepare_only_sends_bounded_publisher_evidence(self):
         proof = ({"linux/amd64": DIGEST}, b"index", b"bundle")
