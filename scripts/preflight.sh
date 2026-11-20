@@ -61,6 +61,7 @@ php -l tests/fcos-poc-database-authority.php
 php -l scripts/ci-cloud/postgresql-application-bootstrap.php
 php -l scripts/ci-cloud/postgresql-application-probe.php
 python3 tests/dependabot-ci-enrollment.py
+python3 tests/fcos-lab-discovery.py
 python3 tests/capacity-capability-contract.py
 python3 tests/image-consumption-evidence-contract.py
 python3 tests/integration-current-topology.py
