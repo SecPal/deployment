@@ -138,6 +138,11 @@ mapped security identity. Copy `patterns/` from `/staging/etc/crowdsec/patterns`
 of the admitted engine image. Create an empty `postoverflows/` and write `{}`
 to `hub/.index.json`. Use the configuration directly with the engine binary.
 That keeps dependencies local and avoids a moving Hub or Central registration.
+The pinned [Engine's acquisition schema](https://github.com/crowdsecurity/crowdsec/blob/3d369d64eb3e9ba770ed39aedc83ffd3170aef4c/pkg/acquisition/modules/appsec/config.go)
+supports `appsec_configs`. Its local item discovery loads the staged
+`appsec-configs/` and `appsec-rules/` directories independently of a remote
+Hub catalog. Keep both directories in the staged configuration and verify
+real rule rejection after startup.
 
 Use the [signed OWASP CRS 4.30.0 minimal release](https://github.com/coreruleset/coreruleset/releases/tag/v4.30.0).
 Verify the detached signature with the [pinned publisher fingerprint](https://coreruleset.org/docs/1-getting-started/1-1-crs-installation/)
@@ -159,6 +164,21 @@ for configuration and apply the shared SELinux `container_file_t` label:
 | `security/audit/haproxy.log`     | Runtime account owns the file. Mode `0640`, group equal to the security container's mapped GID 65532. Stage the file before startup. Engine reads only the audit directory.           |
 | `security/state/`                | SQLite and machine credential file. Keep across container recreation.                                                                                                                 |
 | `security/credentials/spoa.yaml` | Mode `0400` or `0600` for the mapped security UID. Only SPOA mounts this directory.                                                                                                   |
+
+Use the host subordinate GIDs for the two ownership assignments. Run the
+first command in the application account and the second in the security
+account, each with its own Podman store:
+
+```bash
+podman unshare cat /proc/self/gid_map | awk '$1 <= 99 && 99 < $1 + $3 {print $2 + 99 - $1}'
+podman unshare cat /proc/self/gid_map | awk '$1 <= 65532 && 65532 < $1 + $3 {print $2 + 65532 - $1}'
+```
+
+The administrator gives `spoe/` the first GID so `spoa.sock` inherits that
+group. Give `audit/haproxy.log` the second GID so Engine can read the record.
+Use the security account's `uid_map` to derive the host owner for its mapped
+UID 65532. Verify the socket's actual group and mode after startup. Verify the
+runtime account cannot read the SPOA credential file.
 
 For a fresh security slot, use `/usr/local/bin/cscli` from the exact admitted
 engine image. Run it with `--network=none`, `--user 65532:65532`, internal
