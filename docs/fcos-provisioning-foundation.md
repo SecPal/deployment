@@ -47,6 +47,13 @@ Record the actual Rescue runtime and check compatibility per architecture.
 The Fedora RPM is extracted on the preparation host.
 [Fedora package and dependencies](https://packages.fedoraproject.org/pkgs/rust-coreos-installer/coreos-installer/fedora-44-updates.html)
 
+The private signed-installer CX23 proof records the x86_64 executable
+running natively in Debian 13 Rescue with glibc 2.41, OpenSSL 3.5.6,
+GnuPG 2.4.7, udev and util-linux. It used the existing Rescue libraries
+and helpers and completed the signed Metal installation. The aarch64 RPM
+passed signature, identity and ELF admission. A native aarch64 Rescue run
+remains a separate runtime qualification.
+
 The earlier OCI archive, index, native manifests, configuration and ordered
 layers remain bound to the historical installation receipts. The native
 child digests retained under `qualification_fixture` are used for the
@@ -105,9 +112,11 @@ directory and the script/state in the runtime-owned external qualification path.
 The helper neither writes those files nor enables a unit. It is test workload
 preparation, not product or database activation.
 
-The system `multi-user.target` pulls in `network-online.target` so rootless
-Quadlet's wait service can observe host network readiness. The guest reboot
-proof checks this dependency through the ordinary boot path.
+The `multi-user.target` drop-in pulls in `network-online.target` so rootless
+Quadlet's wait service can observe host network readiness. The guest's
+first-boot systemd presets remove unmanaged wants symlinks. A native preset
+replay on a temporary systemd root confirmed that the preset leaves the
+drop-in in place.
 
 Zincati is explicitly disabled during controlled qualification. Production
 update/reboot authorization, rolling order, health admission and rollback remain
@@ -232,10 +241,12 @@ the database roles, and both worker queues passed after container recreation
 and a controlled guest reboot. The provider mutation path was the authorized
 legacy test workflow. Broker mutation acceptance remains outstanding.
 
-The original installed Ignition omitted the system network-online dependency.
-The persistent systemd wants link was added on the guest after installation
-and observed active after reboot. The corrected renderer produces the same
-link. With the original CX23 settings and site overlays, the compiled Ignition
-differs semantically only by that link. Both architecture fixtures passed
-strict Butane and Ignition validation. The private report retains the original
-installed bytes, guest correction and corrected renderer outputs separately.
+The original CX23 Ignition omitted the system network-online dependency. The
+first live correction added a wants link after installation. The later
+signed-installer run used the renderer that wrote the link through Ignition.
+The boot journal records both the Ignition write and the first-boot preset
+removal. The final renderer expresses the same dependency as a target
+drop-in. The signed-installer guest received the exact drop-in from that
+renderer after installation. Both architecture fixtures passed strict
+Butane and Ignition validation. The private reports retain the installed
+Ignition bytes, live corrections and subsequent renderer outputs separately.

@@ -155,10 +155,13 @@ class PreparationTests(unittest.TestCase):
         result = self.rendered_fixture()
         self.assertIn(
             {
-                "path": "/etc/systemd/system/multi-user.target.wants/network-online.target",
-                "target": "/usr/lib/systemd/system/network-online.target",
+                "name": "multi-user.target",
+                "dropins": [{
+                    "name": "20-secpal-network-online.conf",
+                    "contents": "[Unit]\nWants=network-online.target\n",
+                }],
             },
-            result["storage"].get("links", []),
+            result["systemd"]["units"],
         )
 
     def test_fixture_renders_both_architectures_and_uses_canonical_mapping(self):
