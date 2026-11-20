@@ -317,3 +317,12 @@ covered by the production inventory and synthetic host-fact validators.
 
 The current runtime checks are `Quadlet Contract (amd64)` and
 `Quadlet Contract (arm64)`, enforced through native GitHub protection.
+
+## FCOS private application gateway
+
+The [FCOS application fixture](fcos-application-poc.md#private-haproxy-gateway)
+can render its existing rootless stack with HAProxy as the private HTTPS
+gateway. The administrator-owned user systemd socket supplies the original
+TCP listener and the rootless gateway joins only the fixture's private edge
+network. PostgreSQL and application listeners remain internal. The production
+DIRECT and PROTECTED contracts retain their independent acceptance criteria.

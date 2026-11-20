@@ -126,13 +126,24 @@ def forwarding_sanitization() -> tuple[str, ...]:
             'http-request del-header X-Request-ID')
 
 
-def routing_sections(routing: Routing, generation: str | None = None) -> str:
+def routing_sections(routing: Routing, generation: str | None = None, *,
+                     fixture_https_port: int = 443,
+                     fixture_network: bool = False,
+                     normalize_http2: bool = False,
+                     identity_rules: tuple[str, ...] = ()) -> str:
     """Fixed origins/backends for reviewed listener/identity consumers."""
+    def origins(host):
+        ports = (80, 443) if not fixture_network else (fixture_https_port,)
+        return ' '.join((host, *(f'{host}:{port}' for port in ports)))
+
+    # HAProxy represents HTTP/2 scheme, authority and path as an absolute URI.
+    # Keep the encoded path/query and retain the HTTP/1 origin-form checks.
+    http2 = '    http-request set-uri %[pathq] if { req.ver 2.0 }\n' if normalize_http2 else ''
     rules = f'''    acl supported_method method {' '.join(METHODS)}
     http-request set-var(txn.security) str(method_rejected) unless supported_method
     http-request deny deny_status 405 unless supported_method
     http-request set-var(txn.method) method
-    acl origin_form url_beg /
+{http2}    acl origin_form url_beg /
     acl options_star method OPTIONS
     acl star_target url -m str *
     http-request set-var(txn.security) str(target_rejected) if !origin_form !options_star
@@ -142,8 +153,8 @@ def routing_sections(routing: Routing, generation: str | None = None) -> str:
     acl one_host req.hdr_cnt(host) eq 1
     http-request set-var(txn.security) str(host_rejected) unless one_host
     http-request deny deny_status 400 unless one_host
-    acl frontend_origin req.hdr(host),lower -m str {routing.frontend_host} {routing.frontend_host}:80 {routing.frontend_host}:443
-    acl api_origin req.hdr(host),lower -m str {routing.api_host} {routing.api_host}:80 {routing.api_host}:443
+    acl frontend_origin req.hdr(host),lower -m str {origins(routing.frontend_host)}
+    acl api_origin req.hdr(host),lower -m str {origins(routing.api_host)}
     http-request set-var(txn.security) str(origin_rejected) if !frontend_origin !api_origin
     http-request deny deny_status 421 if !frontend_origin !api_origin
     http-request set-var(txn.origin) str(frontend) if frontend_origin
@@ -164,7 +175,7 @@ def routing_sections(routing: Routing, generation: str | None = None) -> str:
     http-request set-var(txn.security) str(generation_probe) if generation_probe generation_path generation_header generation_value
     http-request return status 204 hdr X-SecPal-Generation {generation} hdr X-SecPal-Worker %pid if generation_probe generation_path generation_header generation_value
 '''
-    rules += ''.join(f'    {rule}\n' for rule in forwarding_sanitization())
+    rules += ''.join(f'    {rule}\n' for rule in (*forwarding_sanitization(), *identity_rules))
     rules += '''    http-request set-var(txn.security) str(accepted)
     use_backend secpal_frontend if frontend_origin
     use_backend secpal_api if api_origin
@@ -174,19 +185,21 @@ def routing_sections(routing: Routing, generation: str | None = None) -> str:
     # readiness explicitly differs from #101's HTTP transport-only check.
     for role, backend in BACKENDS.items():
         path = '/health/ready' if role == 'api' else backend.readiness_path
+        endpoint = (f'{role}:8080 resolvers podman init-addr none'
+                    if fixture_network else backend.endpoint)
         rules += f'''
 backend secpal_{role}
     option httpchk
     http-check send meth GET uri {path} ver HTTP/1.1 hdr Host localhost
     http-check expect status 200 on-error str(readiness_rejected) on-success str(ready)
-    server {role} {backend.endpoint} check inter 1s fastinter 1s downinter 1s fall 1 rise 2
+    server {role} {endpoint} check inter 1s fastinter 1s downinter 1s fall 1 rise 2
 '''
     return rules
 
 
-def runtime_preamble() -> str:
+def runtime_preamble(*, direct_tcp_peer: bool = False) -> str:
     """Reviewed shared runtime directives; no listener or identity selection."""
-    return '''# SPDX-FileCopyrightText: 2026 SecPal Contributors
+    text = '''# SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 # Reviewed shared base; listener placement and canonical identity have separate owners.
 global
@@ -216,6 +229,7 @@ defaults
     log-format "peer=%ci request_id=%ID method=%[var(txn.method)] origin=%[var(txn.origin)] backend=%b server=%s status=%ST bytes=%B duration_ms=%Ta termination=%tsc security=%[var(txn.security)]"
 
 '''
+    return text.replace('peer=%ci ', 'peer=%[fc_src] client=%ci ') if direct_tcp_peer else text
 
 
 def _render(routing: Routing, listeners: tuple[Listener, ...], generation: str | None = None) -> str:
