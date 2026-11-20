@@ -113,6 +113,19 @@ class GuestContract(unittest.TestCase):
             (Path(directory) / "99-extra.conf").touch()
             self.assertNotEqual(check(expected), 0)
 
+    def test_recording_acceptance_rechecks_fixture_drift(self):
+        command = ('source "$1"; state=$2; '
+                   'matches() { [[ "$1" == checked ]]; }; '
+                   'check_installed() { [[ "$state" == intact ]]; }; '
+                   'singleton_roles() { return 0; }; '
+                   'save() { printf "%s %s\n" "$1" "$2"; }; '
+                   'persist_accepted checked')
+        for layout in ("intact", "drifted"):
+            result = subprocess.run(["bash", "-c", command, "test", self.guest, layout],
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode == 0, layout == "intact")
+            self.assertEqual(result.stdout, "accepted.json checked\n" if layout == "intact" else "")
+
     def test_guest_needs_exact_publisher_evidence(self):
         command = ('source "$1"; scratch=$2; peer="$scratch"; platform=linux/amd64; '
                    'verify_publisher "$3" "$4"')

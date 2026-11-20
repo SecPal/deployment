@@ -259,6 +259,12 @@ health() {
     done
 }
 
+persist_accepted() {
+    local accepted=$1
+    matches "$accepted" && check_installed && singleton_roles &&
+        save accepted.json "$accepted"
+}
+
 decode_publisher_evidence() {
     local file=$1
     local -a rows
@@ -359,7 +365,7 @@ main() {
         sql 'SELECT system_identifier FROM pg_control_system()' > "$store/cluster-id"
         matches "$installed" || deny
         health "$installed" || deny
-        save accepted.json "$installed"
+        persist_accepted "$installed" || deny
         return
     fi
 
@@ -406,7 +412,7 @@ main() {
         accept)
             matches "$next" || deny
             health "$next" || exit 10
-            save accepted.json "$next"
+            persist_accepted "$next" || deny
             ;;
         rollback)
             [[ $installed == "$before" ]] || deny
@@ -415,7 +421,7 @@ main() {
                 switch_image "$before" || deny
             fi
             health "$before" || deny
-            save accepted.json "$before"
+            persist_accepted "$before" || deny
             ;;
     esac
 }

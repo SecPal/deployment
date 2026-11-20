@@ -113,8 +113,9 @@ before installing the exact reviewed source revision.
 
    Enrollment captures the exact installed image and fixed configuration,
    checks rootless runtime health and verifies the PostgreSQL cluster and
-   synthetic witness. It writes only the adapter's own state. Stop if the
-   installed fixture does not match. Keep administrator recovery access.
+   synthetic witness. It records adapter state and exercises both queues
+   with temporary synthetic jobs and cache markers. Stop if the installed
+   fixture does not match. Keep administrator recovery access.
 
 3. Install the following exact sudoers entry at
    `/etc/sudoers.d/secpal-fcos-lab-rollout` under administrator ownership and
