@@ -188,7 +188,7 @@ def _render(spec: Direct, generation=None) -> str:
         raise ValueError('admit-direct-input')
     text = '# secpal-direct ' + json.dumps(document(spec), sort_keys=True, separators=(',', ':')) + '\n'
     # Same package/runtime/limits as #219; the identity owner adds both facts.
-    text += runtime_preamble().replace('peer=%ci ', 'peer=%[fc_src] client=%ci ')
+    text += runtime_preamble(direct_tcp_peer=True)
     if spec.topology == 'ha':
         text = text.replace('peer=%[fc_src] client=%ci ',
                             'stage=http worker=%pid edge=%[fc_src]:%[fc_src_port]>%[fc_dst]:%[fc_dst_port] client=%ci ')
@@ -222,14 +222,11 @@ def _render(spec: Direct, generation=None) -> str:
         text += '''    http-request deny deny_status 400 if { src 0.0.0.0 :: 224.0.0.0/4 ff00::/8 }
     http-request deny deny_status 400 unless { src_port gt 0 }
 '''
-    sections = routing_sections(spec.routing, generation).replace(sanitization, sanitization + canonical, 1)
+    sections = routing_sections(
+        spec.routing, generation,
+        normalize_http2=spec.topology == 'single' and spec.listeners[0].tls_lifecycle != 'legacy',
+    ).replace(sanitization, sanitization + canonical, 1)
     if spec.topology == 'single' and spec.listeners[0].tls_lifecycle != 'legacy':
-        # HAProxy represents HTTP/2's scheme/authority/path as an absolute URI.
-        # Retain its admitted Host authority and exact encoded path/query for
-        # the existing origin-form checks. HTTP/1 absolute targets stay denied.
-        sections = sections.replace('    acl origin_form url_beg /\n',
-            '    http-request set-uri %[pathq] if { req.ver 2.0 }\n'
-            '    acl origin_form url_beg /\n', 1)
         # #103 consumes #220's origin/parser/identity admission before admitting
         # the raw request target. Queries, escapes, suffixes and non-GET methods
         # never enter the Certbot standalone backend. No WAF bypass elsewhere.

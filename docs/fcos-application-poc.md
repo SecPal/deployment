@@ -45,6 +45,77 @@ units as administrator-owned files in the existing rootless user's Quadlet
 directory, with its normal SELinux labels. Keep real TLS material and test
 passwords outside the rendered bundle and logs.
 
+### Private HAProxy gateway
+
+Use `--gateway haproxy` with `--least-privilege` for the FCOS HAProxy
+variant. Set `--port` to the host's admitted WireGuard listener and
+`--https-port` to the port visible to clients. The existing lab firewall
+can retain its private 443-to-18443 translation. Give a disposable slot a
+different instance and socket port, even if it carries the same hostnames.
+The Caddy variant remains available for the earlier fixture and rollback.
+
+Stage the usual product and database assets and Quadlets. In addition:
+
+1. Pre-stage the native HAProxy image in the rootless user store. The
+   renderer pins Docker Official Images `library/haproxy` 3.2.27-trixie at
+   `sha256:5ddf08c89c95a311f4bfb761d74016597fdca76ecfcdf169ed1bab117f3da1ea`.
+   Check the [Official Images packaging revision](https://github.com/docker-library/haproxy/tree/e8a1db5b5042e4209697fdac2e203b26ad641b2f/3.2),
+   registry index and corresponding provenance statement for each native
+   child. The admitted `linux/amd64` child is `sha256:e397c53f7f74a33b4048abdbfb52784f86cfe6099f038a053e137b12c3f6707a`
+   and the `linux/arm64/v8` child is `sha256:54d2863bf03952254b2d3abe371615534f80a19d799089752b3ac5625baaaebf`.
+   This is the third-party publisher's lab input, under the separate
+   [image-supply contract](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-oci-supply-chain-vulnerability-evidence-adr021.md).
+2. Install `edge/haproxy.cfg` in the fixture's `edge/` directory as
+   administrator-owned, read-only to the runtime, with SELinux type
+   `container_file_t`. Install `edge/<prefix>-gateway.socket` as an
+   administrator-owned user-systemd unit under `/etc/systemd/user/`. The
+   Quadlet starts the socket when the rootless user manager starts the gateway.
+3. Stage the matching certificate chain and key as `tls/viewer.pem`, on the
+   guest. Permit only the mapped container UID 99 to read it and apply the
+   SELinux container-readable type. Keep the directory traversable by that
+   UID. Mount the directory read-only as defined by the Quadlet.
+4. For a fresh slot, follow the separate-authority bootstrap below and seed
+   its synthetic tenant keys and account. API readiness includes tenant keys,
+   backend state and worker/scheduler checks. HAProxy uses HTTP readiness to
+   admit API traffic. Neither migration nor credential initialization is
+   ordered into ordinary gateway startup.
+
+Systemd passes the bound TCP listener to HAProxy, which accepts the client
+connection directly. This preserves peer identity across the rootless network
+boundary. HAProxy strips
+caller forwarding headers and regenerates them from the peer, TLS and the
+admitted host. The fixed `frontend` and `api` aliases on the private Podman
+edge network are the only upstreams. The gateway has no application network,
+database port, host networking, host capabilities or runtime socket. The lab
+gateway uses the existing TLS material and firewall. Production certificate
+automation and security inspection have their existing contract owners.
+
+For an existing slot, stage the candidate beside the working configuration.
+Compare the generated product and database units with the installed units
+before a gateway-only cutover. Preserve their volumes and migration state.
+Keep the working gateway unit, certificate and configuration for rollback.
+When changing gateway implementation, stop the old listener immediately
+before starting the new one and verify both canonical HTTPS endpoints.
+
+For a HAProxy configuration update, put `candidate.cfg` beside `haproxy.cfg`
+with the same ownership, mode and label. From the runtime account validate it
+using the admitted running image:
+
+```bash
+podman exec --user 99:99 --env "SECPAL_TLS_SOCKET=127.0.0.1:$edge_port" "$prefix-gateway" \
+  haproxy -c -f /usr/local/etc/haproxy/candidate.cfg
+```
+
+The placeholder socket is used only for config checking. The actual service
+receives the fixed systemd listener at FD 3. On validation success preserve
+the currently admitted file and atomically rename the new file into place.
+`systemctl --user reload "$prefix-gateway.service"` rechecks the active file
+before signaling the HAProxy master. Check both HTTPS backends after reload.
+On failure atomically restore the saved file and reload it. A rejected
+candidate leaves the active file and worker alone. For disposal stop both the
+gateway service and socket, then remove their administrator-owned units and
+the exact fixture-owned resources as described below.
+
 ## Initialize, verify and restart
 
 Run through the host's admitted runtime user and user manager. The examples
