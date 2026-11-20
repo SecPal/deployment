@@ -186,7 +186,7 @@ def git(repo, *arguments, timeout=30):
 def source_release(repo, revision):
     if re.fullmatch(r"[a-f0-9]{40}", revision) is None:
         raise ValueError("invalid source revision")
-    tree = git(repo, "ls-tree", "-rz", "--full-tree", revision, "--", *RELEASE_PATHS)
+    tree = git(repo, "ls-tree", "-r", "-z", "--full-tree", revision, "--", *RELEASE_PATHS)
     records = [record.split(b"\t", 1) for record in tree.split(b"\0") if record]
     for path in RELEASE_PATHS:
         encoded = path.encode()
@@ -218,6 +218,8 @@ def command_adapter(executable):
                 if result.returncode != 0:
                     raise RolloutError(f"{host}: {operation} failed")
                 output.seek(0)
+                # A fingerprint and newline occupy 65 bytes. Read one extra
+                # byte so a valid prefix alone cannot satisfy the protocol.
                 reply = output.read(66)
         except (OSError, subprocess.SubprocessError):
             raise RolloutError(f"{host}: {operation} unavailable or timed out") from None

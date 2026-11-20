@@ -4,6 +4,7 @@
 
 """Exercise fleet sequencing using an adapter that only models lab operations."""
 
+from dataclasses import asdict
 import json
 from pathlib import Path
 import subprocess
@@ -134,6 +135,23 @@ class RolloutTest(unittest.TestCase):
         self.assertNotIn(("rollback", "cx23", NEXT.fingerprint), self.adapter.calls)
         self.assertEqual(self.adapter.current["cx33"], BASE.fingerprint)
 
+    def test_completed_checkpoint_needs_readback_before_accepting(self):
+        state = json.loads(self.state.read_text())
+        state.update(pending=asdict(NEXT), next=len(HOSTS))
+        self.state.write_text(json.dumps(state))
+        self.adapter.calls.clear()
+        with self.assertRaises(RolloutError):
+            run_rollout(NEXT, self.state, self.adapter, BASE)
+        self.assertEqual(json.loads(self.state.read_text())["accepted"], asdict(BASE))
+        self.adapter.current = dict.fromkeys(HOSTS, NEXT.fingerprint)
+        self.adapter.calls.clear()
+        run_rollout(NEXT, self.state, self.adapter, BASE)
+        self.assertEqual(
+            self.adapter.calls,
+            [("observe", host, NEXT.fingerprint) for host in HOSTS],
+        )
+        self.assertEqual(json.loads(self.state.read_text())["accepted"], asdict(NEXT))
+
     def test_initial_admission_does_not_install_on_a_mismatched_host(self):
         self.state.unlink()
         self.adapter.calls.clear()
@@ -171,6 +189,8 @@ class SourceAndProtocolTest(unittest.TestCase):
             self.assertEqual(source_release(repo, commit()).fingerprint, first.fingerprint)
             (repo / "scripts/integration_runtime_contract.py").write_text("updated image")
             self.assertNotEqual(source_release(repo, commit()).fingerprint, first.fingerprint)
+            (repo / "config/quadlet/fcos-security/config.yaml").write_text("changed")
+            self.assertNotEqual(source_release(repo, commit()).fingerprint, first.fingerprint)
             (repo / "scripts/integration_runtime_contract.py").unlink()
             with self.assertRaises(RolloutError):
                 source_release(repo, commit())
@@ -194,6 +214,9 @@ class SourceAndProtocolTest(unittest.TestCase):
                 call("accept", "cax21", NEXT, BASE)
             with self.assertRaises(RolloutError):
                 call("prepare", "cax21", NEXT, BASE)
+            adapter.write_text('#!/bin/sh\nprintf "%s\\nextra" "$7"\n')
+            with self.assertRaises(RolloutError):
+                call("observe", "cax21", NEXT, BASE)
 
 
 if __name__ == "__main__":
