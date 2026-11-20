@@ -3,6 +3,8 @@
 
 # Reproduce the SecPal FCOS application proof
 
+For staged container updates, see the [FCOS lab rollout procedure](fcos-lab-rollout.md).
+
 This fixture exercises the application on an already qualified FCOS lab host.
 It composes the maintained [integration Quadlets](quadlet-integration.md)
 with private HTTPS and persistent rootless volumes. The fixture is synthetic.
