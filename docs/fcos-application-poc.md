@@ -318,8 +318,9 @@ fixtures, not an upgrade procedure for existing databases.
   creation, ownership, temporary-object, cluster-wide or unrelated database
   privileges. [PostgreSQL default privileges](https://www.postgresql.org/docs/18/sql-alterdefaultprivileges.html)
 - Bootstrap administration uses the isolated DB container's local socket.
-  Runtime and migration connections require certificate-verified TLS and
-  SCRAM. Only the migrator mounts the migration credential subpath. The
+  Runtime and migration connections use `DB_SSLMODE=verify-full` with the
+  fixture PostgreSQL CA from the role-specific mount. They authenticate
+  with SCRAM. Only the migrator mounts the migration credential subpath. The
   migration login has a ten-minute maximum initial validity. The helper
   starts the explicit Laravel migration, records its success, disables and
   clears the migration login, stops the unit and removes the credential

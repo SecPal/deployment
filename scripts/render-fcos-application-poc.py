@@ -237,6 +237,8 @@ def database_role_mounts(lines, prefix, root, role):
         lines[index : index + 1] = [
             mount("api", "/run/secpal/secrets/api"),
             mount(f"{credential}-database", "/run/secpal/secrets/database"),
+            "Environment=DB_SSLMODE=verify-full",
+            "Environment=DB_SSLROOTCERT=/run/secpal/secrets/database/postgres-ca.crt",
         ]
         lines = [
             (

@@ -128,6 +128,8 @@ class ApplicationPoC(unittest.TestCase):
         )
         for role in ("php-fpm", "worker-general", "worker-hash-chain", "scheduler"):
             unit = units[f"{PREFIX}-{role}.container"]
+            self.assertIn("Environment=DB_SSLMODE=verify-full", unit)
+            self.assertIn("Environment=DB_SSLROOTCERT=/run/secpal/secrets/database/postgres-ca.crt", unit)
             self.assertIn("subpath=runtime-database", unit)
             self.assertIn("subpath=api", unit)
             self.assertNotIn("migration-database", unit)
@@ -138,6 +140,8 @@ class ApplicationPoC(unittest.TestCase):
         self.assertIn("subpath=postgresql", postgres)
         self.assertNotIn("subpath=migration-database", postgres)
         migrate = units[f"{PREFIX}-migrate.container"]
+        self.assertIn("Environment=DB_SSLMODE=verify-full", migrate)
+        self.assertIn("Environment=DB_SSLROOTCERT=/run/secpal/secrets/database/postgres-ca.crt", migrate)
         self.assertIn("subpath=migration-database", migrate)
         self.assertNotIn("subpath=runtime-database", migrate)
         self.assertIn("Exec=/run/secpal/production-migrate.php", migrate)
