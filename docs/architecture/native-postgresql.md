@@ -5,13 +5,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Native PostgreSQL 18
 
-The production declaration is
+This document describes the retained native Rocky reference and its consumers.
+Managed Hosting uses the [FCOS PostgreSQL container contract](../postgresql-qualification.md).
+
+The native declaration is
 [`postgresql-contract.json`](../../config/production/postgresql-contract.json).
 It consumes the accepted native PostgreSQL qualification interface. PostgreSQL
 runs as the Rocky distribution `postgresql.service`, under the distribution's
 `postgres:postgres` identity and SELinux `postgresql_t` domain. No product
 Quadlet, Podman user namespace, container graphroot or anonymous volume owns it.
-The current supply path is Rocky Linux 10.2+ signed Application Stream RPMs on
+The native supply path is Rocky Linux 10.2+ signed Application Stream RPMs on
 both amd64 and arm64. PG16/17, PGDG and container compatibility paths are absent.
 
 ## First installation and configuration
@@ -201,7 +204,7 @@ provisioning remain their existing application/setup contracts.
 
 ## Evidence and lifecycle boundaries
 
-The accepted-main `native-postgresql-18` mechanism composes frozen #80 host
+The historical `native-postgresql-18` mechanism composed frozen #80 host
 admission with separate native infrastructure and PHP/PDO application evidence.
 The frozen host target/harness and its historical meaning remain unchanged.
 Current production rootless inventory and state preparation no longer claim
@@ -214,7 +217,7 @@ on both supported architectures proves package provenance, systemd/SELinux,
 transport/roles/network and application availability. Candidate executables
 never gain root, provider credentials or evidence authority during qualification.
 Retain candidate/control identity, actual observations and guest/provider
-cleanup plus absence read-back. See [qualification authority](../postgresql-qualification.md).
+cleanup plus absence read-back. See [qualification and historical evidence](../postgresql-qualification.md).
 
 The [primary #81 delivery PR](https://github.com/SecPal/deployment/pull/286)
 is the evidence index for the exact candidate. It records both admitted Rocky

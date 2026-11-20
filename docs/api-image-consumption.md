@@ -102,8 +102,8 @@ approved digest and evidence contract.
 
 ## Historical native PostgreSQL application identity
 
-The trusted native PostgreSQL qualification contract consumes an existing
-accepted API runtime that supplies verified PHP/PDO transport and separate
+The original native PostgreSQL qualification consumed an admitted
+API runtime that supplies verified PHP/PDO transport and separate
 application readiness/liveness. It fixes
 `ghcr.io/secpal/api@sha256:ac97416f3feac5c57204421059105389c9add2cfbcda1b063eadf4c6ad7647ab`
 from accepted API source `7da77556e7a4896940b6c50ccf6ba2c3fb9a8653`, publisher
@@ -114,7 +114,7 @@ run `36992636604`, attempt `1`, workflow `publish-container.yml`, on protected
 - `linux/arm64`: `sha256:ed91caa822e189187d57e0ff322c54e3b9837aa679cc087015933dcda9a3be7e`
 
 This identity remains bound to the original #81 qualification and is not the current production image authority. The current renderer reads the accepted pair from `integration_runtime_contract.py`; the archived declaration is not rewritten.
-The declaration binds it for the #81 consumer. The qualifier verifies its OCI
+The original declaration bound it for the #81 consumer. The qualifier verified its OCI
 index and GitHub artifact attestation before a rootless application executes,
 using the same anonymous bundle retrieval and fixed GitHub CLI authority as
 the integration fixture. See
