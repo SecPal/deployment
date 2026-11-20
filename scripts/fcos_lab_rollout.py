@@ -19,22 +19,9 @@ import tempfile
 
 HOSTS = {"cx23": "linux/amd64", "cx33": "linux/amd64", "cax21": "linux/arm64"}
 UPSTREAM = "https://github.com/SecPal/deployment.git"
-RELEASE_PATHS = (
-    ".secpal/evidence-architecture.json",
-    "config/production/php/99-secpal-secrets.ini",
-    "config/production/php/zz-fpm-session.conf",
-    "config/quadlet/fcos-security",
-    "scripts/fcos-poc-db-roles.sh",
-    "scripts/fcos_lab_security.py",
-    "scripts/haproxy_base_contract.py",
-    "scripts/init-local-secrets.sh",
-    "scripts/integration_runtime_contract.py",
-    "scripts/phase-b-runtime-probe.php",
-    "scripts/product_backend_contract.py",
-    "scripts/production-migrate.php",
-    "scripts/production-secret-bootstrap.php",
-    "scripts/render-fcos-application-poc.py",
-    "scripts/render-integration-quadlets.py",
+RELEASE_PATHS = tuple(
+    line for line in Path(__file__).with_name("fcos-lab-release-paths.txt").read_text(encoding="ascii").splitlines()
+    if line and not line.startswith("#")
 )
 
 
@@ -202,7 +189,11 @@ def source_release(repo, revision):
     return Release(revision, hashlib.sha256(tree).hexdigest())
 
 
-def command_adapter(executable):
+def command_adapter(executable, state_directory=None):
+    environment = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home())}
+    if state_directory is not None:
+        environment["SECPAL_ROLLOUT_STATE"] = str(state_directory)
+
     def call(operation, host, release, previous):
         argv = [str(executable), operation, host, HOSTS[host],
                 release.revision, release.fingerprint, previous.revision, previous.fingerprint]
@@ -210,7 +201,7 @@ def command_adapter(executable):
             with tempfile.TemporaryFile() as output:
                 result = subprocess.run(
                     argv, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.DEVNULL,
-                    env={"PATH": "/usr/bin:/bin", "HOME": str(Path.home())}, timeout=900,
+                    env=environment, timeout=900,
                     check=False,
                 )
                 if operation == "accept" and result.returncode == 10:
@@ -269,7 +260,7 @@ def main():
             initial = source_release(repository, args.baseline)
             git(repository, "merge-base", "--is-ancestor", initial.revision, desired.revision)
             state = args.state_directory / "rollout.json"
-            adapter = command_adapter(args.adapter)
+            adapter = command_adapter(args.adapter, args.state_directory)
             if args.recover:
                 recover(state, initial, adapter)
             else:

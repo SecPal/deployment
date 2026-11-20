@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+.secpal/evidence-architecture.json
+config/production/php/99-secpal-secrets.ini
+config/production/php/zz-fpm-session.conf
+config/quadlet/fcos-security
+scripts/fcos-poc-db-roles.sh
+scripts/fcos_lab_security.py
+scripts/haproxy_base_contract.py
+scripts/init-local-secrets.sh
+scripts/integration_runtime_contract.py
+scripts/phase-b-runtime-probe.php
+scripts/product_backend_contract.py
+scripts/production-migrate.php
+scripts/production-secret-bootstrap.php
+scripts/render-fcos-application-poc.py
+scripts/render-integration-quadlets.py
