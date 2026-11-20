@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+---
+common:
+  daemonize: false
+  log_media: stdout
+  log_level: warning
+config_paths:
+  config_dir: /etc/crowdsec
+  data_dir: /state/data
+  hub_dir: /etc/crowdsec/hub
+  index_path: /etc/crowdsec/hub/.index.json
+  simulation_path: /etc/crowdsec/simulation.yaml
+crowdsec_service:
+  acquisition_path: /etc/crowdsec/acquis.yaml
+  parser_routines: 1
+cscli:
+  output: raw
+db_config:
+  type: sqlite
+  db_path: /state/crowdsec.db
+  log_level: warning
+api:
+  client:
+    credentials_path: /state/machine.yaml
+  server:
+    enable: true
+    listen_uri: 0.0.0.0:8080
+    profiles_path: /etc/crowdsec/profiles.yaml
+    console_path: /etc/crowdsec/console.yaml
+    log_level: warning
+    trusted_ips: []
+    disable_remote_lapi_registration: true
+    disable_usage_metrics_export: true
+    use_forwarded_for_headers: false
+prometheus:
+  enabled: false

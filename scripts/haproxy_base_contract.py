@@ -130,7 +130,8 @@ def routing_sections(routing: Routing, generation: str | None = None, *,
                      fixture_https_port: int = 443,
                      fixture_network: bool = False,
                      normalize_http2: bool = False,
-                     identity_rules: tuple[str, ...] = ()) -> str:
+                     identity_rules: tuple[str, ...] = (),
+                     inspection_rules: tuple[str, ...] = ()) -> str:
     """Fixed origins/backends for reviewed listener/identity consumers."""
     def origins(host):
         ports = (80, 443) if not fixture_network else (fixture_https_port,)
@@ -176,8 +177,9 @@ def routing_sections(routing: Routing, generation: str | None = None, *,
     http-request return status 204 hdr X-SecPal-Generation {generation} hdr X-SecPal-Worker %pid if generation_probe generation_path generation_header generation_value
 '''
     rules += ''.join(f'    {rule}\n' for rule in (*forwarding_sanitization(), *identity_rules))
-    rules += '''    http-request set-var(txn.security) str(accepted)
-    use_backend secpal_frontend if frontend_origin
+    rules += '    http-request set-var(txn.security) str(accepted)\n'
+    rules += ''.join(f'    {rule}\n' for rule in inspection_rules)
+    rules += '''    use_backend secpal_frontend if frontend_origin
     use_backend secpal_api if api_origin
 '''
     # The static frontend has no separate /health/ready product route. Its

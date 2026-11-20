@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+---
+source: appsec
+listen_addr: 0.0.0.0:7422
+appsec_configs:
+  - secpal/crs
+labels:
+  type: appsec
+---
+source: file
+filenames:
+  - /logs/haproxy.log
+labels:
+  type: secpal-lab-edge

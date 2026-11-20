@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+---
+name: secpal/lab-haproxy-file-v1
+description: Recognise the fixed rootless HAProxy access record
+filter: evt.Line.Labels.type == 'secpal-lab-edge'
+onsuccess: next_stage
+grok:
+  pattern: "^%{TIMESTAMP_ISO8601} stdout F peer=%{IP:network_peer} client=%{IP:source_ip} request_id=%{NOTSPACE} method=%{WORD} origin=%{WORD:origin} backend=%{NOTSPACE} server=%{NOTSPACE} status=%{INT:http_status} bytes=%{INT} duration_ms=%{INT} termination=%{NOTSPACE} security=%{WORD:security}$"
+  apply_on: Line.Raw
+statics:
+  - meta: source_ip
+    expression: evt.Parsed.source_ip
+  - meta: log_type
+    value: secpal_http
+  - meta: service
+    value: http
