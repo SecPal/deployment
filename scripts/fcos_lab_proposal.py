@@ -192,15 +192,16 @@ def publish(proposal, base, text):
     if proposal.index == current.index or proposal.source == current.source:
         return "already accepted"
 
-    branch = BRANCH + proposal.index.removeprefix("sha256:")
+    candidate_branch = BRANCH + proposal.index.removeprefix("sha256:") + "-"
+    branch = candidate_branch + base
     prefix = f"repos/{REPO}"
-    existing = get(f"{prefix}/pulls?state=all&head=SecPal:{branch}&base=main&per_page=2")
-    if existing:
-        existing_pr, = existing
-        return f"proposal #{int(existing_pr['number'])} already exists"
-    opened = get(f"{prefix}/pulls?state=open&base=main&per_page=100")
-    if any(pr["head"]["ref"].startswith(BRANCH)
-           and (pr["head"]["repo"] or {}).get("full_name") == REPO for pr in opened):
+    known = get(f"{prefix}/pulls?state=all&base=main&per_page=100", paginate=True)
+    proposals = [pr for pr in known if pr["head"]["ref"].startswith(BRANCH)
+                 and (pr["head"]["repo"] or {}).get("full_name") == REPO]
+    for pr in proposals:
+        if pr["head"]["ref"].startswith(candidate_branch):
+            return f"proposal #{int(pr['number'])} already exists"
+    if any(pr["state"] == "open" for pr in proposals):
         return "another frontend proposal is open"
 
     candidate_run = product_candidate(get(PUBLICATIONS), UPSTREAM)

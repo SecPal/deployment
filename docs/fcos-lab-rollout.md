@@ -38,10 +38,11 @@ solely for the archive download. The repository's built-in workflow token
 handles public discovery and the separately enabled proposal write job.
 [GitHub artifact download permissions](https://docs.github.com/en/rest/actions/artifacts#download-an-artifact).
 
-The write job is limited to protected main and creates a draft on a
-digest-derived branch. A previous proposal for the same digest or another
-open proposal in that lane prevents further writes. The job requires an
-unchanged main commit, a still-current publisher run and a GitHub-verified
+The write job is limited to protected main and creates a draft on a branch
+named for the candidate digest and current main commit. A previous proposal
+for the same digest or another open proposal in that lane prevents further
+writes. If main advances before a PR is opened, the next run can use the new
+base. The job requires an unchanged main commit, a still-current publisher run and a GitHub-verified
 commit containing only the two lab pin edits. It leaves existing branches
 and PRs in place. Review the proposed compatibility against the current
 base. GitHub continues to enforce its normal reviews and required checks.

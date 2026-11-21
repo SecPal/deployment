@@ -67,15 +67,20 @@ def source_relationship(document):
     return status
 
 
-def get(endpoint, *, raw=False):
+def get(endpoint, *, raw=False, paginate=False):
     args = ["gh", "api", "--method", "GET", endpoint]
     if raw:
         args += ["--header", "Accept: application/vnd.github.raw+json"]
+    if paginate:
+        args += ["--paginate", "--slurp"]
     output = subprocess.run(
         args, capture_output=True, stdin=subprocess.DEVNULL,
         check=True, timeout=45, text=True,
     ).stdout
-    return output if raw else json.loads(output)
+    if raw:
+        return output
+    data = json.loads(output)
+    return [item for page in data for item in page] if paginate else data
 
 
 def discover():

@@ -89,13 +89,18 @@ class ProposalContract(unittest.TestCase):
             self.assertEqual(publish(PROPOSAL, BASE, SOURCE), "base changed")
             writer.assert_not_called()
         with patch("fcos_lab_proposal.get", side_effect=[
-            {"object": {"sha": BASE}}, [{"number": 33, "state": "closed"}],
-        ]), patch("fcos_lab_proposal.write") as writer:
+            {"object": {"sha": BASE}}, [{"number": 33, "state": "closed", "head": {
+                "ref": "fcos-lab-frontend-" + NEW.index.removeprefix("sha256:") + "-" + OLD.source,
+                "repo": {"full_name": "SecPal/deployment"},
+            }}],
+        ]) as reader, patch("fcos_lab_proposal.write") as writer:
             self.assertEqual(publish(PROPOSAL, BASE, SOURCE), "proposal #33 already exists")
+            self.assertTrue(reader.call_args.kwargs["paginate"])
             writer.assert_not_called()
         with patch("fcos_lab_proposal.get", side_effect=[
-            {"object": {"sha": BASE}}, [],
-            [{"head": {"ref": "fcos-lab-frontend-existing", "repo": {"full_name": "SecPal/deployment"}}}],
+            {"object": {"sha": BASE}}, [{"state": "open", "head": {
+                "ref": "fcos-lab-frontend-existing", "repo": {"full_name": "SecPal/deployment"},
+            }}],
         ]), patch("fcos_lab_proposal.write") as writer:
             self.assertEqual(publish(PROPOSAL, BASE, SOURCE), "another frontend proposal is open")
             writer.assert_not_called()
@@ -117,14 +122,16 @@ class ProposalContract(unittest.TestCase):
                "head_repository": {"full_name": "SecPal/frontend"}, "head_sha": NEW.source,
                "id": PROPOSAL.run_id, "run_attempt": PROPOSAL.run_attempt}
         snapshot = proposed_file(SOURCE, PROPOSAL)
-        branch = "fcos-lab-frontend-" + NEW.index.removeprefix("sha256:")
+        branch = "fcos-lab-frontend-" + NEW.index.removeprefix("sha256:") + "-" + BASE
         response = {"data": {"createCommitOnBranch": {"commit": {"oid": tip}}}}
         for signed in (True, False):
             commit = {"parents": [{"sha": BASE}], "files": [{"filename": FILE}],
                       "commit": {"verification": {"verified": signed}}}
             with self.subTest(signed=signed), patch("fcos_lab_proposal.get", side_effect=[
-                base_ref, [], [{"head": {"ref": branch, "repo": {"full_name": "example/deployment"}}}],
-                {"workflow_runs": [run]}, {"status": "ahead"}, [],
+                base_ref, [{"head": {"ref": branch, "repo": {"full_name": "example/deployment"}}}],
+                {"workflow_runs": [run]}, {"status": "ahead"}, [{
+                    "ref": "refs/heads/" + branch.replace(BASE, OLD.source), "object": {"sha": OLD.source},
+                }],
                 commit, snapshot, base_ref,
             ]), patch("fcos_lab_proposal.write", side_effect=[base_ref, response, {"number": 99}]) as writer:
                 if not signed:
