@@ -111,7 +111,7 @@ def configure_identity(
     canonical_image: str,
     canonical_digest: str,
     expected_registry_path: str,
-    *, runtime_pair: bool = False,
+    *, runtime_pair: bool = False, reviewed_lab_pair: bool = False,
 ) -> None:
     """Bind every registry URL and signed subject check to explicit inputs."""
     global REPOSITORY
@@ -130,7 +130,8 @@ def configure_identity(
         raise ValueError("canonical image did not match the expected registry path")
     _require_digest(canonical_digest, "canonical image")
 
-    if runtime_pair and (canonical_image != "ghcr.io/secpal/api" or canonical_digest != API_PAIR_DIGEST):
+    if runtime_pair and (canonical_image != "ghcr.io/secpal/api"
+                         or not reviewed_lab_pair and canonical_digest != API_PAIR_DIGEST):
         raise ValueError("runtime pair is not the accepted exact artifact")
     SUBJECT_MEDIA_TYPE = OCI_MANIFEST_MEDIA_TYPE if runtime_pair else OCI_INDEX_MEDIA_TYPE
     REPOSITORY = expected_registry_path
@@ -438,14 +439,25 @@ def _validate_subject_index(body: bytes) -> None:
         raise ValueError("OCI subject index shape was invalid")
 
 
-def _validate_runtime_pair(body: bytes, now: datetime) -> None:
+def _validate_runtime_pair(body: bytes, now: datetime, reviewed=None) -> None:
     """Consume the API publisher's existing pair contract, never select images."""
     pair = _parse_object(body, "runtime pair")
     expected = {"php-fpm": PHP_FPM_IMAGE, "nginx": API_IMAGE}
+    source, expires = API_SOURCE_COMMIT, API_VEX_EXPIRES_AT
+    if reviewed is not None:
+        if not isinstance(reviewed, dict) or set(reviewed) != {"source", "nginx", "fpm", "expires"}:
+            raise ValueError("invalid reviewed lab pair identity")
+        source, expires = reviewed["source"], reviewed["expires"]
+        if (not re.fullmatch("[a-f0-9]{40}", source)
+                or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z", expires)):
+            raise ValueError("invalid reviewed lab pair source or expiry")
+        for role, key in (("nginx", "nginx"), ("php-fpm", "fpm")):
+            _require_digest(reviewed[key], role)
+            expected[role] = f"ghcr.io/secpal/api@{reviewed[key]}"
     images = pair.get("images")
     if (
         pair.get("source") != {
-            "repository": "https://github.com/SecPal/api", "commit": API_SOURCE_COMMIT,
+            "repository": "https://github.com/SecPal/api", "commit": source,
         }
         or not isinstance(images, dict)
         or set(images) != set(expected)
@@ -456,7 +468,7 @@ def _validate_runtime_pair(body: bytes, now: datetime) -> None:
         )
     ):
         raise ValueError("runtime pair does not bind the accepted source and both component indexes")
-    if now >= datetime.fromisoformat(API_VEX_EXPIRES_AT.replace("Z", "+00:00")):
+    if now >= datetime.fromisoformat(expires.replace("Z", "+00:00")):
         raise ValueError("runtime pair requires renewed central security qualification")
 
 
@@ -483,6 +495,7 @@ def fetch_bundle(
     request_bytes: RequestBytes = _request_bytes,
     subject_output_path: Path | None = None,
     runtime_pair_output: Path | None = None,
+    reviewed_lab_pair: dict | None = None,
 ) -> None:
     if (SUBJECT_MEDIA_TYPE == OCI_MANIFEST_MEDIA_TYPE) != (runtime_pair_output is not None):
         raise ValueError("runtime pair output and subject must be selected together")
@@ -542,7 +555,7 @@ def fetch_bundle(
             _require_size(document.get("size"), "runtime pair document")
             _, _, _, pair_body = request_bytes(blob_url(document["digest"]), {"Authorization": f"Bearer {token}"}, MANIFEST_RESPONSE_LIMIT, frozenset({200}))
             _validate_bytes(pair_body, document["digest"], document["size"], "runtime pair document")
-            _validate_runtime_pair(pair_body, datetime.now(timezone.utc))
+            _validate_runtime_pair(pair_body, datetime.now(timezone.utc), reviewed_lab_pair)
 
     status, content_type, _registry_digest, index_body = request_bytes(
         REFERRERS_URL,
@@ -614,7 +627,8 @@ def fetch_bundle(
 def main(argv: list[str]) -> int:
     diagnostic_stage = None
     pair_output = None
-    if len(argv) not in {6, 8, 10}:
+    reviewed = None
+    if len(argv) not in {6, 8, 10, 12}:
         return 2
     options = argv[6:]
     for offset in range(0, len(options), 2):
@@ -623,12 +637,21 @@ def main(argv: list[str]) -> int:
             diagnostic_stage = value
         elif name == "--runtime-pair-output" and pair_output is None:
             pair_output = Path(value)
+        elif name == "--reviewed-lab-runtime-pair" and reviewed is None:
+            reviewed = value
         else:
             return 2
     try:
-        configure_identity(argv[3], argv[4], argv[5], runtime_pair=pair_output is not None)
-        fetch_bundle(Path(argv[2]), subject_output_path=Path(argv[1]), runtime_pair_output=pair_output)
-    except (OSError, RuntimeError, ValueError) as error:
+        if reviewed is not None and pair_output is None:
+            return 2
+        binding = json.loads(reviewed) if reviewed is not None else None
+        if reviewed is not None and not isinstance(binding, dict):
+            return 2
+        configure_identity(argv[3], argv[4], argv[5], runtime_pair=pair_output is not None,
+                           reviewed_lab_pair=reviewed is not None)
+        fetch_bundle(Path(argv[2]), subject_output_path=Path(argv[1]), runtime_pair_output=pair_output,
+                     reviewed_lab_pair=binding)
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
         if diagnostic_stage is not None:
             reason = closed_failure_reason(error)
             print(f"{DIAGNOSTIC_FAILURE_PREFIX}{diagnostic_stage}:{reason}:none", file=sys.stderr)

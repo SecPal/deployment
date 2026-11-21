@@ -327,6 +327,23 @@ class OciAttestationBundleContractTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             fetcher._validate_runtime_pair(json_bytes(body), datetime(2026, 11, 23, tzinfo=timezone.utc))
 
+    def test_reviewed_lab_pair_binds_source_indexes_and_expiry(self) -> None:
+        from datetime import datetime, timezone
+        fetcher = load_fetcher()
+        binding = {"source": "e" * 40, "nginx": "sha256:" + "c" * 64,
+                   "fpm": "sha256:" + "d" * 64, "expires": "2026-12-01T00:00:00Z"}
+        document = json_bytes({
+            "source": {"repository": "https://github.com/SecPal/api", "commit": binding["source"]},
+            "images": {"nginx": {"reference": "ghcr.io/secpal/api@" + binding["nginx"]},
+                       "php-fpm": {"reference": "ghcr.io/secpal/api@" + binding["fpm"]}},
+        })
+        now = datetime(2026, 11, 21, tzinfo=timezone.utc)
+        fetcher._validate_runtime_pair(document, now, binding)
+        for field, rejected in (("source", "f" * 40), ("nginx", binding["fpm"]),
+                                ("fpm", binding["nginx"]), ("expires", "2026-11-21T00:00:00Z")):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                fetcher._validate_runtime_pair(document, now, dict(binding, **{field: rejected}))
+
     def test_fetches_fallback_referrer_and_writes_verified_private_bundle(self) -> None:
         fixture = RegistryFixture(self.fetcher)
         with tempfile.TemporaryDirectory() as temp_dir:

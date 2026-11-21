@@ -15,7 +15,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from fcos_lab_rollout_adapter import Frontend, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments
+from fcos_lab_rollout_adapter import Backend, Frontend, backend_declaration, backend_request, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments, verify_dispatch_authority
 from fcos_lab_rollout import RELEASE_PATHS, Release, source_release
 
 OLD = Release("1" * 40, "2" * 64)
@@ -25,6 +25,50 @@ SOURCE = "7" * 40
 
 
 class AdapterContract(unittest.TestCase):
+    def test_dispatch_authority_requires_exact_companion_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            scripts = root / "scripts"
+            scripts.mkdir()
+            validator = scripts / "secpal-evidence-architecture.py"
+            module = scripts / "companion.py"
+            validator.write_bytes(b"validator")
+            module.write_bytes(b"companion")
+            pins = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in (validator, module)}
+            renderer = ("VALIDATOR_SOURCE = " + repr(pins)).encode()
+            verify_dispatch_authority(validator, renderer)
+            module.write_bytes(b"changed")
+            with self.assertRaises(ValueError):
+                verify_dispatch_authority(validator, renderer)
+
+    def test_backend_dispatch_declaration_fails_on_missing_diagnostic(self):
+        root = Path(__file__).resolve().parents[1]
+        helper = (root / "scripts/fcos-lab-rollout-guest.sh").read_text()
+        original = (root / ".secpal/evidence-architecture.json").read_text()
+        declaration = backend_declaration(json.loads(original), helper)
+        ids = {entry["id"] for entry in declaration["external_operations"]}
+        self.assertIn("fcos-lab-backend.controller-dispatch", ids)
+        self.assertIn("fcos-lab-backend.start-background", ids)
+        with self.assertRaises(ValueError):
+            backend_declaration(json.loads(original), helper.replace("backend_step start-background ", ""))
+
+    def test_backend_pin_is_complete_and_backend_proof_uses_the_existing_prepare_operation(self):
+        fields = {"API_SOURCE_COMMIT": SOURCE, "API_DIGEST": DIGEST,
+                  "PHP_FPM_DIGEST": "sha256:" + "6" * 64, "API_PAIR_DIGEST": "sha256:" + "7" * 64,
+                  "API_VEX_EXPIRES_AT": "2027-01-01T00:00:00Z"}
+        original = "".join(f'{key} = "{value}"\n' for key, value in fields.items())
+        override = "".join(f'LAB_{key} = "{value}"\n' for key, value in fields.items())
+        self.assertEqual(Backend.from_source(original), Backend.from_source(original + override))
+        for broken in (original + 'LAB_API_DIGEST = "latest"\n', original + override + override):
+            with self.assertRaises(ValueError):
+                Backend.from_source(broken)
+        head, *proof = backend_request("cx23", "linux/amd64", NEW, OLD, fields["API_PAIR_DIGEST"],
+                                       (b"evidence",) * 7).splitlines()
+        self.assertEqual(head + b"\n", request_line("prepare", "cx23", "linux/amd64", NEW, OLD,
+                                                    fields["API_PAIR_DIGEST"]))
+        self.assertEqual([base64.b64decode(row) for row in proof], [b"evidence"] * 7)
+
     def test_closed_transport_and_pinned_ssh(self):
         identity = Path("/private/identities")
         ssh = ssh_arguments("cx23", "10.76.0.9", identity)
@@ -124,6 +168,109 @@ class AdapterContract(unittest.TestCase):
 class GuestContract(unittest.TestCase):
     def setUp(self):
         self.guest = Path(__file__).resolve().parents[1] / "scripts/fcos-lab-rollout-guest.sh"
+
+    def test_backend_guest_requires_the_same_attested_pair_and_native_children(self):
+        encode = lambda value: json.dumps(value).encode()
+        sha = lambda value: "sha256:" + hashlib.sha256(value).hexdigest()
+        indexes = {}
+        subjects = {}
+        for role, first in (("nginx", 1), ("php-fpm", 3)):
+            platforms = [{"platform": f"linux/{arch}", "manifest_digest": "sha256:" + str(first+i)*64}
+                         for i, arch in enumerate(("amd64", "arm64"))]
+            indexes[role] = encode({
+                "schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": [{"digest": item["manifest_digest"],
+                               "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                               "platform": {"os": "linux", "architecture": item["platform"].split("/")[1]}}
+                              for item in platforms],
+            })
+            subjects[role] = {"reference": "ghcr.io/secpal/api@" + sha(indexes[role]), "platforms": platforms}
+        command = ('source "$1"; scratch=$2; platform=linux/amd64; '
+                   'verify_signature() { [[ "$4" == api && $(cat "$2") == verified ]]; }; '
+                   'verify_backend "$3" "$4" "$5" "$6"')
+        for scenario in ("accepted", "wrong-child", "wrong-component", "unsigned"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
+                images = json.loads(json.dumps(subjects))
+                if scenario == "wrong-child":
+                    images["nginx"]["platforms"][1]["manifest_digest"] = DIGEST
+                if scenario == "wrong-component":
+                    images["nginx"]["reference"] = images["php-fpm"]["reference"]
+                document = encode({"schema_version": "1.0.0", "images": images,
+                                   "source": {"repository": "https://github.com/SecPal/api", "commit": SOURCE}})
+                pair = encode({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                               "artifactType": "application/vnd.secpal-build-evidence.v1+json",
+                               "layers": [{"mediaType": "application/json", "digest": sha(document),
+                                           "annotations": {"org.opencontainers.image.title": "runtime-pair.json"}}]})
+                bundle = b"wrong" if scenario == "unsigned" else b"verified"
+                parts = (pair, bundle, document, indexes["php-fpm"], b"verified", indexes["nginx"], b"verified")
+                (Path(temp) / "proof").write_bytes(b"".join(base64.b64encode(part)+b"\n" for part in parts))
+                result = subprocess.run(["bash", "-c", command, "test", self.guest, temp, SOURCE, sha(pair),
+                                         sha(indexes["nginx"]), sha(indexes["php-fpm"])],
+                                        capture_output=True, check=False)
+                self.assertEqual(result.returncode == 0, scenario == "accepted", result.stderr)
+
+    def test_backend_database_change_fails_admission(self):
+        command = ('source "$1"; current=$2; '
+                   'backend_database() { printf "%s\n" "$current"; }; same_backend_database "$3"')
+        for observed, expected in (("a" * 64, True), ("b" * 64, False), ("", False)):
+            result = subprocess.run(["bash", "-c", command, "test", self.guest, observed, "a" * 64],
+                                    capture_output=True, check=False)
+            self.assertEqual(result.returncode == 0, expected)
+
+    def test_backend_guest_rejects_helper_bytes_absent_from_reviewed_source(self):
+        command = ('source "$1"; peer=$2; revision="$3"; '
+                   'stat() { printf "0 0 755\n"; }; '
+                   'git_object() { printf "%s" "$expected_content"; }; '
+                   'expected_content=$4; backend_helper_hash')
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "guest").write_text("reviewed")
+            for expected, accepted in (("reviewed", True), ("unrelated", False)):
+                result = subprocess.run(["bash", "-c", command, "test", self.guest, temp, SOURCE, expected],
+                                        capture_output=True, check=False)
+                self.assertEqual(result.returncode == 0, accepted)
+
+    def test_backend_switch_stops_http_and_background_roles_before_restarting_the_pair(self):
+        command = (
+            'source "$1"; units=$2; migration=$4; '
+            'image_digest=$3; '
+            'backend_role_ref() { printf "ghcr.io/secpal/api@%s\n" "$image_digest"; }; '
+            'untouched_instances() { printf "unrelated identity\n"; }; '
+            'matches() { return 0; }; singleton_roles() { return 0; }; check_installed() { return 0; }; '
+            'runtime() { case "$*" in '
+            '"podman image exists "*) return 0;; '
+            '"systemctl --user show "*"-migrate.service") printf "%s\n" "$migration";; '
+            '"systemctl --user show "*) printf "inactive\n";; '
+            '"systemctl --user "*) printf "%s\n" "$*";; '
+            '*) return 1;; esac; }; switch_backend "$5"'
+        )
+        slot = "secpal-int-haproxy01"
+        with tempfile.TemporaryDirectory() as temp:
+            for role in ("api", "php-fpm", "worker-general", "worker-hash-chain", "scheduler"):
+                directory = Path(temp) / f"{slot}-{role}.container.d"
+                directory.mkdir()
+                (directory / "90-rollout.conf").write_text("candidate override")
+            active = subprocess.run(["bash", "-c", command, "test", self.guest, temp, DIGEST, "active", "{}"],
+                                    capture_output=True, text=True, check=False)
+            self.assertNotEqual(active.returncode, 0)
+            self.assertEqual(active.stdout, "")
+            expired = subprocess.run(["bash", "-c", command, "test", self.guest, temp, DIGEST, "inactive",
+                                      '{"backend":{"expires":"2000-01-01T00:00:00Z"}}'],
+                                     capture_output=True, text=True, check=False)
+            self.assertNotEqual(expired.returncode, 0)
+            self.assertEqual(expired.stdout, "")
+            result = subprocess.run(["bash", "-c", command, "test", self.guest, temp, DIGEST, "inactive", "{}"],
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(list(Path(temp).iterdir()), [])
+        background = " ".join(f"{slot}-{role}.service"
+                              for role in ("worker-general", "worker-hash-chain", "scheduler"))
+        self.assertEqual(result.stdout.splitlines(), [
+            f"systemctl --user --job-mode=ignore-requirements stop {slot}-api.service",
+            f"systemctl --user --job-mode=ignore-requirements stop {slot}-php-fpm.service {background}",
+            "systemctl --user daemon-reload",
+            f"systemctl --user start {slot}-php-fpm.service",
+            f"systemctl --user start {slot}-api.service",
+            f"systemctl --user start {background}",
+        ])
 
     def test_guest_rejects_inexact_or_misscoped_wire_requests(self):
         command = 'source "$1"; host=cx23; platform=linux/amd64; parse_request "$2"'
@@ -267,7 +414,7 @@ class GuestContract(unittest.TestCase):
                 'repo=$2; foundation=$3; mapfile -t inputs < <(grep -vE "^(#|$)" "$4"); '
                 'frozen_sources=(); for path in "${inputs[@]}"; do '
                 '[[ "$path" == "$contract" ]] || frozen_sources+=("$path"); done; '
-                'frontend_only "$5" && fingerprint "$5"'
+                'lab_pins_only "$5" && fingerprint "$5"'
             )
             paths = self.guest.with_name("fcos-lab-release-paths.txt")
             def guest(revision):
