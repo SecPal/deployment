@@ -58,9 +58,9 @@ class Proposal:
         return {"source_commit": self.source, "run_id": self.run_id, "run_attempt": self.run_attempt}
 
 
-def publisher_archive(run_id, attempt):
+def publisher_archive(gh, run_id, attempt):
     name = f"frontend-accepted-{run_id}-{attempt}"
-    listing = get(f"repos/{UPSTREAM}/actions/runs/{run_id}/artifacts?name={name}&per_page=2")
+    listing = get(f"repos/{UPSTREAM}/actions/runs/{run_id}/artifacts?name={name}&per_page=2", gh=gh)
     artifact, = listing["artifacts"]
     size, artifact_id = artifact["size_in_bytes"], artifact["id"]
     if (artifact["name"] != name or artifact["expired"] is not False
@@ -74,7 +74,7 @@ def publisher_archive(run_id, attempt):
     elif environment.get("GITHUB_ACTIONS") == "true":
         raise ValueError("the publisher artifact requires scoped frontend Actions read authorization")
     archive = subprocess.run(
-        ["gh", "api", "--method", "GET", f"repos/{UPSTREAM}/actions/artifacts/{artifact_id}/zip"],
+        [gh, "api", "--method", "GET", f"repos/{UPSTREAM}/actions/artifacts/{artifact_id}/zip"],
         capture_output=True, stdin=subprocess.DEVNULL, check=True, timeout=45, env=environment,
     ).stdout
     if len(archive) > MAX_ARCHIVE or sha256(archive) != artifact["digest"]:
@@ -133,11 +133,6 @@ def verify_publication(report):
         raise ValueError("invalid publisher identity")
     if source_relationship(get(f"repos/{UPSTREAM}/compare/{source}...main")) not in {"identical", "ahead"}:
         raise ValueError("publisher source has left upstream main")
-    build_bytes, source_scan, bundle = publisher_archive(run_id, attempt)
-    build = json.loads(build_bytes)
-    index = build["subject"]["index_digest"]
-    if re.fullmatch(DIGEST, index) is None:
-        raise ValueError("invalid OCI index")
 
     with tempfile.TemporaryDirectory(prefix="fcos-lab-proposal-") as directory:
         root = Path(directory)
@@ -148,6 +143,11 @@ def verify_publication(report):
             subprocess.run(argv, env=environment, check=True, timeout=190)
 
         gh = stage_gh_cli(root, CLOUD_GH_RELEASES[platform.machine()], run, environment)
+        build_bytes, source_scan, bundle = publisher_archive(gh, run_id, attempt)
+        build = json.loads(build_bytes)
+        index = build["subject"]["index_digest"]
+        if re.fullmatch(DIGEST, index) is None:
+            raise ValueError("invalid OCI index")
         children, _, _ = publisher_children(Frontend(index, source), gh=gh)
         evidence, signature = root / "build-evidence.json", root / "bundle.json"
         evidence.write_bytes(build_bytes)

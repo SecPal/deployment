@@ -67,8 +67,8 @@ def source_relationship(document):
     return status
 
 
-def get(endpoint, *, raw=False, paginate=False):
-    args = ["gh", "api", "--method", "GET", endpoint]
+def get(endpoint, *, raw=False, paginate=False, gh="gh"):
+    args = [gh, "api", "--method", "GET", endpoint]
     if raw:
         args += ["--header", "Accept: application/vnd.github.raw+json"]
     if paginate:

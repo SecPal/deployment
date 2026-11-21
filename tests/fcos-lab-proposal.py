@@ -106,13 +106,28 @@ class ProposalContract(unittest.TestCase):
             writer.assert_not_called()
 
     def test_workflow_token_is_not_reused_for_the_cross_repository_archive(self):
-        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GH_TOKEN": "local-workflow-token"},
-                        clear=True), patch("fcos_lab_proposal.get", return_value={"artifacts": [{
+        gh = Path("/verified/gh")
+        listing = {"artifacts": [{
             "name": "frontend-accepted-12-2", "expired": False, "size_in_bytes": 20, "id": 22,
-        }]}), patch("fcos_lab_proposal.subprocess.run") as download:
+            "digest": "sha256:" + "a" * 64,
+        }]}
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GH_TOKEN": "local-workflow-token"},
+                        clear=True), patch("fcos_lab_proposal.get", return_value=listing), \
+                patch("fcos_lab_proposal.subprocess.run") as download:
             with self.assertRaisesRegex(ValueError, "requires scoped frontend Actions read"):
-                publisher_archive(12, 2)
+                publisher_archive(gh, 12, 2)
             download.assert_not_called()
+
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GH_TOKEN": "local-workflow-token",
+                                     "FCOS_FRONTEND_ACTIONS_READ_TOKEN": "scoped-read"}, clear=True), \
+                patch("fcos_lab_proposal.get", return_value=listing) as read, \
+                patch("fcos_lab_proposal.subprocess.run") as download:
+            download.return_value.stdout = b"wrong archive"
+            with self.assertRaisesRegex(ValueError, "archive identity differs"):
+                publisher_archive(gh, 12, 2)
+            self.assertEqual(read.call_args.kwargs["gh"], gh)
+            self.assertEqual(download.call_args.args[0][0], gh)
+            self.assertEqual(download.call_args.kwargs["env"]["GH_TOKEN"], "scoped-read")
 
 
     def test_only_a_verified_single_file_commit_can_open_a_draft(self):
