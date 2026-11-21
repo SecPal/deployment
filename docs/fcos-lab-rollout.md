@@ -8,10 +8,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 This coordinator sequences compatible, migration-free changes to the
 [FCOS application fixture](fcos-application-poc.md). The production update
 and RecoverySet requirements remain under
-[deployment #93](https://github.com/SecPal/deployment/issues/93). The user timer and coordinator provide protected-main release detection, staged
-rollout and interruption recovery. The first guest adapter admits changes to the
-SecPal frontend image only. Standing access and the first automated release
-require live acceptance before this path is qualified.
+[deployment #93](https://github.com/SecPal/deployment/issues/93). The user timer
+and coordinator provide protected-main release detection, staged rollout and
+interruption recovery. The guest adapter handles frontend image updates and
+reviewed migration-free API/PHP-FPM updates. Qualify a genuine release on
+all three hosts before relying on a new rollout lane.
 
 ## Release source and discovery
 
@@ -82,7 +83,7 @@ Qualification of other components can extend these same five operations.
 The backend lane uses a complete reviewed set of lab-only pins in
 `scripts/integration_runtime_contract.py`: `LAB_API_SOURCE_COMMIT`,
 `LAB_API_PAIR_DIGEST`, `LAB_API_DIGEST`, `LAB_PHP_FPM_DIGEST` and
-`LAB_API_VEX_EXPIRES_AT`. Use the admitted publisher artifact and current
+`LAB_API_VEX_EXPIRES_AT`, plus `LAB_API_COMPATIBILITY_SHA256`. Use the admitted publisher artifact and current
 security qualification for that exact pair. Keep the frontend pin, fixture
 source and production pins fixed within a backend release. Backend proposals
 are prepared through review.
@@ -100,21 +101,89 @@ validator and companion files against the existing fixture renderer's
 authority pins. The guest requires the installed helper's exact SHA-256 to
 match the protected source before staging an image or switching a release.
 
-The first backend lane admits only candidates with the same PHP major/minor,
-loaded PHP extensions, and file content under the installed FPM image's
-`/app`, PHP and FPM configuration trees. This includes application code,
-Composer dependencies and migration files. The comparison runs in networkless
-containers without runtime mounts or credentials. The guest checks a digest of
-the PostgreSQL 18 cluster identity, schema and migration ledger at preparation,
-activation, acceptance and rollback. A changed PHP application or database
-contract requires separate qualification under #93.
+PHP code, Composer dependencies and PHP/FPM requirements may change. The guest
+compares the Laravel-registered migrations (including dependency migrations)
+and checked-in schema dumps in the old and staged FPM images in networkless
+containers without runtime mounts or credentials.
+It checks the PostgreSQL 18 cluster identity, schema (including ownership and
+grants) and migration ledger again before switching or accepting the release.
+Changes that require a migration stay under the broader #93 contract.
+
+### Backend compatibility evidence
+
+Before proposing a backend pin change, render a disposable
+[least-privilege stack](fcos-application-poc.md#separate-runtime-and-migration-authority-on-a-fresh-fixture)
+on each native architecture. Follow the
+[isolated networking procedure](fcos-application-poc.md#arm64-postgresql-process-crash-qualification)
+on both architectures. Use the [logical restore procedure](fcos-application-poc.md#cross-host-logical-restore)
+for the database, applying the archive instead of running the migration unit.
+Restore representative synthetic data from the enrolled PostgreSQL 18
+schema and ledger. Use separate storage, slot-local credentials and queues,
+and the same restricted runtime grants, including read-only access to the
+migration ledger. Test the exact signed predecessor and candidate pairs.
+
+On the disposable database, run the role helper's `prepare` operation
+before starting PostgreSQL. Apply its reviewed `grant-role-contract` SQL to
+the empty database, restore using `pg_restore --role=secpal_owner --no-owner
+--no-acl`, and apply the `restrict-migration-ledger` grant change. Set the
+runtime password from the slot's protected credential file and enable only
+the runtime login.
+Keep the migration login disabled and remove its disposable credential
+files before starting the application. Run the existing database authority
+probe to check the restored grants. For each rehearsal pair, set only the
+five backend roles' `Image=` overrides in the disposable Quadlets to the
+verified native Nginx and FPM manifests.
+
+1. Start the candidate over the restored schema with migration execution
+   disabled. Check Composer platform requirements and the PHP/FPM runtime.
+   Verify that `php artisan migrate:status` succeeds with no pending migrations,
+   including migrations registered by dependencies. Compare the complete
+   registered migration definitions and the ledger with the predecessor's.
+2. Reuse the [database and application checks](fcos-application-poc.md#execute-the-database-and-application-checks)
+   against the isolated fixture.
+   Check login, `/v1/me`, existing organisation and record reads, authenticated
+   writes and read-back, tenant boundaries, and both worker queue receipts.
+   Confirm one scheduler is active and observe an expected scheduled task.
+   Exercise the affected data formats and job contracts explicitly.
+   Confirm that DDL with the runtime role is denied and the clone's cluster
+   identity, schema and ledger are unchanged. Record an architecture-specific
+   success record only when these checks pass.
+3. For rollback evidence, exercise the exact predecessor on the same clone
+   **after** the candidate writes representative records and enqueues
+   representative pending jobs. Verify the predecessor reads those records and
+   handles those jobs through the same checks. Leave rollback unqualified if
+   affected formats or jobs lack coverage or any check fails.
+
+In the pin PR, review the private rehearsal records against both signed pairs,
+the exact test coverage and the restored schema and ledger. Do not publish
+test data or credentials. Add the following keys to
+`config/quadlet/fcos-lab-rollout/backend-compatibility.json`:
+
+| Key                               | Required value                                                                                                                                                                                     |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema_version`                  | `1`                                                                                                                                                                                                |
+| `previous_pair`, `candidate_pair` | Exact signed OCI pair digests                                                                                                                                                                      |
+| `schema`                          | SHA-256 of `pg_dump --schema-only --no-owner --no-privileges` against the rehearsal database, dropping lines beginning with PostgreSQL's `\restrict` and `\unrestrict` markers followed by a space |
+| `ledger`                          | SHA-256 of the unaligned single SQL result plus its terminating newline from `SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY id), '[]'::jsonb) FROM public.migrations AS m`                        |
+| `forward`                         | Object with exactly `linux/amd64` and `linux/arm64`, each referencing the distinct private successful rehearsal record as a `sha256:…` digest                                                      |
+| `rollback`                        | `null` or the same two-platform map referencing separate successful predecessor rehearsal records                                                                                                  |
+
+Set `LAB_API_COMPATIBILITY_SHA256` to the lowercase SHA-256 of the exact JSON
+file bytes. This binds the reviewed record to the existing release fingerprint.
+Every guest verifies the file hash and pair and compares the schema and
+ledger to its live database before staging. Missing or failed rehearsals
+leave the candidate ineligible. The guest also continues to snapshot
+ownership and grants for drift detection; the cross-host rehearsal must
+check those permissions explicitly.
 
 Activation stops API HTTP, the workers, scheduler and FPM before updating
 their image references. It starts FPM before API HTTP and the background
 units. The guest checks the pair and worker cardinality and compares the
 container IDs and start times of PostgreSQL, frontend, HAProxy, CrowdSec
 and SPOA across the switch. Rollback uses the locally retained predecessor
-and requires the same database snapshot. A previously admitted backend pair
+and requires the same database snapshot and separate backward compatibility
+evidence. Without backward evidence, a failed switch or acceptance halts for
+a forward fix or an independently approved recovery. A previously admitted backend pair
 also needs current security qualification before it may be restarted.
 An ambiguous interruption stops the
 controller at the recorded host. Reconcile the observed guest state through

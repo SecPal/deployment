@@ -12,10 +12,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from fcos_lab_rollout_adapter import Backend, Frontend, backend_declaration, backend_request, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments, verify_dispatch_authority
+from fcos_lab_rollout_adapter import Backend, Frontend, backend_declaration, backend_proof, backend_request, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments, verify_dispatch_authority
 from fcos_lab_rollout import RELEASE_PATHS, Release, source_release
 
 OLD = Release("1" * 40, "2" * 64)
@@ -60,7 +61,13 @@ class AdapterContract(unittest.TestCase):
         original = "".join(f'{key} = "{value}"\n' for key, value in fields.items())
         override = "".join(f'LAB_{key} = "{value}"\n' for key, value in fields.items())
         self.assertEqual(Backend.from_source(original), Backend.from_source(original + override))
-        for broken in (original + 'LAB_API_DIGEST = "latest"\n', original + override + override):
+        self.assertIsNone(Backend.from_source(original).compatibility)
+        record = f'LAB_API_COMPATIBILITY_SHA256 = "{"a" * 64}"\n'
+        self.assertEqual(Backend.from_source(original + override + record).compatibility, "a" * 64)
+        self.assertEqual(Backend.from_source(original + override + record), Backend.from_source(original))
+        for broken in (original + 'LAB_API_DIGEST = "latest"\n', original + override + override,
+                       original + override + 'LAB_API_COMPATIBILITY_SHA256 = "bad"\n',
+                       original + override + record * 2):
             with self.assertRaises(ValueError):
                 Backend.from_source(broken)
         head, *proof = backend_request("cx23", "linux/amd64", NEW, OLD, fields["API_PAIR_DIGEST"],
@@ -68,6 +75,31 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(head + b"\n", request_line("prepare", "cx23", "linux/amd64", NEW, OLD,
                                                     fields["API_PAIR_DIGEST"]))
         self.assertEqual([base64.b64decode(row) for row in proof], [b"evidence"] * 7)
+
+    def test_backend_publisher_binding_excludes_deployment_compatibility_digest(self):
+        backend = Backend(SOURCE, DIGEST, "sha256:" + "6" * 64, "sha256:" + "7" * 64,
+                          "2027-01-01T00:00:00Z", "a" * 64)
+        platforms = [{"platform": f"linux/{arch}", "manifest_digest": "sha256:" + str(index) * 64}
+                     for index, arch in enumerate(("amd64", "arm64"), 1)]
+        index = {"manifests": [
+            {"platform": {"os": "linux", "architecture": entry["platform"].split("/")[1]},
+             "mediaType": "application/vnd.oci.image.manifest.v1+json",
+             "digest": entry["manifest_digest"]} for entry in platforms]}
+
+        def fetch(command, **_):
+            command[3].write_text(json.dumps(index))
+            command[4].write_bytes(b"bundle")
+            if "--reviewed-lab-runtime-pair" in command:
+                self.assertEqual(json.loads(command[-1]), {
+                    "source": backend.source, "nginx": backend.nginx,
+                    "fpm": backend.fpm, "expires": backend.expires})
+                command[-3].write_text(json.dumps({
+                    "images": {role: {"platforms": platforms} for role in ("nginx", "php-fpm")}}))
+
+        with (patch("fcos_lab_rollout_adapter.verified_gh"),
+              patch("fcos_lab_rollout_adapter.verify_attestation"),
+              patch("fcos_lab_rollout_adapter.subprocess.run", side_effect=fetch)):
+            self.assertEqual(len(backend_proof(backend)), 7)
 
     def test_closed_transport_and_pinned_ssh(self):
         identity = Path("/private/identities")
@@ -169,6 +201,31 @@ class GuestContract(unittest.TestCase):
     def setUp(self):
         self.guest = Path(__file__).resolve().parents[1] / "scripts/fcos-lab-rollout-guest.sh"
 
+    def test_backend_transition_requires_exact_forward_evidence_and_separate_rollback_evidence(self):
+        previous = "sha256:" + "1" * 64
+        candidate = "sha256:" + "2" * 64
+        evidence = {"linux/amd64": "sha256:" + "3" * 64, "linux/arm64": "sha256:" + "4" * 64}
+        backward = {"linux/amd64": "sha256:" + "8" * 64, "linux/arm64": "sha256:" + "9" * 64}
+        record = {"schema_version": 1, "previous_pair": previous, "candidate_pair": candidate,
+                  "schema": "5" * 64, "ledger": "6" * 64, "forward": evidence, "rollback": None}
+        command = 'source "$1"; validate_backend_compatibility "$2" "$3" "$4" "$5" "$6"'
+        cases = [(record, "false"), (dict(record, rollback=backward), "true"), ([record], None),
+                 (dict(record, candidate_pair=previous), None), (dict(record, schema="7" * 64), None),
+                 (dict(record, ledger="7" * 64), None), (dict(record, forward={}), None),
+                 (dict(record, rollback=True), None), (dict(record, rollback=evidence), None),
+                 (dict(record, rollback=backward, unexpected=True), None)]
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "compatibility.json"
+            for data, admitted in cases:
+                with self.subTest(admitted=admitted, record=data):
+                    fixture.write_text(json.dumps(data))
+                    result = subprocess.run(["bash", "-c", command, "test", self.guest, fixture,
+                                             previous, candidate, record["schema"], record["ledger"]],
+                                            capture_output=True, text=True, check=False)
+                    self.assertEqual(result.returncode == 0, admitted is not None, result.stderr)
+                    if admitted is not None:
+                        self.assertEqual(result.stdout.strip(), admitted)
+
     def test_backend_guest_requires_the_same_attested_pair_and_native_children(self):
         encode = lambda value: json.dumps(value).encode()
         sha = lambda value: "sha256:" + hashlib.sha256(value).hexdigest()
@@ -216,6 +273,67 @@ class GuestContract(unittest.TestCase):
             result = subprocess.run(["bash", "-c", command, "test", self.guest, observed, "a" * 64],
                                     capture_output=True, check=False)
             self.assertEqual(result.returncode == 0, expected)
+
+    def test_backend_prepares_changed_application_with_unchanged_migrations(self):
+        command = '''
+            source "$1"
+            scratch=$2 previous=old revision=new wanted=fingerprint platform=linux/amd64
+            scenario=$3
+            pin() { printf 'sha256:%064d\n' "$1"; }
+            child=$(pin 1)
+            frontend_field() { printf 'unchanged\n'; }
+            backend_helper_hash() { printf 'helper\n'; }
+            backend_expiry() { return 0; }
+            singleton_roles() { return 0; }
+            backend_database() { printf '%064d\n' 1; }
+            backend_compatibility() { [[ $scenario != failed-rehearsal ]] && printf 'false\n'; }
+            verify_backend() {
+                printf '%s\n' "$(pin 6)" > "$scratch/fpm.child"
+                printf '%s\n' "$(pin 7)" > "$scratch/nginx.child"
+            }
+            runtime() {
+                local ref="${!#}"
+                case "$*" in
+                    *"podman pull "*) return 0;;
+                    *"podman image inspect "*) printf '%064d %s amd64 10001\n' 8 "${ref##*@}";;
+                    *) return 1;;
+                esac
+            }
+            backend_role_ref() { printf 'old-app\n'; }
+            fpm_migrations() {
+                if [[ $scenario == changed-migration && $1 != old-app ]]; then
+                    printf '%064d\n' 2
+                else
+                    printf '%064d\n' 1
+                fi
+            }
+            run_staged() { return 0; }
+            validate_backend_quadlets() { return 0; }
+            save() { printf '%s\n' "$2"; }
+            prepare_backend '{}' "$(printf '%s\n' candidate "$(pin 1)" "$(pin 2)" "$(pin 3)" date)" \
+                                 "$(printf '%s\n' predecessor "$(pin 4)" "$(pin 2)" "$(pin 5)" date)"
+        '''
+        for scenario in ("code-change", "changed-migration", "failed-rehearsal"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
+                result = subprocess.run(["bash", "-c", command, "test", self.guest, temp, scenario],
+                                        capture_output=True, text=True, check=False)
+                if scenario == "code-change":
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(json.loads(result.stdout)["rollback"])
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+
+    def test_backend_rollback_requires_an_explicit_positive_decision(self):
+        command = ('source "$1"; test_expiry=$3; backend_field() { printf "%s\n" "$test_expiry"; }; '
+                   'backend_rollback_admitted "$2" predecessor')
+        for record, expiry, admitted in (({}, "2100", False), ({"rollback": "true"}, "2100", False),
+                                         ({"rollback": False}, "2100", False), ({"rollback": True}, "2100", True),
+                                         ({"rollback": True}, "2000", False)):
+            result = subprocess.run(["bash", "-c", command, "test", self.guest, json.dumps(record),
+                                     f"{expiry}-01-01T00:00:00Z"],
+                                    capture_output=True, check=False)
+            self.assertEqual(result.returncode == 0, admitted)
 
     def test_backend_guest_rejects_helper_bytes_absent_from_reviewed_source(self):
         command = ('source "$1"; peer=$2; revision="$3"; '

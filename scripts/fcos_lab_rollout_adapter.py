@@ -6,7 +6,7 @@
 
 import ast
 import base64
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 import hashlib
 import http.client
 import http.cookiejar
@@ -66,6 +66,7 @@ class Backend:
     fpm: str
     pair: str
     expires: str
+    compatibility: str | None = field(compare=False)
 
     @classmethod
     def from_source(cls, text):
@@ -80,7 +81,12 @@ class Backend:
             values.append(value)
         if len(set(values[1:4])) != 3:
             raise ValueError("backend pair and indexes must be distinct")
-        return cls(*values)
+        records = re.findall(r"^LAB_API_COMPATIBILITY_SHA256[ \t]*=.*$", text, re.MULTILINE)
+        compatibility = None
+        if records:
+            record, = records
+            compatibility, = re.findall(r'^LAB_API_COMPATIBILITY_SHA256 = "([a-f0-9]{64})"$', record)
+        return cls(*values, compatibility)
 
 
 def native_children(data):
@@ -176,7 +182,8 @@ def admit_source_text(repo, release):
 
 def backend_declaration(declaration, helper):
     stages = set(re.findall(r"\bbackend_step ([a-z][a-z-]+) ", helper))
-    required = {"pair-proof", "native-image", "fpm-payload", "fpm-config", "nginx-config",
+    required = {"pair-proof", "native-image", "fpm-migrations", "fpm-config", "nginx-config",
+                "compatibility-evidence", "rollback-compatibility",
                 "database-snapshot", "quadlet-validation", "stop-http", "stop-backend",
                 "install-images", "reload-units", "start-fpm", "start-http", "start-background",
                 "running-identities", "guest-health", "helper-identity"}
@@ -314,8 +321,8 @@ def backend_proof(backend, *, gh=None):
             return subject.read_bytes(), bundle.read_bytes()
 
         document_path = root / "runtime-pair.json"
-        binding = asdict(backend)
-        del binding["pair"]
+        binding = {"source": backend.source, "nginx": backend.nginx,
+                   "fpm": backend.fpm, "expires": backend.expires}
         pair = fetch("pair", backend.pair, "--runtime-pair-output", document_path,
                      "--reviewed-lab-runtime-pair", json.dumps(binding))
         document = document_path.read_bytes()
@@ -452,6 +459,8 @@ def main():
             backend_change = backend != old_backend
             if backend_change:
                 try:
+                    if backend.compatibility is None:
+                        raise ValueError("backend compatibility record is required")
                     admit_backend_dispatch(repo, release)
                 except (OSError, ValueError, KeyError, TypeError, RolloutError, subprocess.SubprocessError):
                     backend_diagnostic("controller-dispatch")

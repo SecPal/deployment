@@ -21,6 +21,7 @@ image=ghcr.io/secpal/frontend
 origin=https://github.com/SecPal/deployment.git
 branch=refs/remotes/release/main
 contract=scripts/integration_runtime_contract.py
+compatibility_path=config/quadlet/fcos-lab-rollout/backend-compatibility.json
 digest='sha256:[a-f0-9]{64}'
 sha='[a-f0-9]{40}'
 hash='[a-f0-9]{64}'
@@ -82,7 +83,8 @@ without_lab_pins() {
     git_object show "$1:$contract" |
         sed -E '/^LAB_(FRONTEND|API|PHP_FPM|API_PAIR)_DIGEST = "sha256:[a-f0-9]{64}"$/d;
                 /^LAB_(FRONTEND|API)_SOURCE_COMMIT = "[a-f0-9]{40}"$/d;
-                /^LAB_API_VEX_EXPIRES_AT = "[0-9T:Z-]+"$/d'
+                /^LAB_API_VEX_EXPIRES_AT = "[0-9T:Z-]+"$/d;
+                /^LAB_API_COMPATIBILITY_SHA256 = "[a-f0-9]{64}"$/d'
 }
 
 lab_pins_only() {
@@ -446,6 +448,18 @@ migrations_idle() {
     [[ $(runtime systemctl --user show --value -p ActiveState "$slot-migrate.service") == inactive ]]
 }
 
+backend_ledger() {
+    local ledger
+    ledger=$(sql "SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY id), '[]'::jsonb) FROM public.migrations AS m") &&
+        [[ $ledger == \[* && $ledger != '[]' ]] || return 1
+    printf '%s\n' "$ledger"
+}
+
+backend_schema() {
+    runtime podman exec "$slot-postgres" pg_dump --schema-only -U secpal_fixture_admin -d secpal "$@" |
+        sed -E '/^\\(un)?restrict /d' | sha256sum | cut -d ' ' -f 1
+}
+
 backend_database() {
     local version cluster ledger schema
     migrations_idle &&
@@ -453,10 +467,8 @@ backend_database() {
         [[ $version =~ ^18[0-9]{4}$ ]] &&
         cluster=$(sql 'SELECT system_identifier FROM pg_control_system()') &&
         [[ $cluster == "$(cat "$store/cluster-id")" ]] &&
-        ledger=$(sql "SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY id), '[]'::jsonb) FROM public.migrations AS m") &&
-        [[ $ledger == \[* && $ledger != '[]' ]] &&
-        schema=$(runtime podman exec "$slot-postgres" pg_dump --schema-only -U secpal_fixture_admin -d secpal |
-            sed -E '/^\\(un)?restrict /d' | sha256sum) || return 1
+        ledger=$(backend_ledger) &&
+        schema=$(backend_schema) || return 1
     printf '%s\n' "$version" "$cluster" "$ledger" "$schema" | sha256sum | cut -d ' ' -f 1
 }
 
@@ -475,31 +487,75 @@ run_staged() {
         --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m --user 10001:10001 --entrypoint "$executable" "$image" "$@"
 }
 
-fpm_payload() {
+fpm_migrations() {
     # shellcheck disable=SC2016 # PHP receives a literal program.
     run_staged "$1" /usr/local/bin/php -r '
-        $modules = get_loaded_extensions();
-        sort($modules, SORT_STRING);
-        if (!in_array("pdo_pgsql", $modules, true)) exit(1);
+        if (!extension_loaded("pdo_pgsql")) exit(1);
+        require "/app/vendor/autoload.php";
+        $app = require "/app/bootstrap/app.php";
+        $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+        $migrator = $app->make("migrator");
+        $paths = array_unique([$app->databasePath("migrations"), ...$migrator->paths()]);
         $files = [];
-        foreach (["/app", "/usr/local/etc/php", "/usr/local/etc/php-fpm.d"] as $root) {
-            $tree = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
-            foreach ($tree as $entry) {
-                if ($entry->isLink()) {
-                    $target = $entry->getRealPath();
-                    if ($target === false || !str_starts_with($target, $root . "/")) exit(1);
-                    $files[$entry->getPathname()] = ["link", readlink($entry->getPathname())];
-                    continue;
-                }
-                if ($entry->isDir()) continue;
-                $hash = $entry->isFile() ? hash_file("sha256", $entry->getPathname()) : false;
-                if ($hash === false) exit(1);
-                $files[$entry->getPathname()] = $hash;
+        foreach ($paths as $path) {
+            foreach ($migrator->getMigrationFiles([$path]) as $name => $file) {
+                $resolved = realpath($file);
+                if (isset($files[$name]) || $resolved === false || !str_starts_with($resolved, "/app/") || is_link($file)) exit(1);
+                $files[$name] = hash_file("sha256", $resolved);
+                if ($files[$name] === false) exit(1);
             }
         }
+        if ($files === []) exit(1);
         ksort($files, SORT_STRING);
-        echo hash("sha256", json_encode([PHP_MAJOR_VERSION, PHP_MINOR_VERSION, $modules, $files], JSON_THROW_ON_ERROR)), "\n";
+        $schemas = [];
+        $schemaPath = $app->databasePath("schema");
+        if (is_link($schemaPath) || (file_exists($schemaPath) && !is_dir($schemaPath))) exit(1);
+        $schemaFiles = is_dir($schemaPath) ? glob($schemaPath . "/*", GLOB_ERR) : [];
+        if ($schemaFiles === false) exit(1);
+        foreach ($schemaFiles as $file) {
+            if (!is_file($file) || is_link($file)) exit(1);
+            $schemas[basename($file)] = hash_file("sha256", $file);
+            if ($schemas[basename($file)] === false) exit(1);
+        }
+        echo hash("sha256", json_encode([$files, $schemas], JSON_THROW_ON_ERROR)), "\n";
     '
+}
+
+validate_backend_compatibility() {
+    jq --exit-status --raw-output --slurp --arg previous "$2" --arg candidate "$3" --arg schema "$4" --arg ledger "$5" '
+        def evidence:
+            type == "object" and keys == ["linux/amd64","linux/arm64"]
+            and all(.[]; type == "string" and test("^sha256:[a-f0-9]{64}$"));
+        select(length == 1) | .[0]
+        | select(type == "object" and keys ==
+            ["candidate_pair","forward","ledger","previous_pair","rollback","schema","schema_version"])
+        | select(.schema_version == 1 and .previous_pair == $previous and .candidate_pair == $candidate
+            and .schema == $schema and .ledger == $ledger and (.forward | evidence)
+            and ([.forward[]] | unique | length) == 2)
+        | select(.rollback == null or ((.rollback | evidence)
+            and ([.forward[], .rollback[]] | length == (unique | length))))
+        | (.rollback != null | tostring)
+    ' "$1"
+}
+
+backend_compatibility() {
+    local pin size schema ledger evidence="$scratch/compatibility.json"
+    pin=$(backend_field "$revision" API_COMPATIBILITY_SHA256 "$hash") &&
+        size=$(git_object cat-file -s "$revision:$compatibility_path") &&
+        [[ $size =~ ^[1-9][0-9]{0,4}$ && $size -le 16384 ]] &&
+        git_object show "$revision:$compatibility_path" > "$evidence" &&
+        [[ $(sha256sum < "$evidence") == "$pin  -" ]] &&
+        schema=$(backend_schema --no-owner --no-privileges) &&
+        ledger=$(backend_ledger | sha256sum | cut -d ' ' -f 1) &&
+        [[ $schema =~ ^$hash$ && $ledger =~ ^$hash$ ]] &&
+        validate_backend_compatibility "$evidence" "$1" "$2" "$schema" "$ledger"
+}
+
+backend_rollback_admitted() {
+    local expires
+    jq -e '.rollback == true' <<< "$1" >/dev/null &&
+        expires=$(backend_field "$2" API_VEX_EXPIRES_AT '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z') &&
+        backend_expiry "$expires"
 }
 
 backend_role_ref() {
@@ -535,7 +591,7 @@ validate_backend_quadlets() {
 }
 
 prepare_backend() {
-    local installed=$1 pins=$2 old_pins=$3 publisher pair nginx fpm expires snapshot component ref config old before after helper
+    local installed=$1 pins=$2 old_pins=$3 publisher pair nginx fpm expires snapshot component ref config old before after helper rollback
     local -a values previous_values
     mapfile -t values <<< "$pins"
     mapfile -t previous_values <<< "$old_pins"
@@ -547,6 +603,8 @@ prepare_backend() {
         $(frontend_field "$revision" FRONTEND_SOURCE_COMMIT "$sha") == "$(frontend_field "$previous" FRONTEND_SOURCE_COMMIT "$sha")" ]] || return 1
     helper=$(backend_step helper-identity backend_helper_hash) &&
         backend_expiry "$expires" &&
+        singleton_roles && snapshot=$(backend_step database-snapshot backend_database) &&
+        rollback=$(backend_step compatibility-evidence backend_compatibility "${previous_values[1]}" "$pair") &&
         backend_step pair-proof verify_backend "$publisher" "$pair" "$nginx" "$fpm" || return 1
     local images='{}' native raw user digest_seen architecture
     for component in fpm nginx; do
@@ -565,23 +623,24 @@ prepare_backend() {
     done
     old=$(backend_role_ref "$installed" php-fpm) &&
         ref=$(jq -er .fpm.ref <<< "$images") &&
-        before=$(backend_step fpm-payload fpm_payload "$old") &&
-        after=$(backend_step fpm-payload fpm_payload "$ref") || return 1
+        before=$(backend_step fpm-migrations fpm_migrations "$old") &&
+        after=$(backend_step fpm-migrations fpm_migrations "$ref") || return 1
     if [[ ! $before =~ ^$hash$ || $before != "$after" ]]; then
-        printf '%s\n' 'Backend compatibility rejected: application payload or PHP contract differs' >&2
+        printf '%s\n' 'Backend compatibility rejected: migration files or schema dumps differ' >&2
         return 1
     fi
     backend_step fpm-config run_staged "$ref" /usr/local/sbin/php-fpm -t >/dev/null || return 1
     ref=$(jq -er .nginx.ref <<< "$images") &&
         backend_step nginx-config run_staged "$ref" /usr/sbin/nginx -t >/dev/null || return 1
-    singleton_roles && snapshot=$(backend_step database-snapshot backend_database) || return 1
     local candidate
     candidate=$(jq -c --arg revision "$revision" --arg fingerprint "$wanted" --arg pair "$pair" \
         --arg expires "$expires" --argjson images "$images" \
         '.revision=$revision | .fingerprint=$fingerprint | .backend=($images+{pair:$pair,expires:$expires})' <<< "$installed") &&
-        backend_step quadlet-validation validate_backend_quadlets "$candidate" || return 1
+        backend_step quadlet-validation validate_backend_quadlets "$candidate" &&
+        same_backend_database "$snapshot" || return 1
     save prepared.json "$(jq -cn --argjson before "$installed" --argjson next "$candidate" \
-        --arg database "$snapshot" --arg helper "$helper" '{before:$before,next:$next,database:$database,helper:$helper}')"
+        --arg database "$snapshot" --arg helper "$helper" --argjson rollback "$rollback" \
+        '{before:$before,next:$next,database:$database,helper:$helper,rollback:$rollback}')"
 }
 
 backend_helper_hash() {
@@ -787,6 +846,7 @@ main() {
                     singleton_roles || deny
                     if ! switch_backend "$next"; then
                         same_backend_database "$database" || deny
+                        backend_step rollback-compatibility backend_rollback_admitted "$prepared" "$previous" || deny
                         switch_backend "$before" || deny
                         deny
                     fi
@@ -803,6 +863,7 @@ main() {
             rollback)
                 [[ $installed == "$before" ]] || deny
                 if ! matches "$before"; then
+                    backend_step rollback-compatibility backend_rollback_admitted "$prepared" "$previous" || deny
                     matches "$next" || deny
                     switch_backend "$before" || deny
                 fi
