@@ -664,16 +664,26 @@ Keep root and operator credentials out of Git and out of Codex output.
    use `--recover` only after all affected hosts agree. Verify user lingering
    and the reviewed main fingerprint, then resume the lab timer and observe
    one ordinary run. The host OS mode is selected separately.
-5. Restore the live public `app.secpal.dev` and `api.secpal.dev` at their
-   last accepted release using the admitted pair-aware Quadlets, edge and TLS
-   configuration and the recovered state. Open traffic only after exact digest,
-   routing, TLS, readiness, authenticated data read-back, workers and scheduler
-   pass. Use the [state recovery boundary](architecture/production-state.md#postgresql-and-application-recovery-boundary).
-   The current development maintenance's demo auto-discovery is retired.
-   Restore the portable runtime and its reviewed inputs. Use the selected
-   native FCOS OS policy for this host's system updates.
-   The existing production update owner [#93](https://github.com/SecPal/deployment/issues/93)
-   controls future automatic updates for these public identities. Reuse reviewed
-   protected-main digest selection, publisher verification, explicit migration
-   authority, rollback checks and the existing RecoverySet requirement under
-   that contract. The lab timer remains scoped to its enrolled fixture.
+
+### Public application recovery and later updates
+
+Treat `app.secpal.dev` and `api.secpal.dev` as a separate public workload
+assignment. Before any public cutover, obtain the applicable host and
+workload admission, restore the last accepted pair-aware release in
+isolation, and verify exact digests, routing, TLS, authenticated data
+read-back, workers and scheduler. Use the
+[state recovery boundary](architecture/production-state.md#postgresql-and-application-recovery-boundary).
+For Managed production recovery, follow the existing
+[RecoverySet contract](https://github.com/SecPal/deployment/issues/109)
+and [host-loss drill](https://github.com/SecPal/deployment/issues/110).
+The lab proofs leave this public FCOS workload admission outstanding.
+
+The current development maintenance's demo auto-discovery is retired.
+The update contract [#93](https://github.com/SecPal/deployment/issues/93)
+defines the reviewed reference workflow on its admitted host stack.
+After admitting the public workload on FCOS, reuse its protected release
+inputs and require publisher proof, explicit migration authority, a valid
+RecoverySet where applicable, compatible rollback and live acceptance before
+enabling an automatic public rollout. The existing lab timer remains scoped
+to the enrolled private fixture. The native FCOS OS driver follows the
+host's selected maintenance mode.
