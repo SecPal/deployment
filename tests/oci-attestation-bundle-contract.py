@@ -242,7 +242,8 @@ class OciAttestationBundleContractTest(unittest.TestCase):
             if url == f"{fetcher.REGISTRY_BASE_URL}/manifests/runtime-pair-{source}-42-2":
                 self.assertIn(404, allowed)
                 return 404, "application/json", "", b"{}"
-            if url == f"{fetcher.REGISTRY_BASE_URL}/manifests/runtime-pair-{source}-42-1":
+            if url in (f"{fetcher.REGISTRY_BASE_URL}/manifests/runtime-pair-{source}-42-1",
+                       f"{fetcher.REGISTRY_BASE_URL}/manifests/runtime-pair-{source}-42-51"):
                 return 200, media_type, digest(manifest), manifest
             for body in evidence.values():
                 if url == fetcher.blob_url(digest(body)):
@@ -253,6 +254,8 @@ class OciAttestationBundleContractTest(unittest.TestCase):
         self.assertEqual(fetcher.api_publication_evidence(source, 42, 2, request),
                          (digest(manifest), 1, evidence))
         self.assertEqual(len(seen), 8)
+        self.assertEqual(fetcher.api_publication_evidence(source, 42, 51, request),
+                         (digest(manifest), 51, evidence))
         intact = False
         with self.assertRaises(ValueError):
             fetcher.api_publication_evidence(source, 42, 2, request)

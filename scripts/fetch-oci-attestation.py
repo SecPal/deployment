@@ -505,7 +505,7 @@ def api_publication_evidence(source, run_id, run_attempt, request_bytes=_request
     """Read the API publisher's public run-scoped discovery record and its review inputs."""
     if (REPOSITORY != "secpal/api" or re.fullmatch(r"[a-f0-9]{40}", source) is None
             or type(run_id) is not int or run_id <= 0
-            or type(run_attempt) is not int or not 1 <= run_attempt <= 20):
+            or type(run_attempt) is not int or run_attempt <= 0):
         raise ValueError("invalid API publication identity")
     headers = _anonymous_registry_headers(request_bytes)
     for attempt in range(run_attempt, 0, -1):
