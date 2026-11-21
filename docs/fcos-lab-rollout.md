@@ -34,8 +34,8 @@ The exact upstream workflow run and attempt are recorded in the draft.
 The publisher archive download requires an Actions read credential scoped to
 `SecPal/frontend`. Set `FCOS_FRONTEND_ACTIONS_READ_TOKEN` as a deployment
 repository secret through the existing administrator path. The token is used
-solely for the archive download. The repository's built-in workflow token
-handles public discovery and the separately enabled proposal write job.
+solely for the archive download. The built-in workflow token handles
+discovery and the read-backs in the proposal job.
 [GitHub artifact download permissions](https://docs.github.com/en/rest/actions/artifacts#download-an-artifact).
 
 The write job is limited to protected main and creates a draft on a branch
@@ -48,13 +48,17 @@ and PRs in place. Review the proposed compatibility against the current
 base. GitHub continues to enforce its normal reviews and required checks.
 After the accepted merge the existing timer handles deployment.
 
-To arm draft creation, the repository must already authorize GitHub Actions
-to create PRs and the repository variable `FCOS_LAB_RELEASE_PROPOSALS` must
-be `true`. Leaving the variable unset keeps discovery and candidate
-verification read-only. GitHub may require a writer to approve workflow runs
-on a PR opened by its Actions token. Use the native PR control and existing
-merge gates. [GitHub Actions settings](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#preventing-github-actions-from-creating-or-approving-pull-requests)
-and [workflow-token triggers](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs).
+For draft creation, give a dedicated, expiring fine-grained personal access
+token access only to `SecPal/deployment` with Contents and Pull requests
+read/write. Add it directly to the repository Actions secret
+`FCOS_FRONTEND_PROPOSAL_WRITE_TOKEN` after any required organization approval.
+Only branch, signed commit and draft PR creation use that token. The built-in
+workflow token retains read permissions, and the organization can keep PR
+creation by that token disabled. A PR opened with the dedicated token issues
+the usual GitHub PR event and follows the existing checks and merge gates.
+Set `FCOS_LAB_RELEASE_PROPOSALS=true` after confirming the credential is
+approved and stored. Unset the variable to suspend draft creation.
+[GitHub token event behavior](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs).
 
 The existing reports for API/PHP-FPM, HAProxy, CrowdSec, SPOA, OWASP CRS and
 PostgreSQL can feed the same proposal mechanism once each component has

@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: MIT
 
 import base64
+from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
+from dataclasses import asdict
 import hashlib
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -14,7 +17,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from fcos_lab_proposal import (
-    FILE, Proposal, evidence_agrees, proposed_file, candidate, publish, publisher_archive,
+    FILE, Proposal, evidence_agrees, proposed_file, candidate, main, publish, publisher_archive, write,
 )
 from fcos_lab_rollout_adapter import Frontend
 
@@ -24,6 +27,8 @@ CHILDREN = {"linux/amd64": "sha256:" + "5" * 64, "linux/arm64": "sha256:" + "6" 
 PROPOSAL = Proposal(NEW.index, NEW.source, 12, 2, CHILDREN["linux/amd64"],
                     CHILDREN["linux/arm64"], "sha256:" + "7" * 64)
 BASE = "8" * 40
+WRITE_TOKEN_ENV = "FCOS_FRONTEND_PROPOSAL_WRITE_TOKEN"
+WRITE_TOKEN = "dedicated-write"
 SOURCE = (f'FRONTEND_DIGEST = "{OLD.index}"\n'
           f'LAB_FRONTEND_DIGEST = "{OLD.index}"\nLAB_FRONTEND_SOURCE_COMMIT = "{OLD.source}"\n')
 
@@ -101,7 +106,7 @@ class ProposalContract(unittest.TestCase):
     def test_closed_candidate_pr_and_changed_base_cannot_write(self):
         with patch("fcos_lab_proposal.get", return_value={"object": {"sha": "9" * 40}}), \
                 patch("fcos_lab_proposal.write") as writer:
-            self.assertEqual(publish(PROPOSAL, BASE, SOURCE), "base changed")
+            self.assertEqual(publish(PROPOSAL, BASE, SOURCE, token=WRITE_TOKEN), "base changed")
             writer.assert_not_called()
         with patch("fcos_lab_proposal.get", side_effect=[
             {"object": {"sha": BASE}}, [{"number": 33, "state": "closed", "head": {
@@ -109,7 +114,7 @@ class ProposalContract(unittest.TestCase):
                 "repo": {"full_name": "SecPal/deployment"},
             }}],
         ]) as reader, patch("fcos_lab_proposal.write") as writer:
-            self.assertEqual(publish(PROPOSAL, BASE, SOURCE), "proposal #33 already exists")
+            self.assertEqual(publish(PROPOSAL, BASE, SOURCE, token=WRITE_TOKEN), "proposal #33 already exists")
             self.assertTrue(reader.call_args.kwargs["paginate"])
             writer.assert_not_called()
         with patch("fcos_lab_proposal.get", side_effect=[
@@ -117,7 +122,7 @@ class ProposalContract(unittest.TestCase):
                 "ref": "fcos-lab-frontend-existing", "repo": {"full_name": "SecPal/deployment"},
             }}],
         ]), patch("fcos_lab_proposal.write") as writer:
-            self.assertEqual(publish(PROPOSAL, BASE, SOURCE), "another frontend proposal is open")
+            self.assertEqual(publish(PROPOSAL, BASE, SOURCE, token=WRITE_TOKEN), "another frontend proposal is open")
             writer.assert_not_called()
 
     def test_workflow_token_is_not_reused_for_the_cross_repository_archive(self):
@@ -144,6 +149,34 @@ class ProposalContract(unittest.TestCase):
             self.assertEqual(download.call_args.args[0][0], gh)
             self.assertEqual(download.call_args.kwargs["env"]["GH_TOKEN"], "scoped-read")
 
+    def test_publish_requires_a_separate_credential_and_removes_it_from_the_read_environment(self):
+        def inspect_publish(proposal, base, source, *, token):
+            self.assertEqual((proposal, base, source, token), (PROPOSAL, BASE, SOURCE, WRITE_TOKEN))
+            self.assertEqual(os.environ["GH_TOKEN"], "workflow-read")
+            self.assertNotIn(WRITE_TOKEN_ENV, os.environ)
+            return "draft proposal #99 created"
+
+        for token in ("", WRITE_TOKEN):
+            with self.subTest(configured=bool(token)), patch.dict(os.environ, {
+                "GH_TOKEN": "workflow-read", "GITHUB_SHA": BASE, WRITE_TOKEN_ENV: token,
+            }, clear=True), patch.object(sys, "argv", ["proposal", "publish"]), \
+                    patch.object(sys, "stdin", StringIO(json.dumps(asdict(PROPOSAL)))), \
+                    patch.object(Path, "read_text", return_value=SOURCE), \
+                    patch("fcos_lab_proposal.publish", side_effect=inspect_publish) as publisher, \
+                    redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                self.assertEqual(main(), 0 if token else 1)
+                self.assertEqual(publisher.call_count, int(bool(token)))
+
+    def test_write_uses_the_dedicated_credential_in_the_subprocess_environment(self):
+        with patch.dict(os.environ, {"GH_TOKEN": "workflow-read"}, clear=True), \
+                patch("fcos_lab_proposal.subprocess.run") as api:
+            api.return_value.stdout = '{"number":99}'
+            result = write("POST", "repos/SecPal/deployment/pulls", {}, token=WRITE_TOKEN)
+            self.assertEqual(result, {"number": 99})
+            self.assertIn("github.com", api.call_args.args[0])
+            self.assertNotIn(WRITE_TOKEN, api.call_args.args[0])
+            self.assertEqual(api.call_args.kwargs["env"]["GH_TOKEN"], WRITE_TOKEN)
+            self.assertEqual(os.environ["GH_TOKEN"], "workflow-read")
 
     def test_only_a_verified_single_file_commit_can_open_a_draft(self):
         tip = "9" * 40
@@ -166,10 +199,11 @@ class ProposalContract(unittest.TestCase):
             ]), patch("fcos_lab_proposal.write", side_effect=[base_ref, response, {"number": 99}]) as writer:
                 if not signed:
                     with self.assertRaises(ValueError):
-                        publish(PROPOSAL, BASE, SOURCE)
+                        publish(PROPOSAL, BASE, SOURCE, token=WRITE_TOKEN)
                     self.assertEqual(writer.call_count, 2)
                     continue
-                self.assertEqual(publish(PROPOSAL, BASE, SOURCE), "draft proposal #99 created")
+                self.assertEqual(publish(PROPOSAL, BASE, SOURCE, token=WRITE_TOKEN), "draft proposal #99 created")
+                self.assertEqual([call.kwargs["token"] for call in writer.call_args_list], [WRITE_TOKEN] * 3)
                 ref, proposed, pr = [call.args for call in writer.call_args_list]
                 self.assertEqual(ref[2], {"ref": f"refs/heads/{branch}", "sha": BASE})
                 self.assertEqual(proposed[1], "graphql")
