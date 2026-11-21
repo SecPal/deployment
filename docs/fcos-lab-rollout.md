@@ -5,6 +5,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # FCOS lab container rollouts
 
+For host updates and the next controlled rebuild, start at the
+[FCOS operations handoff](#fcos-operations-handoff).
+
 This coordinator sequences compatible, migration-free changes to the
 [FCOS application fixture](fcos-application-poc.md). The production update
 and RecoverySet requirements remain under
@@ -472,11 +475,50 @@ Before changing a host's fixture assignment, pause its existing lab rollout
 and reconcile enrollment. Independently administered workloads use their
 own reviewed pins and lifecycle.
 
-### Stage Stable updates without automatic reboots
+### Select the native update mode
 
-Keep `[updates] enabled = false` in
-`/etc/zincati/config.d/90-secpal-controlled.toml`. Use one native update
-driver at a time. For an enrolled host tracking
+Choose a mode for the host's current workload assignment. Use one native
+update driver at a time.
+
+| Mode                                   | Driver                                                                       | When to reboot                                                                              |
+| -------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Independently restartable              | Zincati Stable with a weekly UTC window                                      | Zincati may reboot in the window                                                            |
+| Workloads with cross-host dependencies | rpm-ostree with `AutomaticUpdatePolicy=stage`                                | After the selected host is admitted for maintenance and the previous host passes acceptance |
+| Reproducible test                      | Both automatic drivers paused, with the admitted deployment pinned if needed | As required for the exact version under test                                                |
+
+For an independently restartable host, confirm that its local data,
+networking, and service startup do not depend on other hosts being updated
+in any particular order. Confirm the local zone, installed workload
+assignment, maintenance window, and independent recovery path. Disable
+`rpm-ostreed-automatic.timer`, allow any transaction to finish, and set
+`AutomaticUpdatePolicy=none` in `/etc/rpm-ostreed.conf`. Run
+`rpm-ostree reload`. Ensure there is no unreviewed pending deployment.
+Replace the controlled Zincati update configuration with one reviewed
+periodic window, then restart `zincati.service` outside that window.
+
+```toml
+[updates]
+enabled = true
+strategy = "periodic"
+
+[updates.periodic]
+time_zone = "UTC"
+
+[[updates.periodic.window]]
+days = ["Sun"]
+start_time = "01:00"
+length_minutes = 30
+```
+
+Verify the effective Zincati strategy in the journal, the disabled native
+timer and the unchanged boot ID. A window constrains local reboot timing.
+It cannot certify the health of another host or provide HA coordination.
+[Zincati update strategies](https://coreos.github.io/zincati/usage/updates-strategy/)
+
+### Stage Stable updates for controlled activation
+
+For dependent workloads, keep `[updates] enabled = false` in
+`/etc/zincati/config.d/90-secpal-controlled.toml`. For an enrolled host tracking
 `ostree-image-signed:docker://quay.io/fedora/fedora-coreos:stable`, set
 `AutomaticUpdatePolicy=stage` in the `[Daemon]` section of
 `/etc/rpm-ostreed.conf`. As the host administrator, run
@@ -488,14 +530,16 @@ deployments, and the unchanged boot ID.
 Staging queues a deployment for the next boot. Treat an unrelated reboot as
 an activation risk while a candidate is staged. Pause the timer with
 `systemctl disable --now rpm-ostreed-automatic.timer` and allow an in-flight
-staging operation to settle before inspecting or selecting a version. To
+staging operation to settle before inspecting or selecting a version. For
+the Zincati mode, set `enabled = false` and restart `zincati.service` outside
+the normal reboot window. Read back the state of both drivers. To
 hold the booted version across a reboot, inspect the pending deployment,
 then use `rpm-ostree cleanup -p` if it may be discarded. Verify that no
 pending deployment remains. For an
 exact test version, admit the signed native digest and stage it with
 `rpm-ostree rebase --disallow-downgrade ostree-image-signed:docker://quay.io/fedora/fedora-coreos@sha256:<native-digest>`.
-Leave the timer paused for the test. Resume automatic staging after returning
-to signed Stable tracking. Pause the independent container timer during
+Leave both automatic drivers paused for the test. Resume the selected
+driver after returning to signed Stable tracking. Pause the independent container timer during
 reproducible tests or OS activation, and select SecPal versions by exact
 reviewed release inputs. Resume the applicable timers after read-back.
 
@@ -520,24 +564,116 @@ Automatic staging and reboot acceptance are separate. Keep unattended
 reboots disabled until the health gate and recovery have been qualified on
 the selected topology.
 
-### Restore the controller after reinstalling secpal.dev
+## FCOS operations handoff
 
-1. Restore authenticated access and the direct WireGuard peers using the
-   existing restricted management path. Restore protected keys only for
-   deliberately retained identities. After guest reprovisioning, authenticate
-   the regenerated SSH and WireGuard identities. Retire the old SSH host
-   pin and revoke the old peer through the existing restricted replacement
-   workflow before enrollment. Provisioning details remain tracked in
-   [Host Foundation #425](https://github.com/SecPal/deployment/issues/425).
-2. From reviewed main, restore the controller user, its installed scripts,
-   verification tools, timer and user-manager state. Restore the private
-   rollout key, SSH host pins, witness settings and state directory from
-   protected custody. Use the controller setup above for file paths and
-   ownership. Keep the container timer disabled during recovery.
-3. Check the actual assignments over authenticated SSH. For the still-enrolled
-   fixture run `observe` on every member and reconcile the accepted
-   fingerprint with the saved controller journal. Use the documented
-   `--recover` path for a blocked journal only after all members agree.
-   Check protected main and then resume the timer. Hosts without this
-   assignment retain their local OS maintenance policy and require no
-   SecPal rollout enrollment.
+| Status                       | Scope                                                                                                                                                                                                                                                         |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LIVE QUALIFIED               | Retained multiarch FCOS installs, direct IPv4/IPv6 WireGuard and pinned SSH, SELinux and rootless Podman/Quadlet. Native Stable staging and controlled FCOS 45 activation passed on all three lab hosts. The frontend lab timer has delivered a real release. |
+| CONFIGURED / READY           | Zincati periodic maintenance on the current independently restartable lab assignments. The existing lab backend adapter, signed-pair admission and proposals.                                                                                                 |
+| NOT YET QUALIFIED            | First unattended Zincati reboot, first live changed-code backend release, independent off-host restoration of the development host and its public endpoints, and public application automatic deployment on FCOS.                                             |
+| LATER PRODUCTION REQUIREMENT | Complete production credential custody, data recovery, activated application update/migration/rollback and any coordination required by the actual topology.                                                                                                  |
+
+The current lab assignments use separate PostgreSQL clusters and local
+Podman networks. Each host moved from FCOS `44.20261023.3.1` to
+`45.20261030.3.1` through one controlled reboot before the next host
+was admitted. The checks used pinned SSH over direct WireGuard on both
+address families, independent public bootstrap SSH, the new boot ID,
+SELinux, the running Quadlets, persistent volumes and database read-back.
+The existing container coordinator returned the accepted fingerprint.
+
+For these assignments, Zincati is the registered update driver and has
+checked Fedora's update graph. The native rpm-ostree automatic timer is
+disabled. The next allowed windows are Sunday in UTC:
+
+| Host  | Window      |
+| ----- | ----------- |
+| CX23  | 01:00–01:30 |
+| CX33  | 03:00–03:30 |
+| CAX21 | 05:00–05:30 |
+
+Persistent Zincati pause and resume were verified on CX23 without a reboot.
+Review the mode again when assignments change. These windows are local
+maintenance settings for currently independent hosts.
+
+### Provision a host independently of its workloads
+
+Use the exact reviewed source and accepted evidence under
+[Host Foundation #425](https://github.com/SecPal/deployment/issues/425) and its
+[draft provisioning runbook](https://github.com/SecPal/deployment/blob/7538a295cb6e2202913c90606b2825591fa6d951/docs/fcos-provisioning-foundation.md).
+Verify the native signed Stable Metal artifact, Butane and Ignition for
+amd64 or arm64. Reuse the authenticated Rescue and Console trust path, then
+bind the actual disk and immutable provider identity before installing.
+Preserve provider protections. The draft distinguishes historical
+multiarch installs from the signed-RPM installer and provider-custody
+acceptance still required for the foundation delivery.
+
+For a fresh install, authenticate the new SSH key through the Console path.
+Generate the WireGuard key on the host. Use the existing
+`secpal-test-bootstrap` and `secpal-test-network` replacement contract for an
+authorized test slot with the current generation. Check retirement of the
+previous peer and SSH pin, direct IPv4 and IPv6, split routes, firewall
+rejection, and pinned SSH. Keep independent public bootstrap/Console
+recovery. Compare the same host and WireGuard identities after an ordinary
+reboot. Verify SELinux and rootless Podman/Quadlet before assigning a workload.
+Use the scoped helper's installed runbook at
+`/usr/local/share/doc/secpal-test-network/README.txt`.
+
+### Inputs that must survive the old secpal.dev
+
+Make the following checks from a separate, authorized workstation or
+recovery host before authorizing disk overwrite. An encrypted archive and
+its recovery authority must both be accessible without starting secpal.dev.
+Keep root and operator credentials out of Git and out of Codex output.
+
+| Authority or state                      | Recovery source                                                                                                                                                                                                                                                                                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source and release identity             | Protected Git refs and verified commits for deployment, API, frontend and governance. Export any unpublished work, admitted release identities, public access inventory and nonversioned operational instructions to external custody.                                                                                                                        |
+| Provider, public DNS and TLS            | Independently accessible provider Console/Rescue account, MFA and break-glass material, exact resource identity and protections, reviewed firewall and DNS bindings, TLS renewal authority. Install the broker's protected configuration and scoped credential through the independent administrator.                                                         |
+| Management connectivity                 | Root-owned NetworkManager/WireGuard configuration for both the hub link and direct test link, exact peer reservations, last applied generations, recovery SSH keys and independently pinned public host keys. Securely retain deliberate private-key continuities or authorize a fresh key and coordinated replacement.                                       |
+| Accounts and local operations           | User IDs and mappings, systemd units and settings, Codex/maintenance lease boundaries, installer executables and constrained administrative policy. The administrator exports any local material that cannot be reproduced from reviewed Git. Preserve separate Codex, Polyscope and application accounts.                                                    |
+| Rollout controller                      | Protected `~/.config/secpal-fcos-lab-rollout/` and `~/.local/state/secpal-fcos-lab-rollout/`, with host pins, scoped SSH credential, witnesses and accepted journal. Record the exact reviewed installed helper and adapter. Keep service definitions and verifier pins from Git.                                                                             |
+| Public application and development data | A consistent off-host copy of PostgreSQL data and roles and the associated private and public file trees, exact runtime and edge configuration, and independently recoverable application encryption/decryption and other durable keys. Capture developer state required after disk loss. Verify the recovery metadata and read-back from a separate machine. |
+
+### Restore secpal.dev in order
+
+1. From the authorized recovery machine, prove independent Console access,
+   backups, decryption, signed native boot inputs and the external configuration
+   inventory. Order the restore before enabling public traffic or maintenance
+   services. Preserve provider identity, primary addresses and protections.
+   The test broker's fixed allowlist excludes secpal.dev. Bootstrap the
+   development host under the independent provider administrator.
+2. Install the new host from admitted FCOS artifacts and authenticate the new
+   SSH host key through Console. Update host pins through that authenticated
+   path. Restore the existing hub and direct WireGuard profiles and firewall
+   policy. When rotating the controller keys, update the corresponding hub and
+   guest peers through their authorized administration, retire the old keys,
+   and verify direct IPv4/IPv6 SSH and pin identity from outside secpal.dev.
+   The three test-slot identities only change if their own guests are rebuilt.
+3. Restore the restricted accounts and reviewed tools. As `codex`, reinstall
+   the verified Codex CLI, sign in using `codex login --device-auth` where
+   authorized, and verify `codex login status`. Reauthorize the intended
+   GitHub account with `gh auth login --hostname github.com --web` and
+   verify `gh auth status`. Restore the authorized SSH signing key or register
+   a newly generated signing key in GitHub and verify a signed commit. Codex
+   and GitHub logins can be issued again. Operator SSH keys and public TLS certificates can also be reissued with independent authority. Preserve the durable encryption keys required by existing data. Keep deployment credentials scoped
+   to their respective roles.
+   [Codex CLI documentation](https://developers.openai.com/codex/cli)
+4. Restore the lab controller using the [existing setup](#controller-setup-and-qualification)
+   with the protected inputs and timer disabled. Reconcile live host assignments
+   and `observe` results with the saved journal. For a blocked journal,
+   use `--recover` only after all affected hosts agree. Verify user lingering
+   and the reviewed main fingerprint, then resume the lab timer and observe
+   one ordinary run. The host OS mode is selected separately.
+5. Restore the live public `app.secpal.dev` and `api.secpal.dev` at their
+   last accepted release using the admitted pair-aware Quadlets, edge and TLS
+   configuration and the recovered state. Open traffic only after exact digest,
+   routing, TLS, readiness, authenticated data read-back, workers and scheduler
+   pass. Use the [state recovery boundary](architecture/production-state.md#postgresql-and-application-recovery-boundary).
+   The current development maintenance's demo auto-discovery is retired.
+   Restore the portable runtime and its reviewed inputs. Use the selected
+   native FCOS OS policy for this host's system updates.
+   The existing production update owner [#93](https://github.com/SecPal/deployment/issues/93)
+   controls future automatic updates for these public identities. Reuse reviewed
+   protected-main digest selection, publisher verification, explicit migration
+   authority, rollback checks and the existing RecoverySet requirement under
+   that contract. The lab timer remains scoped to its enrolled fixture.
