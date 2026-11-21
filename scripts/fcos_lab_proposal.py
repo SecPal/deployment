@@ -181,15 +181,16 @@ def proposed_file(text, proposal):
     return text
 
 
-def write(method, endpoint, payload):
+def write(method, endpoint, payload, *, token):
     output = subprocess.run(
-        ["gh", "api", "--method", method, endpoint, "--input", "-"],
+        ["gh", "api", "--hostname", "github.com", "--method", method, endpoint, "--input", "-"],
         input=json.dumps(payload), text=True, capture_output=True, check=True, timeout=45,
+        env=dict(os.environ, GH_TOKEN=token),
     ).stdout
     return json.loads(output)
 
 
-def publish(proposal, base, text):
+def publish(proposal, base, text, *, token):
     if re.fullmatch(SHA, base) is None:
         raise ValueError("invalid deployment base")
     if get(f"repos/{REPO}/git/ref/heads/main")["object"]["sha"] != base:
@@ -222,7 +223,7 @@ def publish(proposal, base, text):
         entry, = refs
         tip = entry["object"]["sha"]
     else:
-        tip = write("POST", f"{prefix}/git/refs", {"ref": ref, "sha": base})["object"]["sha"]
+        tip = write("POST", f"{prefix}/git/refs", {"ref": ref, "sha": base}, token=token)["object"]["sha"]
         if tip != base:
             raise ValueError("new proposal ref differs from the admitted base")
 
@@ -235,7 +236,7 @@ def publish(proposal, base, text):
         reply = write("POST", "graphql", {
             "query": "mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid}}}",
             "variables": {"input": payload},
-        })
+        }, token=token)
         tip = reply["data"]["createCommitOnBranch"]["commit"]["oid"]
     if re.fullmatch(SHA, tip) is None:
         raise ValueError("invalid proposal commit")
@@ -262,7 +263,7 @@ def publish(proposal, base, text):
             "Review current compatibility and approve the native required checks before merging. "
             "The existing timer handles activation after an accepted merge."
         ),
-    })
+    }, token=token)
     return f"draft proposal #{int(result['number'])} created"
 
 
@@ -276,7 +277,11 @@ def main():
             if plan is not None:
                 print(json.dumps(asdict(plan), separators=(",", ":")))
         elif mode == "publish":
-            print(publish(Proposal(**value), os.environ["GITHUB_SHA"], text))
+            token = os.environ.pop("FCOS_FRONTEND_PROPOSAL_WRITE_TOKEN", "")
+            if not token:
+                print("FCOS frontend proposal write credential is missing", file=sys.stderr)
+                return 1
+            print(publish(Proposal(**value), os.environ["GITHUB_SHA"], text, token=token))
         else:
             raise ValueError("unsupported proposal operation")
     except (BadZipFile, KeyError, OSError, TypeError, ValueError, subprocess.SubprocessError):
