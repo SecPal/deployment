@@ -176,7 +176,8 @@ def admit_source_text(repo, release):
 
 def backend_declaration(declaration, helper):
     stages = set(re.findall(r"\bbackend_step ([a-z][a-z-]+) ", helper))
-    required = {"pair-proof", "native-image", "fpm-payload", "fpm-config", "nginx-config",
+    required = {"pair-proof", "native-image", "fpm-migrations", "fpm-config", "nginx-config",
+                "compatibility-evidence", "rollback-compatibility",
                 "database-snapshot", "quadlet-validation", "stop-http", "stop-backend",
                 "install-images", "reload-units", "start-fpm", "start-http", "start-background",
                 "running-identities", "guest-health", "helper-identity"}
