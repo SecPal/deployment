@@ -47,7 +47,7 @@ jobs:
   repository-security:
     name: Repository Security
     needs: source-analysis
-    if: ${{ !cancelled() }}
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -55,6 +55,16 @@ jobs:
     outputs:
       gate-state: ${{ steps.scan.outputs.gate-state }}
     steps:
+      - name: Reject a cancelled workflow
+        if: ${{ cancelled() }}
+        run: exit 1
+
+      - name: Require successful CodeQL analyses
+        if: ${{ always() }}
+        env:
+          ANALYSIS_RESULT: ${{ needs.source-analysis.result }}
+        run: test "$ANALYSIS_RESULT" = success
+
       - name: Checkout exact source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -70,11 +80,6 @@ jobs:
           SCAN_RESULT: ${{ steps.scan.outcome }}
           GATE_STATE: ${{ steps.scan.outputs.gate-state }}
         run: bash scripts/require-repository-security.sh "$SCAN_RESULT" "$GATE_STATE"
-
-      - name: Require successful CodeQL analyses
-        env:
-          ANALYSIS_RESULT: ${{ needs.source-analysis.result }}
-        run: test "$ANALYSIS_RESULT" = success
 
   repository-contract:
     name: Repository Contract

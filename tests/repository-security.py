@@ -30,7 +30,7 @@ class RepositorySecurityTests(unittest.TestCase):
         self.assertEqual(job["permissions"], {"contents": "read"})
         self.assertNotIn("secrets", job)
         self.assertNotIn("env", job)
-        checkout, scan, acceptance, _ = job["steps"]
+        _, _, checkout, scan, acceptance = job["steps"]
         self.assertRegex(checkout["uses"], r"\Aactions/checkout@[0-9a-f]{40}\Z")
         self.assertEqual(
             checkout["with"],
@@ -75,15 +75,19 @@ class RepositorySecurityTests(unittest.TestCase):
         required = jobs["repository-security"]
         self.assertEqual(required["name"], "Repository Security")
         self.assertEqual(required["needs"], "source-analysis")
-        self.assertEqual(required["if"], "${{ !cancelled() }}")
-        gate = required["steps"][-1]
+        self.assertEqual(required["if"], "${{ always() }}")
+        cancellation, gate = required["steps"][:2]
+        self.assertEqual(cancellation["if"], "${{ cancelled() }}")
+        self.assertEqual(cancellation["run"], "exit 1")
+        self.assertNotIn("continue-on-error", cancellation)
+        self.assertEqual(gate["if"], "${{ always() }}")
         self.assertEqual(gate["env"], {"ANALYSIS_RESULT": "${{ needs.source-analysis.result }}"})
-        self.assertNotIn("if", gate)
         self.assertNotIn("continue-on-error", gate)
         for outcome in ("success", "failure", "cancelled", "skipped", ""):
             with self.subTest(outcome=outcome):
                 observed = subprocess.run(
-                    ["bash", "-e", "-c", gate["run"]], env={"ANALYSIS_RESULT": outcome}, check=False,
+                    ["bash", "-e", "-c", gate["run"]], check=False,
+                    env={"ANALYSIS_RESULT": outcome},
                 )
                 self.assertEqual(observed.returncode == 0, outcome == "success")
 
