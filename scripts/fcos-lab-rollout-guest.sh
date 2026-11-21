@@ -30,6 +30,16 @@ api_image=ghcr.io/secpal/api
 
 deny() { printf '%s\n' 'FCOS lab guest rejected the operation' >&2; exit 1; }
 
+backend_step() {
+    local stage=$1
+    shift
+    if "$@" 2>/dev/null; then
+        return 0
+    fi
+    printf 'FCOS lab backend operation failed: fcos-lab-backend.%s\n' "$stage" >&2
+    return 1
+}
+
 as_user() {
     local name=$1 uid=$2
     shift 2
@@ -432,9 +442,14 @@ verify_backend() {
     done
 }
 
+migrations_idle() {
+    [[ $(runtime systemctl --user show --value -p ActiveState "$slot-migrate.service") == inactive ]]
+}
+
 backend_database() {
     local version cluster ledger schema
-    version=$(sql 'SHOW server_version_num') &&
+    migrations_idle &&
+        version=$(sql 'SHOW server_version_num') &&
         [[ $version =~ ^18[0-9]{4}$ ]] &&
         cluster=$(sql 'SELECT system_identifier FROM pg_control_system()') &&
         [[ $cluster == "$(cat "$store/cluster-id")" ]] &&
@@ -446,7 +461,7 @@ backend_database() {
 }
 
 same_backend_database() {
-    if [[ ! $1 =~ ^$hash$ || $(backend_database) != "$1" ]]; then
+    if [[ ! $1 =~ ^$hash$ || $(backend_step database-snapshot backend_database) != "$1" ]]; then
         printf '%s\n' 'Backend compatibility rejected: PostgreSQL identity, schema or migration ledger differs' >&2
         return 1
     fi
@@ -529,13 +544,16 @@ prepare_backend() {
         $pair != "${previous_values[1]}" && ( $nginx != "${previous_values[2]}" || $fpm != "${previous_values[3]}" ) &&
         $(frontend_field "$revision" FRONTEND_DIGEST "$digest") == "$(frontend_field "$previous" FRONTEND_DIGEST "$digest")" &&
         $(frontend_field "$revision" FRONTEND_SOURCE_COMMIT "$sha") == "$(frontend_field "$previous" FRONTEND_SOURCE_COMMIT "$sha")" ]] || return 1
-    backend_expiry "$expires" && verify_backend "$publisher" "$pair" "$nginx" "$fpm" || return 1
+    backend_expiry "$expires" &&
+        backend_step pair-proof verify_backend "$publisher" "$pair" "$nginx" "$fpm" || return 1
     local images='{}' native raw user digest_seen architecture
     for component in fpm nginx; do
         native=$(cat "$scratch/$component.child") || return 1
         ref="$api_image@$native"
-        runtime env DOCKER_CONFIG="$scratch" podman pull --quiet --authfile "$scratch/auth.json" --platform "$platform" "$ref" >/dev/null || return 1
-        raw=$(runtime podman image inspect --format '{{.Id}} {{.Digest}} {{.Architecture}} {{.Config.User}}' "$ref") || return 1
+        backend_step native-image runtime env DOCKER_CONFIG="$scratch" podman pull --quiet \
+            --authfile "$scratch/auth.json" --platform "$platform" "$ref" >/dev/null || return 1
+        raw=$(backend_step native-image runtime podman image inspect \
+            --format '{{.Id}} {{.Digest}} {{.Architecture}} {{.Config.User}}' "$ref") || return 1
         read -r config digest_seen architecture user <<< "$raw"
         [[ $digest_seen == "$native" && $architecture == "${platform#linux/}" &&
             $user =~ ^(10001(:10001)?|secpal)$ ]] || return 1
@@ -545,20 +563,21 @@ prepare_backend() {
     done
     old=$(backend_role_ref "$installed" php-fpm) &&
         ref=$(jq -er .fpm.ref <<< "$images") &&
-        before=$(fpm_payload "$old") && after=$(fpm_payload "$ref") || return 1
+        before=$(backend_step fpm-payload fpm_payload "$old") &&
+        after=$(backend_step fpm-payload fpm_payload "$ref") || return 1
     if [[ ! $before =~ ^$hash$ || $before != "$after" ]]; then
         printf '%s\n' 'Backend compatibility rejected: application payload or PHP contract differs' >&2
         return 1
     fi
-    run_staged "$ref" /usr/local/sbin/php-fpm -t >/dev/null 2>&1 || return 1
+    backend_step fpm-config run_staged "$ref" /usr/local/sbin/php-fpm -t >/dev/null || return 1
     ref=$(jq -er .nginx.ref <<< "$images") &&
-        run_staged "$ref" /usr/sbin/nginx -t >/dev/null 2>&1 || return 1
-    singleton_roles && snapshot=$(backend_database) || return 1
+        backend_step nginx-config run_staged "$ref" /usr/sbin/nginx -t >/dev/null || return 1
+    singleton_roles && snapshot=$(backend_step database-snapshot backend_database) || return 1
     local candidate
     candidate=$(jq -c --arg revision "$revision" --arg fingerprint "$wanted" --arg pair "$pair" \
         --arg expires "$expires" --argjson images "$images" \
         '.revision=$revision | .fingerprint=$fingerprint | .backend=($images+{pair:$pair,expires:$expires})' <<< "$installed") &&
-        validate_backend_quadlets "$candidate" || return 1
+        backend_step quadlet-validation validate_backend_quadlets "$candidate" || return 1
     save prepared.json "$(jq -cn --argjson before "$installed" --argjson next "$candidate" --arg database "$snapshot" \
         '{before:$before,next:$next,database:$database}')"
 }
@@ -579,21 +598,8 @@ untouched_instances() {
     done
 }
 
-switch_backend() {
-    local record=$1 role ref override service untouched
-    local -a services=()
-    for role in "${backend_roles[@]}"; do
-        services+=("$slot-$role.service")
-        ref=$(backend_role_ref "$record" "$role") &&
-            [[ $ref =~ ^"$api_image@"$digest$ ]] &&
-            runtime podman image exists "$ref" || return 1
-    done
-    untouched=$(untouched_instances) &&
-        runtime systemctl --user --job-mode=ignore-requirements stop "$slot-api.service" &&
-        runtime systemctl --user --job-mode=ignore-requirements stop "${services[@]:1}" || return 1
-    for service in "${services[@]}"; do
-        [[ $(runtime systemctl --user show --value -p ActiveState "$service") == inactive ]] || return 1
-    done
+install_backend_refs() {
+    local record=$1 role ref override
     for role in "${backend_roles[@]}"; do
         override=$units/$slot-$role.container.d
         if jq -e 'has("backend")' <<< "$record" >/dev/null; then
@@ -605,15 +611,40 @@ switch_backend() {
                 mv -T -- "$override/.next" "$override/90-rollout.conf" || return 1
         else
             rm -f -- "$override/90-rollout.conf" "$override/.next" || return 1
+            if [[ -d $override ]]; then
+                rmdir -- "$override" && sync -f "$units" || return 1
+            fi
         fi
         if [[ -d $override ]]; then sync -f "$override" || return 1; fi
     done
-    runtime systemctl --user daemon-reload &&
-        runtime systemctl --user start "$slot-php-fpm.service" &&
-        runtime systemctl --user start "$slot-api.service" &&
-        runtime systemctl --user start "${services[@]:2}" &&
-        matches "$record" && singleton_roles && check_installed &&
-        [[ $(untouched_instances) == "$untouched" ]]
+}
+
+backend_running() {
+    matches "$1" && singleton_roles && check_installed && [[ $(untouched_instances) == "$2" ]]
+}
+
+switch_backend() {
+    local record=$1 role ref service untouched
+    local -a services=()
+    for role in "${backend_roles[@]}"; do
+        services+=("$slot-$role.service")
+        ref=$(backend_role_ref "$record" "$role") &&
+            [[ $ref =~ ^"$api_image@"$digest$ ]] &&
+            backend_step native-image runtime podman image exists "$ref" || return 1
+    done
+    backend_step database-snapshot migrations_idle || return 1
+    untouched=$(backend_step running-identities untouched_instances) &&
+        backend_step stop-http runtime systemctl --user --job-mode=ignore-requirements stop "$slot-api.service" &&
+        backend_step stop-backend runtime systemctl --user --job-mode=ignore-requirements stop "${services[@]:1}" || return 1
+    for service in "${services[@]}"; do
+        [[ $(runtime systemctl --user show --value -p ActiveState "$service") == inactive ]] || return 1
+    done
+    backend_step install-images install_backend_refs "$record" &&
+        backend_step reload-units runtime systemctl --user daemon-reload &&
+        backend_step start-fpm runtime systemctl --user start "$slot-php-fpm.service" &&
+        backend_step start-http runtime systemctl --user start "$slot-api.service" &&
+        backend_step start-background runtime systemctl --user start "${services[@]:2}" &&
+        backend_step running-identities backend_running "$record" "$untouched"
 }
 
 prepare() {
@@ -750,7 +781,7 @@ main() {
             accept)
                 matches "$next" || deny
                 backend_expiry "$(jq -er .backend.expires <<< "$next")" || deny
-                health "$next" || exit 10
+                backend_step guest-health health "$next" || exit 10
                 same_backend_database "$database" || deny
                 persist_accepted "$next" || deny
                 ;;
@@ -760,7 +791,7 @@ main() {
                     matches "$next" || deny
                     switch_backend "$before" || deny
                 fi
-                health "$before" || deny
+                backend_step guest-health health "$before" || deny
                 same_backend_database "$database" || deny
                 persist_accepted "$before" || deny
                 ;;

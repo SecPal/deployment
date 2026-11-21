@@ -15,7 +15,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from fcos_lab_rollout_adapter import Backend, Frontend, backend_request, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments
+from fcos_lab_rollout_adapter import Backend, Frontend, backend_declaration, backend_request, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments
 from fcos_lab_rollout import RELEASE_PATHS, Release, source_release
 
 OLD = Release("1" * 40, "2" * 64)
@@ -25,6 +25,17 @@ SOURCE = "7" * 40
 
 
 class AdapterContract(unittest.TestCase):
+    def test_backend_dispatch_declaration_fails_on_missing_diagnostic(self):
+        root = Path(__file__).resolve().parents[1]
+        helper = (root / "scripts/fcos-lab-rollout-guest.sh").read_text()
+        original = (root / ".secpal/evidence-architecture.json").read_text()
+        declaration = backend_declaration(json.loads(original), helper)
+        ids = {entry["id"] for entry in declaration["external_operations"]}
+        self.assertIn("fcos-lab-backend.controller-dispatch", ids)
+        self.assertIn("fcos-lab-backend.start-background", ids)
+        with self.assertRaises(ValueError):
+            backend_declaration(json.loads(original), helper.replace("backend_step start-background ", ""))
+
     def test_backend_pin_is_complete_and_backend_proof_uses_the_existing_prepare_operation(self):
         fields = {"API_SOURCE_COMMIT": SOURCE, "API_DIGEST": DIGEST,
                   "PHP_FPM_DIGEST": "sha256:" + "6" * 64, "API_PAIR_DIGEST": "sha256:" + "7" * 64,
@@ -191,21 +202,31 @@ class GuestContract(unittest.TestCase):
 
     def test_backend_switch_stops_http_and_background_roles_before_restarting_the_pair(self):
         command = (
-            'source "$1"; units=$2; '
+            'source "$1"; units=$2; migration=$4; '
             'image_digest=$3; '
             'backend_role_ref() { printf "ghcr.io/secpal/api@%s\n" "$image_digest"; }; '
             'untouched_instances() { printf "unrelated identity\n"; }; '
             'matches() { return 0; }; singleton_roles() { return 0; }; check_installed() { return 0; }; '
             'runtime() { case "$*" in '
             '"podman image exists "*) return 0;; '
+            '"systemctl --user show "*"-migrate.service") printf "%s\n" "$migration";; '
             '"systemctl --user show "*) printf "inactive\n";; '
             '"systemctl --user "*) printf "%s\n" "$*";; '
             '*) return 1;; esac; }; switch_backend "{}"'
         )
-        with tempfile.TemporaryDirectory() as temp:
-            result = subprocess.run(["bash", "-c", command, "test", self.guest, temp, DIGEST],
-                                    capture_output=True, text=True, check=True)
         slot = "secpal-int-haproxy01"
+        with tempfile.TemporaryDirectory() as temp:
+            for role in ("api", "php-fpm", "worker-general", "worker-hash-chain", "scheduler"):
+                directory = Path(temp) / f"{slot}-{role}.container.d"
+                directory.mkdir()
+                (directory / "90-rollout.conf").write_text("candidate override")
+            active = subprocess.run(["bash", "-c", command, "test", self.guest, temp, DIGEST, "active"],
+                                    capture_output=True, text=True, check=False)
+            self.assertNotEqual(active.returncode, 0)
+            self.assertEqual(active.stdout, "")
+            result = subprocess.run(["bash", "-c", command, "test", self.guest, temp, DIGEST, "inactive"],
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(list(Path(temp).iterdir()), [])
         background = " ".join(f"{slot}-{role}.service"
                               for role in ("worker-general", "worker-hash-chain", "scheduler"))
         self.assertEqual(result.stdout.splitlines(), [

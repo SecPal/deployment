@@ -91,6 +91,11 @@ The controller and each guest verify the publisher signature on the pair and
 both component indexes, including the pair's exact native platform bindings.
 Each guest stages its native children and validates the staged Nginx and
 PHP-FPM configuration and generated Quadlets before activation.
+Before backend dispatch the controller checks the guest helper's closed
+operation identifiers and applies the existing SecPal evidence architecture
+validator. The temporary admission input combines the protected release's
+canonical declaration with the backend operation identities. Its contents
+do not change the release fingerprint.
 
 The first backend lane admits only candidates with the same PHP major/minor,
 loaded PHP extensions, and file content under the installed FPM image's
@@ -139,7 +144,13 @@ fixed path on each guest and verify `observe` against its accepted baseline.
 Keep the existing policy, sudoers entry, SSH restrictions, state, and pinned
 GitHub CLI. The controller then installs the reviewed adapter and OCI fetcher
 at their existing paths. Keep the timer and its accepted state. Perform this
-upgrade before merging a backend pin change.
+upgrade before merging a backend pin change. Install the reviewed
+`SecPal/.github` evidence architecture checkout at
+`$HOME/.local/lib/secpal-fcos-lab-rollout/evidence-architecture`, with
+`scripts/secpal-evidence-architecture.py` and its existing companion modules
+at their original relative paths. Verify the checkout against the accepted
+authority and retain the controller-owned private installation directory.
+Missing or rejected validator admission blocks the backend operations.
 
 ## One-time guest administrator handoff
 

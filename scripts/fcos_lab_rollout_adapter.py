@@ -173,6 +173,49 @@ def admit_source_text(repo, release):
     return git(repo, "show", f"{release.revision}:{RUNTIME_SOURCE}").decode()
 
 
+def backend_declaration(declaration, helper):
+    stages = set(re.findall(r"\bbackend_step ([a-z][a-z-]+) ", helper))
+    required = {"pair-proof", "native-image", "fpm-payload", "fpm-config", "nginx-config",
+                "database-snapshot", "quadlet-validation", "stop-http", "stop-backend",
+                "install-images", "reload-units", "start-fpm", "start-http", "start-background",
+                "running-identities", "guest-health"}
+    if stages != required:
+        raise ValueError("backend diagnostic coverage differs from the closed operation set")
+    if any(entry["id"].startswith("fcos-lab-backend.") for entry in declaration["external_operations"]):
+        raise ValueError("backend diagnostic scope is already declared")
+    for stage in sorted(stages | {"controller-dispatch", "publisher-read", "guest-transport", "https-health"}):
+        identifier = "fcos-lab-backend." + stage
+        declaration["external_operations"].append({
+            "id": identifier, "reachable": True, "fallible": True, "trusted": True,
+            "diagnostic_identity": {"id": identifier, "kind": "semantic"},
+        })
+    return declaration
+
+
+def admit_backend_dispatch(repo, release):
+    validator = TOOLS / "evidence-architecture/scripts/secpal-evidence-architecture.py"
+    if not validator.is_file() or validator.is_symlink():
+        raise ValueError("installed backend dispatch validator is unavailable")
+    with tempfile.TemporaryDirectory(prefix="fcos-lab-dispatch-") as directory:
+        root = Path(directory)
+        (root / "AGENTS.md").write_bytes(git(repo, "show", f"{release.revision}:AGENTS.md"))
+        declaration_path = ".secpal/evidence-architecture.json"
+        declaration = backend_declaration(
+            json.loads(git(repo, "show", f"{release.revision}:{declaration_path}")),
+            git(repo, "show", f"{release.revision}:scripts/fcos-lab-rollout-guest.sh").decode(),
+        )
+        (root / ".secpal").mkdir()
+        (root / declaration_path).write_text(json.dumps(declaration), encoding="utf-8")
+        subprocess.run([sys.executable, "-I", "-S", validator, "--repository-root", root,
+                        "--repository", "SecPal/deployment", "--dispatch"],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       check=True, timeout=60)
+
+
+def backend_diagnostic(stage):
+    print(f"FCOS lab backend operation failed: fcos-lab-backend.{stage}", file=sys.stderr)
+
+
 def verify_attestation(gh, subject, bundle, source, environment, product):
     subprocess.run(
         [gh, "attestation", "verify", subject, "--bundle", bundle, "--repo", f"SecPal/{product}",
@@ -368,16 +411,29 @@ def main():
         check_host_pin(host, private_file(PRIVATE, host + ".known_hosts").read_bytes())
         private_file(PRIVATE, "rollout_ed25519")
         ssh = ssh_arguments(host, address, PRIVATE)
-        if operation == "prepare":
+        backend_change = False
+        if operation != "observe":
             repo = Path(os.environ["SECPAL_ROLLOUT_STATE"]) / "release.git"
             source = admit_source_text(repo, release)
             prior = admit_source_text(repo, previous)
-            frontend, backend = Frontend.from_source(source), Backend.from_source(source)
-            old_frontend, old_backend = Frontend.from_source(prior), Backend.from_source(prior)
+            backend, old_backend = Backend.from_source(source), Backend.from_source(prior)
+            backend_change = backend != old_backend
+            if backend_change:
+                try:
+                    admit_backend_dispatch(repo, release)
+                except (OSError, ValueError, KeyError, TypeError, RolloutError, subprocess.SubprocessError):
+                    backend_diagnostic("controller-dispatch")
+                    return 1
+        if operation == "prepare":
+            frontend, old_frontend = Frontend.from_source(source), Frontend.from_source(prior)
             if backend != old_backend and frontend == old_frontend:
                 if backend.pair == old_backend.pair or (backend.fpm, backend.nginx) == (old_backend.fpm, old_backend.nginx):
                     return 1
-                message = backend_request(host, platform, release, previous, backend.pair, backend_proof(backend))
+                try:
+                    message = backend_request(host, platform, release, previous, backend.pair, backend_proof(backend))
+                except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                    backend_diagnostic("publisher-read")
+                    return 1
             elif backend == old_backend and frontend.index != old_frontend.index:
                 message = prepare_request(host, platform, release, previous, publisher_children(frontend))
             else:
@@ -392,14 +448,25 @@ def main():
                 stdout=subprocess.PIPE, timeout=30, check=False,
             )
             if checked.returncode or checked.stdout != (release.fingerprint + "\n").encode():
+                if backend_change:
+                    backend_diagnostic("guest-transport")
                 return 1
             try:
                 health(domain, address, settings, release)
             except (OSError, ValueError, KeyError, StopIteration, http.client.HTTPException):
+                if backend_change:
+                    backend_diagnostic("https-health")
                 return 10
         result = subprocess.run(ssh, input=message, timeout=840, check=False)
         if operation == "rollback" and result.returncode == 0:
-            health(domain, address, settings, previous)
+            try:
+                health(domain, address, settings, previous)
+            except (OSError, ValueError, KeyError, StopIteration, http.client.HTTPException):
+                if backend_change:
+                    backend_diagnostic("https-health")
+                return 1
+        if backend_change and result.returncode:
+            backend_diagnostic("guest-transport")
         return result.returncode
     except (OSError, ValueError, KeyError, TypeError, StopIteration, RolloutError,
             http.client.HTTPException, subprocess.SubprocessError):
