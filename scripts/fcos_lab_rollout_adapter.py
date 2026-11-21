@@ -196,6 +196,7 @@ def admit_backend_dispatch(repo, release):
     validator = TOOLS / "evidence-architecture/scripts/secpal-evidence-architecture.py"
     if not validator.is_file() or validator.is_symlink():
         raise ValueError("installed backend dispatch validator is unavailable")
+    validator = validator.resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="fcos-lab-dispatch-") as directory:
         root = Path(directory)
         (root / "AGENTS.md").write_bytes(git(repo, "show", f"{release.revision}:AGENTS.md"))

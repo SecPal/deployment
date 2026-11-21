@@ -144,13 +144,12 @@ fixed path on each guest and verify `observe` against its accepted baseline.
 Keep the existing policy, sudoers entry, SSH restrictions, state, and pinned
 GitHub CLI. The controller then installs the reviewed adapter and OCI fetcher
 at their existing paths. Keep the timer and its accepted state. Perform this
-upgrade before merging a backend pin change. Install the reviewed
+upgrade before merging a backend pin change. Link the existing reviewed
 `SecPal/.github` evidence architecture checkout at
-`$HOME/.local/lib/secpal-fcos-lab-rollout/evidence-architecture`, with
-`scripts/secpal-evidence-architecture.py` and its existing companion modules
-at their original relative paths. Verify the checkout against the accepted
-authority and retain the controller-owned private installation directory.
-Missing or rejected validator admission blocks the backend operations.
+`$HOME/.local/lib/secpal-fcos-lab-rollout/evidence-architecture`. Verify the
+checkout against the accepted authority and confirm its locked dependencies
+are installed. The validator and its companion modules run from the resolved
+checkout. Missing or rejected validator admission blocks backend operations.
 
 ## One-time guest administrator handoff
 
