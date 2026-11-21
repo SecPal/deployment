@@ -2,11 +2,13 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Verify and prepare a draft proposal for the already qualified frontend lane."""
+"""Verify publisher evidence and prepare an FCOS lab release draft."""
 
 import base64
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import hashlib
+from importlib.util import module_from_spec, spec_from_file_location
 from io import BytesIO
 import json
 import os
@@ -19,15 +21,18 @@ import tempfile
 from zipfile import BadZipFile, ZipFile
 
 from fcos_lab_discovery import get, product_candidate, source_relationship
-from fcos_lab_rollout_adapter import DIGEST, IMAGE, RUNTIME_SOURCE as FILE, Frontend
-from fcos_lab_rollout_adapter import publisher_children, verify_frontend_attestation
+from fcos_lab_rollout_adapter import API_IMAGE, DIGEST, IMAGE, RUNTIME_SOURCE as FILE, Backend, Frontend
+from fcos_lab_rollout_adapter import backend_proof, publisher_children, verify_frontend_attestation
 from image_attestation_runtime import CLOUD_GH_RELEASES, stage_gh_cli
 
 UPSTREAM = "SecPal/frontend"
+API = "SecPal/api"
 REPO = "SecPal/deployment"
 WORKFLOW = ".github/workflows/publish-container.yml"
 PUBLICATIONS = f"repos/{UPSTREAM}/actions/workflows/publish-container.yml/runs?branch=main&status=success&per_page=1"
 BRANCH = "fcos-lab-frontend-"
+BACKEND_BRANCH = "fcos-lab-backend-"
+BACKEND_DRAFT_FILE = "docs/fcos-lab-backend-proposal.md"
 SHA = "[a-f0-9]{40}"
 MAX_ARCHIVE = 8 * 1024 * 1024
 
@@ -56,6 +61,55 @@ class Proposal:
     @property
     def publication(self):
         return {"source_commit": self.source, "run_id": self.run_id, "run_attempt": self.run_attempt}
+
+
+@dataclass(frozen=True)
+class BackendProposal:
+    index: str  # The signed pair artifact is the proposal's identity.
+    source: str
+    run_id: int
+    run_attempt: int
+    nginx: str
+    fpm: str
+    nginx_amd64: str
+    nginx_arm64: str
+    fpm_amd64: str
+    fpm_arm64: str
+    expires: str
+
+    def __post_init__(self):
+        if (re.fullmatch(SHA, self.source) is None
+                or len(set((self.index, self.nginx, self.fpm, self.nginx_amd64, self.nginx_arm64,
+                            self.fpm_amd64, self.fpm_arm64))) != 7
+                or any(re.fullmatch(DIGEST, d) is None for d in (self.index, self.nginx, self.fpm,
+                       self.nginx_amd64, self.nginx_arm64, self.fpm_amd64, self.fpm_arm64))
+                or any(type(n) is not int or n <= 0 for n in (self.run_id, self.run_attempt))
+                or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z", self.expires)):
+            raise ValueError("malformed backend proposal")
+
+    @property
+    def publication(self):
+        return {"source_commit": self.source, "run_id": self.run_id, "run_attempt": self.run_attempt}
+
+    def draft_body(self):
+        return (
+            "Refs #93. **Compatibility evidence is outstanding.**\n\n"
+            f"- [API publisher run {self.run_id}, attempt {self.run_attempt}]"
+            f"(https://github.com/{API}/actions/runs/{self.run_id}/attempts/{self.run_attempt})\n"
+            f"- Source `{self.source}`\n"
+            f"- Signed pair `{self.index}`\n"
+            f"- Nginx index `{self.nginx}`\n"
+            f"  - amd64 `{self.nginx_amd64}`\n"
+            f"  - arm64 `{self.nginx_arm64}`\n"
+            f"- PHP-FPM index `{self.fpm}`\n"
+            f"  - amd64 `{self.fpm_amd64}`\n"
+            f"  - arm64 `{self.fpm_arm64}`\n"
+            f"- Signed security evidence deadline `{self.expires}`\n\n"
+            "Before adding the lab pins, complete the isolated PostgreSQL, API, data and queue "
+            "rehearsals on both native architectures. Supply the reviewed pair-bound compatibility "
+            "record and add separate predecessor evidence only if automatic rollback is safe. "
+            "Confirm current security qualification and follow the normal protected-main review.\n"
+        )
 
 
 def publisher_archive(gh, run_id, attempt):
@@ -88,10 +142,10 @@ def publisher_archive(gh, run_id, attempt):
         return tuple(contents.read(name) for name in names)
 
 
-def evidence_agrees(build, source_scan, proposal):
+def evidence_agrees(build, source_scan, proposal, *, upstream=UPSTREAM, image=IMAGE, user="101:101"):
     native = {"linux/amd64": proposal.amd64, "linux/arm64": proposal.arm64}
-    ref = f"https://github.com/{UPSTREAM}"
-    workflow = {"repository": UPSTREAM, "path": WORKFLOW, "commit": proposal.source,
+    ref = f"https://github.com/{upstream}"
+    workflow = {"repository": upstream, "path": WORKFLOW, "commit": proposal.source,
                 "run_id": str(proposal.run_id), "run_attempt": str(proposal.run_attempt)}
     subject = build["subject"]
     platforms = subject["platforms"]
@@ -100,15 +154,15 @@ def evidence_agrees(build, source_scan, proposal):
     scan_bytes = json.dumps(source_scan, sort_keys=True, separators=(",", ":")).encode()
     if (build["schema_version"] != "1.0.0" or build["workflow"] != workflow
             or build["source"]["repository"] != ref or build["source"]["commit"] != proposal.source
-            or subject["repository"] != IMAGE or subject["index_digest"] != proposal.index
+            or subject["repository"] != image or subject["index_digest"] != proposal.index
             or len(platforms) != len(native)
             or {p["platform"]: p["manifest_digest"] for p in platforms} != native
-            or any(p["user"] != "101:101" for p in platforms)
+            or any(p["user"] != user for p in platforms)
             or source_scan["schema_version"] != "secpal-trivy-repository-scan-v5"
             or source_scan["operation"] != {"name": "TRIVY_REPOSITORY_SCAN", "status": "SUCCEEDED"}
             or source_scan["database"]["status"] != "FRESH"
             or source_scan["gate_state"] != "CLEAN"
-            or source_scan["subject"] != {"repository": UPSTREAM, "commit": proposal.source}
+            or source_scan["subject"] != {"repository": upstream, "commit": proposal.source}
             or build["extensions"][ref]["source_security_sha256"] != sha256(scan_bytes)):
         raise ValueError("publisher evidence is not bound to the admitted release")
 
@@ -172,6 +226,74 @@ def candidate(report, current):
     return None if proposal.index == current.index else proposal
 
 
+def verify_backend_publication(report):
+    source, run_id, attempt = (report[k] for k in ("source_commit", "run_id", "run_attempt"))
+    spec = spec_from_file_location("oci_evidence_reader", Path(__file__).with_name("fetch-oci-attestation.py"))
+    reader = module_from_spec(spec)
+    spec.loader.exec_module(reader)
+    discovery = reader.api_publication_evidence(source, run_id, attempt)
+    if discovery is None:
+        return None
+    pair_digest, original_attempt, files = discovery
+    ref = f"https://github.com/{API}"
+    pair = json.loads(files["runtime-pair.json"])
+    expected = {"repository": API, "path": WORKFLOW, "commit": source,
+                "run_id": str(run_id), "run_attempt": str(original_attempt)}
+    if (pair["schema_version"] != "1.0.0" or pair["source"] != {"repository": ref, "commit": source}
+            or pair["workflow"] != expected or set(pair["images"]) != {"nginx", "php-fpm"}):
+        raise ValueError("API discovery record does not match the publisher run")
+    bindings, scans = {}, []
+    for role, key in (("nginx", "nginx"), ("php-fpm", "fpm")):
+        component = pair["images"][role]
+        index = component["reference"].removeprefix(API_IMAGE + "@")
+        manifest, source_scan = (json.loads(files[f"{role}/{name}.json"])
+                                 for name in ("build-evidence", "source-security"))
+        evidence = sha256(files[f"{role}/build-evidence.json"])
+        native = {entry["platform"]: entry["manifest_digest"] for entry in component["platforms"]}
+        proof = Proposal(index, source, run_id, original_attempt,
+                         native["linux/amd64"], native["linux/arm64"], evidence)
+        accepted = {"commit": source, "run_id": str(run_id), "run_attempt": str(attempt)}
+        if (component["build_evidence_sha256"] != evidence
+                or manifest["subject"]["platforms"] != component["platforms"]
+                or manifest["source"].get("runtime") != role
+                or manifest["extensions"][ref]["acceptance_execution"] != accepted
+                or any(p["labels"].get("secpal.dev/runtime-component") != role for p in component["platforms"])):
+            raise ValueError("API component evidence does not bind the signed pair and acceptance attempt")
+        evidence_agrees(manifest, source_scan, proof, upstream=API, image=API_IMAGE, user="secpal")
+        bindings[key] = proof
+        scans.append(source_scan)
+    deadline = min(datetime.fromisoformat(scan["database"]["next_update"]) for scan in scans)
+    expires = deadline.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if deadline <= datetime.now(timezone.utc):
+        return None
+    if source_relationship(get(f"repos/{API}/compare/{source}...main")) not in {"identical", "ahead"}:
+        return None
+    nginx, fpm = bindings["nginx"], bindings["fpm"]
+    with tempfile.TemporaryDirectory(prefix="fcos-lab-api-proposal-") as directory:
+        environment = {"PATH": "/usr/bin:/bin", "HOME": directory, "GH_CONFIG_DIR": directory,
+                       "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1", "GH_TELEMETRY": "false"}
+
+        def run(argv, environment):
+            subprocess.run(argv, env=environment, check=True, timeout=190)
+
+        gh = stage_gh_cli(Path(directory), CLOUD_GH_RELEASES[platform.machine()], run, environment)
+        verified = backend_proof(Backend(source, nginx.index, fpm.index, pair_digest, expires, None), gh=gh)
+        if verified[2] != files["runtime-pair.json"]:
+            raise ValueError("API discovery document differs from the signed pair")
+    return BackendProposal(pair_digest, source, run_id, attempt, nginx.index, fpm.index,
+                           nginx.amd64, nginx.arm64, fpm.amd64, fpm.arm64, expires)
+
+
+def backend_candidate(report, current):
+    if report["source_relationship"] != "ahead" or report["source_commit"] == current.source:
+        return None
+    proposal = verify_backend_publication(report)
+    if proposal is not None and (proposal.index == current.pair
+                                or (proposal.nginx, proposal.fpm) == (current.nginx, current.fpm)):
+        return None
+    return proposal
+
+
 def proposed_file(text, proposal):
     for key, value in (("DIGEST", proposal.index), ("SOURCE_COMMIT", proposal.source)):
         text, count = re.subn(rf'^LAB_FRONTEND_{key} = "[^"\n]+"$', f'LAB_FRONTEND_{key} = "{value}"',
@@ -195,28 +317,39 @@ def publish(proposal, base, text, *, token):
         raise ValueError("invalid deployment base")
     if get(f"repos/{REPO}/git/ref/heads/main")["object"]["sha"] != base:
         return "base changed"
-    current = Frontend.from_source(text)
-    if proposal.index == current.index or proposal.source == current.source:
+    backend = isinstance(proposal, BackendProposal)
+    upstream, prefix_name, lane = (API, BACKEND_BRANCH, "backend") if backend else (UPSTREAM, BRANCH, "frontend")
+    current = Backend.from_source(text) if backend else Frontend.from_source(text)
+    current_index = current.pair if backend else current.index
+    if (proposal.index == current_index or proposal.source == current.source
+            or backend and (proposal.nginx, proposal.fpm) == (current.nginx, current.fpm)):
         return "already accepted"
+    if backend and datetime.fromisoformat(proposal.expires) <= datetime.now(timezone.utc):
+        return "backend publisher security evidence expired"
 
-    candidate_branch = BRANCH + proposal.index.removeprefix("sha256:") + "-"
+    candidate_branch = prefix_name + proposal.index.removeprefix("sha256:") + "-"
     branch = candidate_branch + base
     prefix = f"repos/{REPO}"
     known = get(f"{prefix}/pulls?state=all&base=main&per_page=100", paginate=True)
-    proposals = [pr for pr in known if pr["head"]["ref"].startswith(BRANCH)
+    proposals = [pr for pr in known if pr["head"]["ref"].startswith(prefix_name)
+                 and (not backend or re.fullmatch(r"fcos-lab-backend-[a-f0-9]{64}-[a-f0-9]{40}",
+                                                  pr["head"]["ref"]))
                  and (pr["head"]["repo"] or {}).get("full_name") == REPO]
     for pr in proposals:
         if pr["head"]["ref"].startswith(candidate_branch):
             return f"proposal #{int(pr['number'])} already exists"
     if any(pr["state"] == "open" for pr in proposals):
-        return "another frontend proposal is open"
+        return f"another {lane} proposal is open"
 
-    candidate_run = product_candidate(get(PUBLICATIONS), UPSTREAM)
+    candidate_run = product_candidate(get(PUBLICATIONS.replace(UPSTREAM, upstream)), upstream)
     if (candidate_run != proposal.publication
-            or source_relationship(get(f"repos/{UPSTREAM}/compare/{current.source}...{proposal.source}")) != "ahead"):
+            or source_relationship(get(f"repos/{upstream}/compare/{current.source}...{proposal.source}")) != "ahead"):
         return "publisher candidate changed"
 
-    expected = proposed_file(text, proposal)
+    path = BACKEND_DRAFT_FILE if backend else FILE
+    expected = ("<!--\n" + "SPDX-" + "FileCopyrightText: 2026 SecPal Contributors\n"
+                + "SPDX-" + "License-Identifier: AGPL-3.0-or-later\n-->\n\n"
+                + "# FCOS lab backend proposal\n\n" + proposal.draft_body()) if backend else proposed_file(text, proposal)
     ref = f"refs/heads/{branch}"
     refs = [record for record in get(f"{prefix}/git/matching-refs/heads/{branch}") if record["ref"] == ref]
     if refs:
@@ -229,9 +362,9 @@ def publish(proposal, base, text, *, token):
 
     if tip == base:
         payload = {"branch": {"repositoryNameWithOwner": REPO, "branchName": branch},
-                   "message": {"headline": "Propose the verified FCOS lab frontend image"},
+                   "message": {"headline": f"Propose the verified FCOS lab {lane} release"},
                    "expectedHeadOid": base, "fileChanges": {"additions": [{
-                       "path": FILE, "contents": base64.b64encode(expected.encode()).decode("ascii"),
+                       "path": path, "contents": base64.b64encode(expected.encode()).decode("ascii"),
                    }]}}
         reply = write("POST", "graphql", {
             "query": "mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid}}}",
@@ -242,17 +375,17 @@ def publish(proposal, base, text, *, token):
         raise ValueError("invalid proposal commit")
     commit = get(f"{prefix}/commits/{tip}")
     if ([item["sha"] for item in commit["parents"]] != [base]
-            or [file["filename"] for file in commit["files"]] != [FILE]
+            or [file["filename"] for file in commit["files"]] != [path]
             or commit["commit"]["verification"]["verified"] is not True
-            or get(f"{prefix}/contents/{FILE}?ref={tip}", raw=True) != expected):
-        raise ValueError("the proposal branch does not contain the exact verified pin change")
+            or get(f"{prefix}/contents/{path}?ref={tip}", raw=True) != expected):
+        raise ValueError("the proposal branch differs from the verified proposal")
     if get(f"{prefix}/git/ref/heads/main")["object"]["sha"] != base:
         return "base changed before opening the proposal"
 
     result = write("POST", f"{prefix}/pulls", {
-        "title": f"Propose FCOS lab frontend {proposal.source[:12]}",
+        "title": f"Propose FCOS lab {lane} {proposal.source[:12]}",
         "head": branch, "base": "main", "draft": True,
-        "body": (
+        "body": proposal.draft_body() if backend else (
             f"Refs #93. Frontend lab pin only.\n\n"
             f"- [Publisher run {proposal.run_id}, attempt {proposal.run_attempt}]"
             f"(https://github.com/{UPSTREAM}/actions/runs/{proposal.run_id}/attempts/{proposal.run_attempt})\n"
@@ -272,20 +405,22 @@ def main():
         mode, = sys.argv[1:]
         text = Path(FILE).read_text(encoding="utf-8")
         value = json.load(sys.stdin)
-        if mode == "verify":
-            plan = candidate(value, Frontend.from_source(text))
+        if mode in {"verify", "backend-verify"}:
+            plan = (backend_candidate(value, Backend.from_source(text)) if mode == "backend-verify"
+                    else candidate(value, Frontend.from_source(text)))
             if plan is not None:
                 print(json.dumps(asdict(plan), separators=(",", ":")))
-        elif mode == "publish":
+        elif mode in {"publish", "backend-publish"}:
             token = os.environ.pop("FCOS_FRONTEND_PROPOSAL_WRITE_TOKEN", "")
             if not token:
-                print("FCOS frontend proposal write credential is missing", file=sys.stderr)
+                print("FCOS proposal write credential is missing", file=sys.stderr)
                 return 1
-            print(publish(Proposal(**value), os.environ["GITHUB_SHA"], text, token=token))
+            plan_type = BackendProposal if mode == "backend-publish" else Proposal
+            print(publish(plan_type(**value), os.environ["GITHUB_SHA"], text, token=token))
         else:
             raise ValueError("unsupported proposal operation")
-    except (BadZipFile, KeyError, OSError, TypeError, ValueError, subprocess.SubprocessError):
-        print("FCOS frontend proposal did not pass admission", file=sys.stderr)
+    except (BadZipFile, KeyError, OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError):
+        print("FCOS release proposal did not pass admission", file=sys.stderr)
         return 1
     return 0
 

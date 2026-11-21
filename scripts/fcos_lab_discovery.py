@@ -5,11 +5,13 @@
 """Report candidates from the maintained FCOS lab publishers."""
 
 import json
+from pathlib import Path
 import re
 import subprocess
 import sys
 
-from integration_runtime_contract import API_SOURCE_COMMIT, LAB_FRONTEND_SOURCE_COMMIT
+from fcos_lab_rollout_adapter import Backend, RUNTIME_SOURCE
+from integration_runtime_contract import LAB_FRONTEND_SOURCE_COMMIT
 
 
 def greatest_version(tags, pattern):
@@ -85,7 +87,9 @@ def get(endpoint, *, raw=False, paginate=False, gh="gh"):
 
 def discover():
     result = {}
-    products = {"api": API_SOURCE_COMMIT, "frontend": LAB_FRONTEND_SOURCE_COMMIT}
+    contract = Path(__file__).with_name(Path(RUNTIME_SOURCE).name)
+    products = {"api": Backend.from_source(contract.read_text(encoding="utf-8")).source,
+                "frontend": LAB_FRONTEND_SOURCE_COMMIT}
     for name, commit in products.items():
         repo = f"SecPal/{name}"
         endpoint = (

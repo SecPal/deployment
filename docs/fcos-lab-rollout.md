@@ -85,8 +85,26 @@ The backend lane uses a complete reviewed set of lab-only pins in
 `LAB_API_PAIR_DIGEST`, `LAB_API_DIGEST`, `LAB_PHP_FPM_DIGEST` and
 `LAB_API_VEX_EXPIRES_AT`, plus `LAB_API_COMPATIBILITY_SHA256`. Use the admitted publisher artifact and current
 security qualification for that exact pair. Keep the frontend pin, fixture
-source and production pins fixed within a backend release. Backend proposals
-are prepared through review.
+source and production pins fixed within a backend release.
+
+The existing discovery workflow also checks the latest successful API
+publisher on upstream `main` against the active lab backend source pin. It
+uses the API publisher's public run-scoped GHCR discovery tag to locate a
+candidate, then verifies the exact signed pair digest, native indexes and
+both images' signed security and smoke evidence. For a retried acceptance,
+the original candidate attempt and the successful acceptance attempt must
+agree with their respective signed records. Stale security evidence and
+unchanged or non-descendant sources are ineligible. The proposal's security
+deadline comes from the signed source scan database deadlines.
+
+Backend discovery needs no cross-repository artifact credential. The
+repository-scoped proposal write secret already used by the frontend
+can create the signed backend draft. The draft changes only
+`docs/fcos-lab-backend-proposal.md`, which sits outside the timer's release
+inputs. It adds no lab pins or compatibility record. Before approving a
+rollout, replace the draft file with the exact reviewed pins and the
+compatibility record described below. Review the private rehearsals and
+the validity of the exact publisher evidence again before merging.
 
 The controller and each guest verify the publisher signature on the pair and
 both component indexes, including the pair's exact native platform bindings.
@@ -434,26 +452,87 @@ independently verified and reconciled to the desired fixture. Removing the
 active drop-in without reconciliation would change the image on a later
 restart.
 
-## Separate Fedora CoreOS maintenance
+## Host maintenance and workload assignment
 
-The lab uses Zincati with automatic updates disabled. Keep the container
-rollout paused during an OS update. A separate maintenance job should use
-the same three-host order and stop on failed acceptance.
+The FCOS host contract applies before assigning an application. Confirm
+the Fedora-signed deployment, authenticated SSH, direct WireGuard, SELinux
+Enforcing, and rootless Podman and the user Quadlet generator. Apply
+the same host maintenance configuration after enrolling a new host or
+when maintaining an existing host. A host with no workload still has a
+complete host acceptance.
 
-1. Admit the Fedora-signed Stable artifact and its exact native digest for
-   both architectures. Verify the guest booted from the expected deployment
-   and that a known-good previous boot and independent recovery are available.
-2. Stage one host with
-   `rpm-ostree rebase --disallow-downgrade ostree-image-signed:docker://quay.io/fedora/fedora-coreos@sha256:<native-digest>`.
-   Check `rpm-ostree status --json` for the staged version and
-   `container-image-reference-digest`. Stop if a driver blocks staging.
-3. Reboot that host. Check the booted digest, WireGuard, SELinux, the rootless
-   user services and the complete application and security acceptance. Keep
-   the previous deployment available until these checks succeed.
-4. Continue only after acceptance. On failure, keep the other hosts at their
-   current revisions and use the previous deployment or independent recovery
-   on the failing host.
+The five-minute container timer covers the enrolled SecPal fixture.
+Frontend deployment is live-qualified. The backend lane admits reviewed
+migration-free API, FPM, worker and scheduler changes through the shared
+release coordinator. Its first live code change still needs qualification.
+Discovery of PostgreSQL, HAProxy, CrowdSec, SPOA and CRS versions is
+informational. Those roles have no automatic rollout in this fixture.
+CX23, CX33 and CAX21 in that order is the qualified frontend test sequence.
+Before changing a host's fixture assignment, pause its existing lab rollout
+and reconcile enrollment. Independently administered workloads use their
+own reviewed pins and lifecycle.
 
-A local [Zincati maintenance window](https://coreos.github.io/zincati/usage/updates-strategy/)
-schedules node-local reboots. The separate maintenance job owns fleet
-serialization and uses a distinct authority and journal.
+### Stage Stable updates without automatic reboots
+
+Keep `[updates] enabled = false` in
+`/etc/zincati/config.d/90-secpal-controlled.toml`. Use one native update
+driver at a time. For an enrolled host tracking
+`ostree-image-signed:docker://quay.io/fedora/fedora-coreos:stable`, set
+`AutomaticUpdatePolicy=stage` in the `[Daemon]` section of
+`/etc/rpm-ostreed.conf`. As the host administrator, run
+`rpm-ostree reload`, then `systemctl enable --now rpm-ostreed-automatic.timer`.
+Verify the active timer, its last service result, the staged and booted
+deployments, and the unchanged boot ID.
+[rpm-ostreed configuration](https://github.com/coreos/rpm-ostree/blob/main/man/rpm-ostreed.conf.xml)
+
+Staging queues a deployment for the next boot. Treat an unrelated reboot as
+an activation risk while a candidate is staged. Pause the timer with
+`systemctl disable --now rpm-ostreed-automatic.timer` and allow an in-flight
+staging operation to settle before inspecting or selecting a version. For an
+exact test version, admit the signed native digest and stage it with
+`rpm-ostree rebase --disallow-downgrade ostree-image-signed:docker://quay.io/fedora/fedora-coreos@sha256:<native-digest>`.
+Leave the timer paused for the test. Resume automatic staging after returning
+to signed Stable tracking. Pause the independent container timer during
+reproducible tests or OS activation, and select SecPal versions by exact
+reviewed release inputs. Resume the applicable timers after read-back.
+
+### Activate one staged host at a time
+
+1. Pause the container rollout for the affected enrollment. Confirm no
+   rollout or staging transaction is active. Inspect the staged signed
+   version/digest, current boot ID and recovery access. Retain the known-good
+   deployment. Compare the installed workload assignments before reboot.
+2. Authorize the reboot for one host. Reauthenticate over the direct
+   WireGuard path. Require a different boot ID, the expected deployment,
+   matching SSH identity, SELinux Enforcing and a functioning rootless
+   Podman/Quadlet setup. Test ready services only for the workloads assigned
+   there. For the SecPal fixture, include database, worker, scheduler, HTTPS
+   and AppSec acceptance.
+3. Record acceptance before authorizing another host. Halt on a failed read-back
+   and retain the previous deployment or use independent recovery. A weekly
+   local window cannot enforce the previous host's readiness.
+   [Zincati update strategies](https://coreos.github.io/zincati/usage/updates-strategy/)
+
+Automatic staging and reboot acceptance are separate. Keep unattended
+reboots disabled until the health gate and recovery have been qualified on
+the selected topology.
+
+### Restore the controller after reinstalling secpal.dev
+
+1. Restore authenticated access and the direct WireGuard peers using the
+   existing restricted management path. Restore protected keys only for
+   deliberately retained identities. After guest reprovisioning, authenticate
+   the regenerated SSH and WireGuard identities and revoke the old peer
+   through the existing restricted replacement workflow before enrollment.
+2. From reviewed main, restore the controller user, its installed scripts,
+   verification tools, timer and user-manager state. Restore the private
+   rollout key, SSH host pins, witness settings and state directory from
+   protected custody. Use the controller setup above for file paths and
+   ownership. Keep the container timer disabled during recovery.
+3. Check the actual assignments over authenticated SSH. For the still-enrolled
+   fixture run `observe` on every member and reconcile the accepted
+   fingerprint with the saved controller journal. Use the documented
+   `--recover` path for a blocked journal only after all members agree.
+   Check protected main and then resume the timer. Hosts without this
+   assignment retain their local OS maintenance policy and require no
+   SecPal rollout enrollment.

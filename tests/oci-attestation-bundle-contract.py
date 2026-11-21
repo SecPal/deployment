@@ -218,6 +218,45 @@ class RegistryFixture:
 
 
 class OciAttestationBundleContractTest(unittest.TestCase):
+    def test_api_discovery_binds_public_run_tag_and_exact_evidence_blobs(self):
+        fetcher = load_fetcher()
+        source = "1" * 40
+        media_type = fetcher.OCI_MANIFEST_MEDIA_TYPE
+        names = ("runtime-pair.json", "php-fpm/build-evidence.json", "php-fpm/source-security.json",
+                 "nginx/build-evidence.json", "nginx/source-security.json")
+        evidence = {name: json_bytes({"artifact": name}) for name in names}
+        manifest = json_bytes({
+            "schemaVersion": 2, "mediaType": media_type,
+            "artifactType": "application/vnd.secpal-build-evidence.v1+json",
+            "layers": [{"mediaType": "application/json", "digest": digest(body), "size": len(body),
+                        "annotations": {"org.opencontainers.image.title": name}}
+                       for name, body in evidence.items()],
+        })
+        seen = []
+
+        def request(url, headers, _, allowed):
+            seen.append(url)
+            if url == fetcher.TOKEN_URL:
+                return 200, "application/json", "", json_bytes({"token": "anonymous"})
+            self.assertEqual(headers["Authorization"], "Bearer anonymous")
+            if url == f"{fetcher.REGISTRY_BASE_URL}/manifests/runtime-pair-{source}-42-2":
+                self.assertIn(404, allowed)
+                return 404, "application/json", "", b"{}"
+            if url == f"{fetcher.REGISTRY_BASE_URL}/manifests/runtime-pair-{source}-42-1":
+                return 200, media_type, digest(manifest), manifest
+            for body in evidence.values():
+                if url == fetcher.blob_url(digest(body)):
+                    return 200, "application/octet-stream", "", body if intact else body + b"x"
+            self.fail(f"unexpected API discovery URL {url}")
+
+        intact = True
+        self.assertEqual(fetcher.api_publication_evidence(source, 42, 2, request),
+                         (digest(manifest), 1, evidence))
+        self.assertEqual(len(seen), 8)
+        intact = False
+        with self.assertRaises(ValueError):
+            fetcher.api_publication_evidence(source, 42, 2, request)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.fetcher = load_fetcher()
