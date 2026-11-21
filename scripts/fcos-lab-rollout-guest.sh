@@ -230,8 +230,16 @@ singleton_roles() {
     [[ $observed == "$expected" ]]
 }
 
+worker_hostname() {
+    local name
+    name=$(runtime podman container inspect --format '{{.Config.Hostname}}' "$slot-worker-$1") || return 1
+    [[ $name =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]{0,63}$ ]] || return 1
+    printf '%s\n' "$name"
+}
+
 health() {
-    local expected=$1 queue worker key reply i seed
+    local expected=$1 queue worker key reply i seed receipt
+    local general hash_chain
     [[ $(getenforce) == Enforcing ]] &&
         [[ $(runtime podman info --format '{{.Host.Security.Rootless}}') == true ]] &&
         [[ $(security podman info --format '{{.Host.Security.Rootless}}') == true ]] &&
@@ -242,9 +250,14 @@ health() {
         [[ $(sql "SELECT count(*) FROM organizational_units WHERE id='$witness' AND name='FCOS lab rollout witness'") == 1 ]] &&
         [[ $(sql 'SHOW ssl; SHOW password_encryption;') == $'on\nscram-sha-256' ]] || return 1
     singleton_roles || return 1
+    general=$(worker_hostname general) && hash_chain=$(worker_hostname hash-chain) &&
+        [[ $general != "$hash_chain" ]] || return 1
     seed=$(jq -er .fingerprint <<< "$expected") || return 1
     for queue in default activity-hash-chain; do
-        case "$queue" in default) worker=general;; activity-hash-chain) worker="hash-chain";; esac
+        case "$queue" in
+            default) worker=general; receipt=$general;;
+            activity-hash-chain) worker="hash-chain"; receipt=$hash_chain;;
+        esac
         key="integration-queue-$worker-${seed:0:24}"
         runtime podman exec "$slot-php-fpm" php /run/secpal/phase-b-runtime-probe.php \
             cache-forget "$key" || return 1
@@ -252,10 +265,10 @@ health() {
             queue-dispatch "$key" "$queue" || return 1
         for ((i=0; i<30; i++)); do
             reply=$(runtime podman exec "$slot-php-fpm" php /run/secpal/phase-b-runtime-probe.php cache-get "$key") || return 1
-            [[ $reply == "worker-$worker" ]] && break
+            [[ $reply == "$receipt" ]] && break
             sleep 1
         done
-        [[ $reply == "worker-$worker" ]] || return 1
+        [[ $reply == "$receipt" ]] || return 1
     done
 }
 

@@ -127,6 +127,17 @@ class GuestContract(unittest.TestCase):
             (Path(directory) / "99-extra.conf").touch()
             self.assertNotEqual(check(expected), 0)
 
+    def test_worker_identity_comes_from_the_actual_container(self):
+        command = ('source "$1"; reported="$2"; '
+                   'runtime() { [[ "${!#}" == secpal-int-haproxy01-worker-general ]] && '
+                   'printf "%s\n" "$reported"; }; worker_hostname general')
+        for hostname, accepted in (("deadbeefcafe", True), ("worker-general", True), ("", False), ("wrong role!", False)):
+            with self.subTest(hostname=hostname):
+                checked = subprocess.run(["bash", "-c", command, "test", self.guest, hostname],
+                                         capture_output=True, text=True, check=False)
+                self.assertEqual(checked.returncode == 0, accepted)
+                self.assertEqual(checked.stdout, hostname + "\n" if accepted else "")
+
     def test_recording_acceptance_rechecks_fixture_drift(self):
         command = ('source "$1"; state=$2; '
                    'matches() { [[ "$1" == checked ]]; }; '
