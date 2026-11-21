@@ -33,9 +33,12 @@ admission for every upstream are separate from detecting changes on main.
 
 ## First release scope
 
-The adapter accepts a change to the frontend index digest and its publisher
-commit in `scripts/integration_runtime_contract.py`. All other release inputs
-must match the enrolled fixture. The first lane rejects API changes, migrations,
+The adapter accepts the lab-only `LAB_FRONTEND_DIGEST` and
+`LAB_FRONTEND_SOURCE_COMMIT` overrides in
+`scripts/integration_runtime_contract.py`. Without these overrides it reads
+the frontend pin of the enrolled fixture. Production rendering continues to
+use its existing frontend pin. All other release inputs must match the
+enrolled fixture. The first lane rejects API changes, migrations,
 PostgreSQL upgrades, HAProxy and AppSec updates, and changes to the deployment
 layout. Health checks still exercise PostgreSQL, the application and inspection
 services on every host. This keeps those services running during frontend

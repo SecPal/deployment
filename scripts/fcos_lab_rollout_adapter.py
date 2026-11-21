@@ -51,8 +51,9 @@ class Frontend:
 
     @classmethod
     def from_source(cls, text):
-        index, = re.findall(rf'^FRONTEND_DIGEST = "({DIGEST})"$', text, re.MULTILINE)
-        source, = re.findall(r'^FRONTEND_SOURCE_COMMIT = "([a-f0-9]{40})"$', text, re.MULTILINE)
+        prefix = "LAB_" if re.search(r"^LAB_FRONTEND_(DIGEST|SOURCE_COMMIT)[ \t]*=", text, re.MULTILINE) else ""
+        index, = re.findall(rf'^{prefix}FRONTEND_DIGEST = "({DIGEST})"$', text, re.MULTILINE)
+        source, = re.findall(rf'^{prefix}FRONTEND_SOURCE_COMMIT = "([a-f0-9]{{40}})"$', text, re.MULTILINE)
         return cls(index, source)
 
 

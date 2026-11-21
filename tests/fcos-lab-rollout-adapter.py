@@ -99,7 +99,12 @@ class AdapterContract(unittest.TestCase):
     def test_exact_frontend_fields_are_data(self):
         source = f'FRONTEND_DIGEST = "{DIGEST}"\nFRONTEND_SOURCE_COMMIT = "{SOURCE}"\n'
         self.assertEqual(Frontend.from_source(source), Frontend(DIGEST, SOURCE))
-        for malformed in (source + source, source.replace(DIGEST, "stable"), source.replace(SOURCE, "main")):
+        lab_digest = "sha256:" + "9" * 64
+        lab_source = "8" * 40
+        override = f'LAB_FRONTEND_DIGEST = "{lab_digest}"\nLAB_FRONTEND_SOURCE_COMMIT = "{lab_source}"\n'
+        self.assertEqual(Frontend.from_source(source + override), Frontend(lab_digest, lab_source))
+        for malformed in (source + source, source.replace(DIGEST, "stable"), source.replace(SOURCE, "main"),
+                          source + override.splitlines()[0] + "\n", source + override + override):
             with self.assertRaises(ValueError):
                 Frontend.from_source(malformed)
 
@@ -232,9 +237,11 @@ class GuestContract(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("frozen\n")
             fixture = root / "scripts/integration_runtime_contract.py"
-            fixture.write_text(f'FRONTEND_DIGEST = "{DIGEST}"\nFRONTEND_SOURCE_COMMIT = "{SOURCE}"\nAPP_ROLE = "original"\n')
+            original = f'FRONTEND_DIGEST = "{DIGEST}"\nFRONTEND_SOURCE_COMMIT = "{SOURCE}"\nAPP_ROLE = "original"\n'
+            fixture.write_text(original)
             foundation = commit()
-            fixture.write_text(f'FRONTEND_DIGEST = "sha256:{"9" * 64}"\nFRONTEND_SOURCE_COMMIT = "{SOURCE}"\nAPP_ROLE = "original"\n')
+            lab = f'LAB_FRONTEND_DIGEST = "sha256:{"9" * 64}"\nLAB_FRONTEND_SOURCE_COMMIT = "{"8" * 40}"\n'
+            fixture.write_text(original + lab)
             candidate = commit()
             command = (
                 'source "$1"; git_object() { git -C "$repo" "$@"; }; '
@@ -251,9 +258,13 @@ class GuestContract(unittest.TestCase):
             accepted = guest(candidate)
             self.assertEqual(accepted.returncode, 0)
             self.assertEqual(accepted.stdout.decode().strip(), source_release(root, candidate).fingerprint)
-            fixture.write_text(f'FRONTEND_DIGEST = "sha256:{"9" * 64}"\nFRONTEND_SOURCE_COMMIT = "{SOURCE}"\nAPP_ROLE = "changed"\n')
+            fixture.write_text(original.replace(DIGEST, "sha256:" + "a" * 64) + lab)
             self.assertNotEqual(guest(commit()).returncode, 0)
-            fixture.write_text(f'FRONTEND_DIGEST = "sha256:{"9" * 64}"\nFRONTEND_SOURCE_COMMIT = "{SOURCE}"\nAPP_ROLE = "original"\n')
+            fixture.write_text((original + lab).replace('APP_ROLE = "original"', 'APP_ROLE = "changed"'))
+            self.assertNotEqual(guest(commit()).returncode, 0)
+            fixture.write_text(original + lab.splitlines()[0] + "\n")
+            self.assertNotEqual(guest(commit()).returncode, 0)
+            fixture.write_text(original + lab)
             (root / "scripts/production-migrate.php").write_text("changed\n")
             self.assertNotEqual(guest(commit()).returncode, 0)
 

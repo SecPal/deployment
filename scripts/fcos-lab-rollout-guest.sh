@@ -56,15 +56,19 @@ admitted() {
 }
 
 frontend_field() {
-    local rows
-    rows=$(git_object show "$1:$contract" | sed -nE "s/^$2 = \"($3)\"$/\1/p") || return 1
+    local source rows prefix=''
+    source=$(git_object show "$1:$contract") || return 1
+    if grep -Eq '^LAB_FRONTEND_(DIGEST|SOURCE_COMMIT)[[:blank:]]*=' <<< "$source"; then
+        prefix=LAB_
+    fi
+    rows=$(sed -nE "s/^${prefix}$2 = \"($3)\"$/\1/p" <<< "$source") || return 1
     [[ $rows =~ ^$3$ ]] || return 1
     printf '%s\n' "$rows"
 }
 
 without_frontend_pin() {
     git_object show "$1:$contract" |
-        sed -E '/^FRONTEND_DIGEST = "sha256:[a-f0-9]{64}"$/d; /^FRONTEND_SOURCE_COMMIT = "[a-f0-9]{40}"$/d'
+        sed -E '/^LAB_FRONTEND_DIGEST = "sha256:[a-f0-9]{64}"$/d; /^LAB_FRONTEND_SOURCE_COMMIT = "[a-f0-9]{40}"$/d'
 }
 
 frontend_only() {
