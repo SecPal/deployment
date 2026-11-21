@@ -78,6 +78,7 @@ class AdapterContract(unittest.TestCase):
                 return ""
             self.assertEqual((path, method, status), (base, "POST", 201))
             self.assertEqual(data["parent_id"], witness)
+            self.assertEqual(data["name"], f"FCOS rollout receipt {NEW.fingerprint}")
             self.assertEqual(data["type"], "company")
             self.assertFalse(units, "repeated acceptance must not create another child")
             units[child] = {"id": child, "name": data["name"], "type": data["type"]}
