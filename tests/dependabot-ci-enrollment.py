@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Keep deployment automation restricted to qualified CI-only Actions updates."""
+"""Keep deployment automation restricted to qualified CI and hook sources."""
 import json
 from pathlib import Path
 import unittest
@@ -8,7 +8,7 @@ import yaml
 
 
 class EnrollmentContract(unittest.TestCase):
-    def test_only_accepted_ci_workflows_can_enroll(self):
+    def test_only_accepted_ci_workflows_and_pre_commit_manifest_can_enroll(self):
         path = Path('.github/workflows/dependabot-auto-merge.yml')
         self.assertTrue(path.is_file(), 'native immutable caller must exist')
         workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
@@ -28,7 +28,8 @@ class EnrollmentContract(unittest.TestCase):
         )
         self.assertEqual(job['with']['phase'], '2')
         self.assertEqual(job['with']['merge-method'], 'squash')
-        self.assertEqual(job['with']['allowed-ecosystems'], 'github_actions')
+        self.assertEqual(job['with']['allowed-ecosystems'], 'github_actions,npm_and_yarn,pre_commit')
+        self.assertEqual(job['with']['pre-commit-path'], '.pre-commit-config.yaml')
         self.assertEqual(json.loads(job['with']['workflow-paths']), [
             '.github/workflows/quality.yml',
             '.github/workflows/local-integration.yml',

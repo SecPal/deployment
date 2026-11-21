@@ -29,10 +29,11 @@ concurrency:
 jobs:
   auto-merge:
     # yamllint disable-line rule:line-length
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@86c039ae722eb14680c6c3601a68befd643380f9 # main
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@cbf343cf4521690f15157d6602a53ef9d0662ec7 # main
     with:
       phase: "2"
       merge-method: squash
-      allowed-ecosystems: github_actions
+      allowed-ecosystems: github_actions,npm_and_yarn,pre_commit
+      pre-commit-path: ".pre-commit-config.yaml"
       workflow-paths: >-
         [".github/workflows/quality.yml",".github/workflows/local-integration.yml",".github/workflows/rocky-evidence-architecture.yml"]
