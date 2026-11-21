@@ -6,7 +6,7 @@
 
 import ast
 import base64
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 import hashlib
 import http.client
 import http.cookiejar
@@ -66,7 +66,7 @@ class Backend:
     fpm: str
     pair: str
     expires: str
-    compatibility: str | None
+    compatibility: str | None = field(compare=False)
 
     @classmethod
     def from_source(cls, text):
@@ -321,8 +321,8 @@ def backend_proof(backend, *, gh=None):
             return subject.read_bytes(), bundle.read_bytes()
 
         document_path = root / "runtime-pair.json"
-        binding = asdict(backend)
-        del binding["pair"]
+        binding = {"source": backend.source, "nginx": backend.nginx,
+                   "fpm": backend.fpm, "expires": backend.expires}
         pair = fetch("pair", backend.pair, "--runtime-pair-output", document_path,
                      "--reviewed-lab-runtime-pair", json.dumps(binding))
         document = document_path.read_bytes()

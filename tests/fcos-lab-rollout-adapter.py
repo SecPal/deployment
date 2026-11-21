@@ -12,10 +12,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from fcos_lab_rollout_adapter import Backend, Frontend, backend_declaration, backend_request, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments, verify_dispatch_authority
+from fcos_lab_rollout_adapter import Backend, Frontend, backend_declaration, backend_proof, backend_request, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments, verify_dispatch_authority
 from fcos_lab_rollout import RELEASE_PATHS, Release, source_release
 
 OLD = Release("1" * 40, "2" * 64)
@@ -63,6 +64,7 @@ class AdapterContract(unittest.TestCase):
         self.assertIsNone(Backend.from_source(original).compatibility)
         record = f'LAB_API_COMPATIBILITY_SHA256 = "{"a" * 64}"\n'
         self.assertEqual(Backend.from_source(original + override + record).compatibility, "a" * 64)
+        self.assertEqual(Backend.from_source(original + override + record), Backend.from_source(original))
         for broken in (original + 'LAB_API_DIGEST = "latest"\n', original + override + override,
                        original + override + 'LAB_API_COMPATIBILITY_SHA256 = "bad"\n',
                        original + override + record * 2):
@@ -73,6 +75,31 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(head + b"\n", request_line("prepare", "cx23", "linux/amd64", NEW, OLD,
                                                     fields["API_PAIR_DIGEST"]))
         self.assertEqual([base64.b64decode(row) for row in proof], [b"evidence"] * 7)
+
+    def test_backend_publisher_binding_excludes_deployment_compatibility_digest(self):
+        backend = Backend(SOURCE, DIGEST, "sha256:" + "6" * 64, "sha256:" + "7" * 64,
+                          "2027-01-01T00:00:00Z", "a" * 64)
+        platforms = [{"platform": f"linux/{arch}", "manifest_digest": "sha256:" + str(index) * 64}
+                     for index, arch in enumerate(("amd64", "arm64"), 1)]
+        index = {"manifests": [
+            {"platform": {"os": "linux", "architecture": entry["platform"].split("/")[1]},
+             "mediaType": "application/vnd.oci.image.manifest.v1+json",
+             "digest": entry["manifest_digest"]} for entry in platforms]}
+
+        def fetch(command, **_):
+            command[3].write_text(json.dumps(index))
+            command[4].write_bytes(b"bundle")
+            if "--reviewed-lab-runtime-pair" in command:
+                self.assertEqual(json.loads(command[-1]), {
+                    "source": backend.source, "nginx": backend.nginx,
+                    "fpm": backend.fpm, "expires": backend.expires})
+                command[-3].write_text(json.dumps({
+                    "images": {role: {"platforms": platforms} for role in ("nginx", "php-fpm")}}))
+
+        with (patch("fcos_lab_rollout_adapter.verified_gh"),
+              patch("fcos_lab_rollout_adapter.verify_attestation"),
+              patch("fcos_lab_rollout_adapter.subprocess.run", side_effect=fetch)):
+            self.assertEqual(len(backend_proof(backend)), 7)
 
     def test_closed_transport_and_pinned_ssh(self):
         identity = Path("/private/identities")
