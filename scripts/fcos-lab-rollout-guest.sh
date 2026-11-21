@@ -203,6 +203,19 @@ validate_quadlet() {
         grep -Fq -- "$ref" "$scratch/generated"
 }
 
+restart_frontend() {
+    local gateway
+    runtime systemctl --user is-active --quiet "$slot-edge-network.service" &&
+        gateway=$(runtime podman container inspect --format '{{.Id}} {{.State.StartedAt}}' "$slot-gateway") &&
+        [[ -n $gateway ]] || return 1
+    # Keep ordering dependencies while avoiding restart propagation through
+    # the running gateway's Requires= relationship to the frontend.
+    timeout 160 runuser -u secpal-runtime -- env -i PATH=/usr/bin:/usr/sbin HOME=/var/home/secpal-runtime \
+        XDG_RUNTIME_DIR=/run/user/20000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus \
+        systemctl --user --job-mode=ignore-requirements restart "$frontend.service" &&
+        [[ $(runtime podman container inspect --format '{{.Id}} {{.State.StartedAt}}' "$slot-gateway") == "$gateway" ]]
+}
+
 switch_image() {
     local record=$1 ref kind
     ref=$(jq -er .ref <<< "$record") && kind=$(jq -er .kind <<< "$record") || return 1
@@ -216,9 +229,7 @@ switch_image() {
     fi
     sync -f "$dropin_dir" &&
         runtime systemctl --user daemon-reload &&
-        timeout 160 runuser -u secpal-runtime -- env -i PATH=/usr/bin:/usr/sbin HOME=/var/home/secpal-runtime \
-            XDG_RUNTIME_DIR=/run/user/20000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus \
-            systemctl --user restart "$frontend.service" &&
+        restart_frontend &&
         matches "$record" && check_installed
 }
 

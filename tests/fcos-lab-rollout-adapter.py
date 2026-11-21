@@ -185,6 +185,24 @@ class GuestContract(unittest.TestCase):
             self.assertEqual(result.returncode == 0, layout == "intact")
             self.assertEqual(result.stdout, "accepted.json checked\n" if layout == "intact" else "")
 
+    def test_frontend_restart_preserves_the_live_gateway(self):
+        command = (
+            'source "$1"; scenario=$2; running_gateway=original; '
+            'runtime() { case "$1" in '
+            'systemctl) [[ "$*" == "systemctl --user is-active --quiet $slot-edge-network.service" '
+            '&& "$scenario" != missing-network ]];; '
+            'podman) [[ "${!#}" == "$slot-gateway" ]] && printf "%s\n" "$running_gateway";; '
+            '*) return 1;; esac; }; '
+            'timeout() { [[ "$*" == *"systemctl --user --job-mode=ignore-requirements restart $frontend.service" ]] '
+            '|| return 1; if [[ "$scenario" == gateway-changed ]]; then running_gateway=replaced; fi; }; '
+            'restart_frontend'
+        )
+        for scenario, allowed in (("healthy", True), ("missing-network", False), ("gateway-changed", False)):
+            with self.subTest(scenario=scenario):
+                result = subprocess.run(["bash", "-c", command, "test", self.guest, scenario],
+                                        capture_output=True, check=False)
+                self.assertEqual(result.returncode == 0, allowed)
+
     def test_guest_needs_exact_publisher_evidence(self):
         command = ('source "$1"; scratch=$2; peer="$scratch"; platform=linux/amd64; '
                    'verify_publisher "$3" "$4"')
