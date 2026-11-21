@@ -25,6 +25,8 @@ digest='sha256:[a-f0-9]{64}'
 sha='[a-f0-9]{40}'
 hash='[a-f0-9]{64}'
 roles=(api php-fpm frontend worker-general worker-hash-chain scheduler postgres gateway crowdsec spoa)
+backend_roles=(api php-fpm worker-general worker-hash-chain scheduler)
+api_image=ghcr.io/secpal/api
 
 deny() { printf '%s\n' 'FCOS lab guest rejected the operation' >&2; exit 1; }
 
@@ -66,16 +68,37 @@ frontend_field() {
     printf '%s\n' "$rows"
 }
 
-without_frontend_pin() {
+without_lab_pins() {
     git_object show "$1:$contract" |
-        sed -E '/^LAB_FRONTEND_DIGEST = "sha256:[a-f0-9]{64}"$/d; /^LAB_FRONTEND_SOURCE_COMMIT = "[a-f0-9]{40}"$/d'
+        sed -E '/^LAB_(FRONTEND|API|PHP_FPM|API_PAIR)_DIGEST = "sha256:[a-f0-9]{64}"$/d;
+                /^LAB_(FRONTEND|API)_SOURCE_COMMIT = "[a-f0-9]{40}"$/d;
+                /^LAB_API_VEX_EXPIRES_AT = "[0-9T:Z-]+"$/d'
 }
 
-frontend_only() {
+lab_pins_only() {
     git_object diff --quiet --no-ext-diff "$foundation" "$1" -- "${frozen_sources[@]}" &&
-        [[ $(without_frontend_pin "$foundation") == "$(without_frontend_pin "$1")" ]] &&
+        [[ $(without_lab_pins "$foundation") == "$(without_lab_pins "$1")" ]] &&
         frontend_field "$1" FRONTEND_DIGEST "$digest" >/dev/null &&
         frontend_field "$1" FRONTEND_SOURCE_COMMIT "$sha" >/dev/null
+}
+
+backend_field() {
+    local source rows prefix=''
+    source=$(git_object show "$1:$contract") || return 1
+    if grep -Eq '^LAB_(API_(DIGEST|PAIR_DIGEST|SOURCE_COMMIT|VEX_EXPIRES_AT)|PHP_FPM_DIGEST)[[:blank:]]*=' <<< "$source"; then
+        prefix=LAB_
+    fi
+    rows=$(sed -nE "s/^${prefix}$2 = \"($3)\"$/\1/p" <<< "$source") || return 1
+    [[ $rows =~ ^$3$ ]] || return 1
+    printf '%s\n' "$rows"
+}
+
+backend_pins() {
+    backend_field "$1" API_SOURCE_COMMIT "$sha" &&
+        backend_field "$1" API_PAIR_DIGEST "$digest" &&
+        backend_field "$1" API_DIGEST "$digest" &&
+        backend_field "$1" PHP_FPM_DIGEST "$digest" &&
+        backend_field "$1" API_VEX_EXPIRES_AT '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z'
 }
 
 parse_request() {
@@ -102,12 +125,23 @@ trusted_directory() {
 
 frozen_layout() {
     exact_rollout_dropin || return 1
+    local role directory
+    for role in "${backend_roles[@]}"; do
+        directory=$units/$slot-$role.container.d
+        if [[ -e $directory || -L $directory ]]; then
+            trusted_directory "$directory" '0 0 755' &&
+                [[ -z $(find "$directory" -mindepth 1 -maxdepth 1 ! -name '90-rollout.conf' -print -quit) ]] || return 1
+        fi
+    done
     # These fixture inputs contain configuration and code. The private
     # runtime, data, certificate and credential directories are outside them.
     local -a paths=("$units"/"$slot"-*.* "$security_units"/"$slot"-*.*)
     local path
     for path in "${paths[@]}"; do
         [[ $path == "$dropin_dir" ]] && continue
+        for role in "${backend_roles[@]}"; do
+            [[ $path != "$units/$slot-$role.container.d" ]] || continue 2
+        done
         [[ -f $path && ! -L $path ]] || return 1
         sha256sum -- "$path" || return 1
     done
@@ -146,6 +180,9 @@ unchanged_roles() {
     local role directory configured observed
     for role in "${roles[@]}"; do
         [[ $role == frontend ]] && continue
+        if [[ ${1:-} == fixed ]] && backend_role "$role"; then
+            continue
+        fi
         directory=$units
         case "$role" in crowdsec|spoa) directory=$security_units;; esac
         configured=$(sed -n 's/^Image=//p' "$directory/$slot-$role.container") || return 1
@@ -156,7 +193,33 @@ unchanged_roles() {
     done
 }
 
+backend_role() {
+    case "$1" in api|php-fpm|worker-general|worker-hash-chain|scheduler) return 0;; esac
+    return 1
+}
+
 render_dropin() { printf '[Container]\nImage=%s\n' "$1"; }
+
+backend_matches() {
+    local record=$1 role override component ref config expected actual
+    for role in "${backend_roles[@]}"; do
+        override=$units/$slot-$role.container.d/90-rollout.conf
+        component=fpm
+        [[ $role != api ]] || component=nginx
+        if jq -e 'has("backend")' <<< "$record" >/dev/null; then
+            ref=$(jq -er --arg role "$component" '.backend[$role].ref' <<< "$record") &&
+                config=$(jq -er --arg role "$component" '.backend[$role].config' <<< "$record") || return 1
+            [[ $ref =~ ^"$api_image@"$digest$ && $config =~ ^$hash$ &&
+                -f $override && ! -L $override ]] && cmp -s "$override" <(render_dropin "$ref") || return 1
+            expected="$ref ${ref##*@} $config true false true"
+        else
+            [[ ! -e $override && ! -L $override ]] || return 1
+            expected=$(sed -n "s/^$role //p" "$store/roles") || return 1
+        fi
+        actual=$(inspect_role "$role") || return 1
+        [[ $actual == "$expected" ]] || return 1
+    done
+}
 
 matches() {
     local record=$1 ref config kind observed
@@ -168,7 +231,7 @@ matches() {
         [[ -f $dropin && ! -L $dropin ]] && cmp -s "$dropin" <(render_dropin "$ref") || return 1
     fi
     observed=$(inspect_role frontend) || return 1
-    [[ $observed == "$ref ${ref##*@} $config true false true" ]]
+    [[ $observed == "$ref ${ref##*@} $config true false true" ]] && backend_matches "$record"
 }
 
 record() {
@@ -186,7 +249,8 @@ save() {
 
 check_installed() {
     frozen_layout > "$scratch/layout" && cmp -s "$scratch/layout" "$store/layout" &&
-        unchanged_roles > "$scratch/roles" && cmp -s "$scratch/roles" "$store/roles"
+        unchanged_roles fixed > "$scratch/roles" &&
+        cmp -s "$scratch/roles" <(grep -vE '^(api|php-fpm|worker-general|worker-hash-chain|scheduler) ' "$store/roles")
 }
 
 validate_quadlet() {
@@ -304,34 +368,271 @@ decode_publisher_evidence() {
 }
 
 verify_publisher() {
-    local index=$1 publisher=$2 version expected_hash
+    local index=$1 publisher=$2
     decode_publisher_evidence "$scratch/proof" || return 1
     [[ $(sha256sum < "$scratch/index.json") == "${index#sha256:}  -" ]] || return 1
+    verify_signature "$scratch/index.json" "$scratch/bundle.json" "$publisher" frontend
+}
+
+verify_signature() {
+    local subject=$1 bundle=$2 publisher=$3 product=$4 version expected_hash
     expected_hash=$(awk -v platform="$platform" '$1 == platform { print $2 }' "$peer/gh-binary-sha256.txt") || return 1
     [[ $expected_hash =~ ^$hash$ && $(sha256sum < "$peer/gh") == "$expected_hash  -" ]] || return 1
     version=$("$peer/gh" --version) || return 1
     [[ $version == 'gh version 2.97.0 '* ]] || return 1
     env -i PATH=/usr/bin:/bin HOME="$scratch" GH_CONFIG_DIR="$scratch" GH_PROMPT_DISABLED=1 \
         GH_NO_UPDATE_NOTIFIER=1 GH_NO_EXTENSION_UPDATE_NOTIFIER=1 GH_TELEMETRY=false timeout 120 \
-        "$peer/gh" attestation verify "$scratch/index.json" --bundle "$scratch/bundle.json" \
-        --repo SecPal/frontend --signer-workflow SecPal/frontend/.github/workflows/publish-container.yml \
+        "$peer/gh" attestation verify "$subject" --bundle "$bundle" \
+        --repo "SecPal/$product" --signer-workflow "SecPal/$product/.github/workflows/publish-container.yml" \
         --source-ref refs/heads/main --source-digest "$publisher" --signer-digest "$publisher" \
         --deny-self-hosted-runners --hostname github.com > /dev/null 2>&1
 }
 
+verify_backend() {
+    local publisher=$1 pair=$2 nginx=$3 fpm=$4 role index native descriptor
+    local -a rows names=(pair pair.bundle.json document fpm fpm.bundle.json nginx nginx.bundle.json)
+    mapfile -t rows < "$scratch/proof"
+    ((${#rows[@]} == ${#names[@]})) || return 1
+    local i size=0
+    for i in "${!names[@]}"; do
+        [[ ${rows[i]} =~ ^[A-Za-z0-9+/]+={0,2}$ ]] || return 1
+        size=$((size + ${#rows[i]} + 1))
+        printf '%s' "${rows[i]}" | base64 --decode > "$scratch/${names[i]}" || return 1
+    done
+    [[ $size == "$(stat -c %s -- "$scratch/proof")" &&
+        $(sha256sum < "$scratch/pair") == "${pair#sha256:}  -" ]] || return 1
+    verify_signature "$scratch/pair" "$scratch/pair.bundle.json" "$publisher" api || return 1
+    descriptor=$(jq -er '
+        select(.schemaVersion == 2 and .mediaType == "application/vnd.oci.image.manifest.v1+json"
+            and .artifactType == "application/vnd.secpal-build-evidence.v1+json")
+        | [.layers[] | select(.annotations["org.opencontainers.image.title"] == "runtime-pair.json")]
+        | select(length == 1) | .[0] | select(.mediaType == "application/json") | .digest' "$scratch/pair") || return 1
+    [[ $descriptor =~ ^$digest$ && $(sha256sum < "$scratch/document") == "${descriptor#sha256:}  -" ]] || return 1
+    jq -e --arg source "$publisher" '
+        .schema_version == "1.0.0" and .source == {repository:"https://github.com/SecPal/api",commit:$source}
+        and (.images | keys) == ["nginx","php-fpm"]' "$scratch/document" >/dev/null || return 1
+    for role in fpm nginx; do
+        index=$nginx
+        local component=nginx
+        if [[ $role == fpm ]]; then index=$fpm; component=php-fpm; fi
+        [[ $(sha256sum < "$scratch/$role") == "${index#sha256:}  -" ]] &&
+            verify_signature "$scratch/$role" "$scratch/$role.bundle.json" "$publisher" api || return 1
+        native=$(jq -er --slurpfile pair "$scratch/document" --arg component "$component" \
+            --arg image "$api_image@$index" --arg platform "$platform" '
+            select(.schemaVersion == 2 and .mediaType == "application/vnd.oci.image.index.v1+json")
+            | [.manifests[] | select(.mediaType == "application/vnd.oci.image.manifest.v1+json")
+               | {platform:(.platform.os + "/" + .platform.architecture),digest}] | sort_by(.platform)
+            | select(map(.platform) == ["linux/amd64","linux/arm64"] and (map(.digest)|unique|length) == 2)
+            | select(all(.[]; .digest | test("^sha256:[0-9a-f]{64}$")))
+            | select($pair[0].images[$component].reference == $image)
+            | select(. == ($pair[0].images[$component].platforms
+               | map({platform,digest:.manifest_digest}) | sort_by(.platform)))
+            | .[] | select(.platform == $platform) | .digest' "$scratch/$role") || return 1
+        printf '%s\n' "$native" > "$scratch/$role.child" || return 1
+    done
+}
+
+backend_database() {
+    local version cluster ledger schema
+    version=$(sql 'SHOW server_version_num') &&
+        [[ $version =~ ^18[0-9]{4}$ ]] &&
+        cluster=$(sql 'SELECT system_identifier FROM pg_control_system()') &&
+        [[ $cluster == "$(cat "$store/cluster-id")" ]] &&
+        ledger=$(sql "SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY id), '[]'::jsonb) FROM public.migrations AS m") &&
+        [[ $ledger == \[* && $ledger != '[]' ]] &&
+        schema=$(runtime podman exec "$slot-postgres" pg_dump --schema-only -U secpal_fixture_admin -d secpal |
+            sed -E '/^\\(un)?restrict /d' | sha256sum) || return 1
+    printf '%s\n' "$version" "$cluster" "$ledger" "$schema" | sha256sum | cut -d ' ' -f 1
+}
+
+same_backend_database() {
+    if [[ ! $1 =~ ^$hash$ || $(backend_database) != "$1" ]]; then
+        printf '%s\n' 'Backend compatibility rejected: PostgreSQL identity, schema or migration ledger differs' >&2
+        return 1
+    fi
+}
+
+run_staged() {
+    local image=$1 executable=$2
+    shift 2
+    runtime podman --default-mounts-file=/dev/null run --rm --pull=never --network=none \
+        --cap-drop=all --security-opt=no-new-privileges --read-only --http-proxy=false \
+        --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m --user 10001:10001 --entrypoint "$executable" "$image" "$@"
+}
+
+fpm_payload() {
+    # shellcheck disable=SC2016 # PHP receives a literal program.
+    run_staged "$1" /usr/local/bin/php -r '
+        $modules = get_loaded_extensions();
+        sort($modules, SORT_STRING);
+        if (!in_array("pdo_pgsql", $modules, true)) exit(1);
+        $files = [];
+        foreach (["/app", "/usr/local/etc/php", "/usr/local/etc/php-fpm.d"] as $root) {
+            $tree = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
+            foreach ($tree as $entry) {
+                if ($entry->isLink()) {
+                    $target = $entry->getRealPath();
+                    if ($target === false || !str_starts_with($target, $root . "/")) exit(1);
+                    $files[$entry->getPathname()] = ["link", readlink($entry->getPathname())];
+                    continue;
+                }
+                $hash = $entry->isFile() ? hash_file("sha256", $entry->getPathname()) : false;
+                if ($hash === false) exit(1);
+                $files[$entry->getPathname()] = $hash;
+            }
+        }
+        ksort($files, SORT_STRING);
+        echo hash("sha256", json_encode([PHP_MAJOR_VERSION, PHP_MINOR_VERSION, $modules, $files], JSON_THROW_ON_ERROR)), "\n";
+    '
+}
+
+backend_role_ref() {
+    local record=$1 component=fpm
+    [[ $2 != api ]] || component=nginx
+    if jq -e 'has("backend")' <<< "$record" >/dev/null; then
+        jq -er --arg component "$component" '.backend[$component].ref' <<< "$record"
+    else
+        sed -n "s/^Image=//p" "$units/$slot-$2.container"
+    fi
+}
+
+validate_backend_quadlets() {
+    local record=$1 role path ref
+    mkdir "$scratch/quadlets" || return 1
+    chmod 0755 "$scratch" "$scratch/quadlets" || return 1
+    for path in "$units"/"$slot"-*.{container,network,volume}; do
+        [[ -f $path ]] || continue
+        install -m 0644 "$path" "$scratch/quadlets/" || return 1
+    done
+    for role in "${backend_roles[@]}"; do
+        path=$scratch/quadlets/$slot-$role.container.d
+        ref=$(backend_role_ref "$record" "$role") &&
+            mkdir -m 0755 "$path" &&
+            render_dropin "$ref" > "$path/90-rollout.conf" && chmod 0644 "$path/90-rollout.conf" || return 1
+    done
+    runtime env QUADLET_UNIT_DIRS="$scratch/quadlets" \
+        /usr/lib/systemd/system-generators/podman-system-generator --user --dryrun > "$scratch/generated" || return 1
+    for role in api php-fpm; do
+        ref=$(backend_role_ref "$record" "$role") &&
+            grep -Fq -- "$ref" "$scratch/generated" || return 1
+    done
+}
+
+prepare_backend() {
+    local installed=$1 pins=$2 old_pins=$3 publisher pair nginx fpm expires snapshot component ref config old before after
+    local -a values previous_values
+    mapfile -t values <<< "$pins"
+    mapfile -t previous_values <<< "$old_pins"
+    [[ ${#values[@]} == 5 && ${#previous_values[@]} == 5 ]] || return 1
+    publisher=${values[0]} pair=${values[1]} nginx=${values[2]} fpm=${values[3]} expires=${values[4]}
+    [[ $child == "$pair" && $nginx != "$fpm" && $pair != "$nginx" && $pair != "$fpm" &&
+        $pair != "${previous_values[1]}" && ( $nginx != "${previous_values[2]}" || $fpm != "${previous_values[3]}" ) &&
+        $(frontend_field "$revision" FRONTEND_DIGEST "$digest") == "$(frontend_field "$previous" FRONTEND_DIGEST "$digest")" &&
+        $(frontend_field "$revision" FRONTEND_SOURCE_COMMIT "$sha") == "$(frontend_field "$previous" FRONTEND_SOURCE_COMMIT "$sha")" ]] || return 1
+    backend_expiry "$expires" && verify_backend "$publisher" "$pair" "$nginx" "$fpm" || return 1
+    local images='{}' native raw user digest_seen architecture
+    for component in fpm nginx; do
+        native=$(cat "$scratch/$component.child") || return 1
+        ref="$api_image@$native"
+        runtime env DOCKER_CONFIG="$scratch" podman pull --quiet --authfile "$scratch/auth.json" --platform "$platform" "$ref" >/dev/null || return 1
+        raw=$(runtime podman image inspect --format '{{.Id}} {{.Digest}} {{.Architecture}} {{.Config.User}}' "$ref") || return 1
+        read -r config digest_seen architecture user <<< "$raw"
+        [[ $digest_seen == "$native" && $architecture == "${platform#linux/}" &&
+            $user =~ ^(10001(:10001)?|secpal)$ ]] || return 1
+        config=$(normalize_image "$config") &&
+            images=$(jq -c --arg key "$component" --arg ref "$ref" --arg config "$config" \
+                '.[$key]={ref:$ref,config:$config}' <<< "$images") || return 1
+    done
+    old=$(backend_role_ref "$installed" php-fpm) &&
+        ref=$(jq -er .fpm.ref <<< "$images") &&
+        before=$(fpm_payload "$old") && after=$(fpm_payload "$ref") || return 1
+    if [[ ! $before =~ ^$hash$ || $before != "$after" ]]; then
+        printf '%s\n' 'Backend compatibility rejected: application payload or PHP contract differs' >&2
+        return 1
+    fi
+    run_staged "$ref" /usr/local/sbin/php-fpm -t >/dev/null 2>&1 || return 1
+    ref=$(jq -er .nginx.ref <<< "$images") &&
+        run_staged "$ref" /usr/sbin/nginx -t >/dev/null 2>&1 || return 1
+    singleton_roles && snapshot=$(backend_database) || return 1
+    local candidate
+    candidate=$(jq -c --arg revision "$revision" --arg fingerprint "$wanted" --arg pair "$pair" \
+        --arg expires "$expires" --argjson images "$images" \
+        '.revision=$revision | .fingerprint=$fingerprint | .backend=($images+{pair:$pair,expires:$expires})' <<< "$installed") &&
+        validate_backend_quadlets "$candidate" || return 1
+    save prepared.json "$(jq -cn --argjson before "$installed" --argjson next "$candidate" --arg database "$snapshot" \
+        '{before:$before,next:$next,database:$database}')"
+}
+
+backend_expiry() {
+    local expires now
+    expires=$(date -u -d "$1" +%s) && now=$(date -u +%s) && ((now < expires))
+}
+
+untouched_instances() {
+    local role account identity
+    for role in frontend postgres gateway crowdsec spoa; do
+        account=runtime
+        case "$role" in crowdsec|spoa) account=security;; esac
+        identity=$("$account" podman container inspect --format '{{.Id}} {{.State.StartedAt}}' "$slot-$role") || return 1
+        [[ -n $identity ]] || return 1
+        printf '%s %s\n' "$role" "$identity"
+    done
+}
+
+switch_backend() {
+    local record=$1 role ref override service untouched
+    local -a services=()
+    for role in "${backend_roles[@]}"; do
+        services+=("$slot-$role.service")
+        ref=$(backend_role_ref "$record" "$role") &&
+            [[ $ref =~ ^"$api_image@"$digest$ ]] &&
+            runtime podman image exists "$ref" || return 1
+    done
+    untouched=$(untouched_instances) &&
+        runtime systemctl --user --job-mode=ignore-requirements stop "$slot-api.service" &&
+        runtime systemctl --user --job-mode=ignore-requirements stop "${services[@]:1}" || return 1
+    for service in "${services[@]}"; do
+        [[ $(runtime systemctl --user show --value -p ActiveState "$service") == inactive ]] || return 1
+    done
+    for role in "${backend_roles[@]}"; do
+        override=$units/$slot-$role.container.d
+        if jq -e 'has("backend")' <<< "$record" >/dev/null; then
+            if [[ ! -e $override ]]; then mkdir -m 0755 "$override" || return 1; fi
+            trusted_directory "$override" '0 0 755' || return 1
+            ref=$(backend_role_ref "$record" "$role") &&
+                render_dropin "$ref" > "$override/.next" &&
+                chmod 0644 "$override/.next" &&
+                mv -T -- "$override/.next" "$override/90-rollout.conf" || return 1
+        else
+            rm -f -- "$override/90-rollout.conf" "$override/.next" || return 1
+        fi
+        if [[ -d $override ]]; then sync -f "$override" || return 1; fi
+    done
+    runtime systemctl --user daemon-reload &&
+        runtime systemctl --user start "$slot-php-fpm.service" &&
+        runtime systemctl --user start "$slot-api.service" &&
+        runtime systemctl --user start "${services[@]:2}" &&
+        matches "$record" && singleton_roles && check_installed &&
+        [[ $(untouched_instances) == "$untouched" ]]
+}
+
 prepare() {
-    local installed=$1 pin_ref publisher native ref config candidate
+    local installed=$1 pin_ref publisher native ref config candidate new_backend old_backend
     [[ $(jq -r .fingerprint <<< "$installed") == "$prior" && $(jq -r .revision <<< "$installed") == "$previous" ]] &&
         matches "$installed" && refresh && admitted "$revision" "$wanted" && admitted "$previous" "$prior" &&
         git_object merge-base --is-ancestor "$previous" "$revision" &&
-        frontend_only "$revision" && frontend_only "$previous" || return 1
+        lab_pins_only "$revision" && lab_pins_only "$previous" || return 1
+    new_backend=$(backend_pins "$revision") && old_backend=$(backend_pins "$previous") || return 1
+    printf '{"auths":{}}\n' > "$scratch/auth.json" || return 1
+    chmod 0711 "$scratch" && chmod 0644 "$scratch/auth.json" || return 1
+    if [[ $new_backend != "$old_backend" ]]; then
+        prepare_backend "$installed" "$new_backend" "$old_backend"
+        return
+    fi
     pin_ref=$(frontend_field "$revision" FRONTEND_DIGEST "$digest") || return 1
     publisher=$(frontend_field "$revision" FRONTEND_SOURCE_COMMIT "$sha") || return 1
     [[ $pin_ref != "$(frontend_field "$previous" FRONTEND_DIGEST "$digest")" ]] || return 1
     verify_publisher "$pin_ref" "$publisher" || return 1
-    printf '{"auths":{}}\n' > "$scratch/auth.json"
-    chmod 0711 "$scratch"
-    chmod 0644 "$scratch/auth.json"
     native=$(jq -er --arg arch "${platform#linux/}" \
         '.manifests | map(select(.platform.os == "linux" and .platform.architecture == $arch))
          | select(length == 1) | .[0].digest' "$scratch/index.json") || return 1
@@ -343,6 +644,8 @@ prepare() {
     config=$(normalize_image "${BASH_REMATCH[1]}") || return 1
     validate_quadlet "$ref" || return 1
     candidate=$(record "$revision" "$wanted" "$ref" "$config" update "$pin_ref") || return 1
+    candidate=$(jq -c --argjson previous "$installed" '
+        if $previous|has("backend") then .backend=$previous.backend else . end' <<< "$candidate") || return 1
     save prepared.json "$(jq -cn --argjson before "$installed" --argjson next "$candidate" '{before:$before,next:$next}')"
 }
 
@@ -373,7 +676,7 @@ main() {
     done
     exec 9>"$store/lock"
     flock -n 9 || deny
-    local installed prepared before next
+    local installed prepared before next database
     scratch=$(mktemp -d /var/tmp/secpal-fcos-rollout.XXXXXXXX)
     trap 'rm -rf -- "$scratch"' EXIT
 
@@ -427,6 +730,43 @@ main() {
     next=$(jq -ec '.next' <<< "$prepared") || deny
     [[ $(jq -r '[.revision,.fingerprint]|join(" ")' <<< "$before") == "$previous $prior" &&
         $(jq -r '[.revision,.fingerprint]|join(" ")' <<< "$next") == "$revision $wanted" ]] || deny
+    database=$(jq -er '.database // ""' <<< "$prepared") || deny
+    if [[ -n $database ]]; then
+        same_backend_database "$database" || deny
+        case "$operation" in
+            activate)
+                backend_expiry "$(jq -er .backend.expires <<< "$next")" || deny
+                if ! matches "$next"; then
+                    matches "$before" || deny
+                    singleton_roles || deny
+                    if ! switch_backend "$next"; then
+                        same_backend_database "$database" || deny
+                        switch_backend "$before" || deny
+                        deny
+                    fi
+                fi
+                same_backend_database "$database" || deny
+                ;;
+            accept)
+                matches "$next" || deny
+                backend_expiry "$(jq -er .backend.expires <<< "$next")" || deny
+                health "$next" || exit 10
+                same_backend_database "$database" || deny
+                persist_accepted "$next" || deny
+                ;;
+            rollback)
+                [[ $installed == "$before" ]] || deny
+                if ! matches "$before"; then
+                    matches "$next" || deny
+                    switch_backend "$before" || deny
+                fi
+                health "$before" || deny
+                same_backend_database "$database" || deny
+                persist_accepted "$before" || deny
+                ;;
+        esac
+        return
+    fi
     case "$operation" in
         activate)
             if ! matches "$next"; then

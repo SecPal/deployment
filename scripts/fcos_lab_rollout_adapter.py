@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Authenticated adapter for the initial frontend-only FCOS lab rollout."""
+"""Authenticated adapter for FCOS lab frontend and backend rollouts."""
 
 import base64
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import hashlib
 import http.client
 import http.cookiejar
@@ -36,6 +36,7 @@ from image_attestation_runtime import EXPECTED_GH_VERSION
 
 DIGEST = r"sha256:[0-9a-f]{64}"
 IMAGE = "ghcr.io/secpal/frontend"
+API_IMAGE = "ghcr.io/secpal/api"
 OPERATIONS = {"observe", "prepare", "activate", "accept", "rollback"}
 RUNTIME_SOURCE = "scripts/integration_runtime_contract.py"
 PRIVATE = Path.home() / ".config/secpal-fcos-lab-rollout"
@@ -55,6 +56,30 @@ class Frontend:
         index, = re.findall(rf'^{prefix}FRONTEND_DIGEST = "({DIGEST})"$', text, re.MULTILINE)
         source, = re.findall(rf'^{prefix}FRONTEND_SOURCE_COMMIT = "([a-f0-9]{{40}})"$', text, re.MULTILINE)
         return cls(index, source)
+
+
+@dataclass(frozen=True)
+class Backend:
+    source: str
+    nginx: str
+    fpm: str
+    pair: str
+    expires: str
+
+    @classmethod
+    def from_source(cls, text):
+        fields = {"API_SOURCE_COMMIT": "[a-f0-9]{40}", "API_DIGEST": DIGEST,
+                  "PHP_FPM_DIGEST": DIGEST, "API_PAIR_DIGEST": DIGEST,
+                  "API_VEX_EXPIRES_AT": r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z"}
+        overlay = any(re.search(rf"^LAB_{name}[ \t]*=", text, re.MULTILINE) for name in fields)
+        values = []
+        for name, pattern in fields.items():
+            identifier = ("LAB_" if overlay else "") + name
+            value, = re.findall(rf'^{identifier} = "({pattern})"$', text, re.MULTILINE)
+            values.append(value)
+        if len(set(values[1:4])) != 3:
+            raise ValueError("backend pair and indexes must be distinct")
+        return cls(*values)
 
 
 def native_children(data):
@@ -120,6 +145,16 @@ def prepare_request(host, platform, candidate, previous, proof):
     return message
 
 
+def backend_request(host, platform, candidate, previous, pair, proof):
+    message = request_line("prepare", host, platform, candidate, previous, pair)
+    if len(proof) != 7 or not all(proof):
+        raise ValueError("incomplete backend pair proof")
+    message += b"".join(base64.b64encode(document) + b"\n" for document in proof)
+    if len(message) > 2 * 1024 * 1024:
+        raise ValueError("publisher evidence is too large")
+    return message
+
+
 def private_file(directory, name):
     path = directory / name
     parent = directory.lstat()
@@ -131,21 +166,39 @@ def private_file(directory, name):
     return path
 
 
-def admit_source(repo, release):
+def admit_source_text(repo, release):
     git(repo, "merge-base", "--is-ancestor", release.revision, "refs/remotes/release/main")
     if source_release(repo, release.revision) != release:
         raise ValueError("release fingerprint differs from protected source")
-    return Frontend.from_source(git(repo, "show", f"{release.revision}:{RUNTIME_SOURCE}").decode())
+    return git(repo, "show", f"{release.revision}:{RUNTIME_SOURCE}").decode()
 
 
-def verify_frontend_attestation(gh, subject, bundle, source, environment):
+def verify_attestation(gh, subject, bundle, source, environment, product):
     subprocess.run(
-        [gh, "attestation", "verify", subject, "--bundle", bundle, "--repo", "SecPal/frontend",
-         "--signer-workflow", "SecPal/frontend/.github/workflows/publish-container.yml",
+        [gh, "attestation", "verify", subject, "--bundle", bundle, "--repo", f"SecPal/{product}",
+         "--signer-workflow", f"SecPal/{product}/.github/workflows/publish-container.yml",
          "--source-ref", "refs/heads/main", "--source-digest", source,
          "--signer-digest", source, "--deny-self-hosted-runners", "--hostname", "github.com"],
         env=environment, check=True, timeout=120, stdout=subprocess.DEVNULL,
     )
+
+def verify_frontend_attestation(gh, subject, bundle, source, environment):
+    verify_attestation(gh, subject, bundle, source, environment, "frontend")
+
+
+def verified_gh(gh, environment):
+    local_platform = {"x86_64": "linux/amd64", "aarch64": "linux/arm64"}[machine()]
+    expected, = (
+        line.split()[1] for line in
+        Path(__file__).with_name("fcos-lab-gh-binary-sha256.txt").read_text(encoding="ascii").splitlines()
+        if line.startswith(local_platform + " ")
+    )
+    with gh.open("rb") as executable:
+        if hashlib.file_digest(executable, "sha256").hexdigest() != expected:
+            raise ValueError("wrong GitHub CLI executable digest")
+    version = subprocess.check_output([gh, "--version"], timeout=15, env=environment).splitlines()[0]
+    if not version.startswith(f"gh version {EXPECTED_GH_VERSION} ".encode()):
+        raise ValueError("wrong GitHub CLI version")
 
 
 def publisher_children(frontend, *, gh=None):
@@ -157,18 +210,7 @@ def publisher_children(frontend, *, gh=None):
             GH_NO_UPDATE_NOTIFIER="1", GH_NO_EXTENSION_UPDATE_NOTIFIER="1", GH_TELEMETRY="false",
         )
         gh = Path(gh) if gh else TOOLS / "gh"
-        local_platform = {"x86_64": "linux/amd64", "aarch64": "linux/arm64"}[machine()]
-        expected, = (
-            line.split()[1] for line in
-            Path(__file__).with_name("fcos-lab-gh-binary-sha256.txt").read_text(encoding="ascii").splitlines()
-            if line.startswith(local_platform + " ")
-        )
-        with gh.open("rb") as executable:
-            if hashlib.file_digest(executable, "sha256").hexdigest() != expected:
-                raise ValueError("wrong GitHub CLI executable digest")
-        version = subprocess.check_output([gh, "--version"], timeout=15, env=environment).splitlines()[0]
-        if not version.startswith(f"gh version {EXPECTED_GH_VERSION} ".encode()):
-            raise ValueError("wrong GitHub CLI version")
+        verified_gh(gh, environment)
         index, bundle = path / "index.json", path / "bundle.json"
         subprocess.run(
             [sys.executable, "-I", str(TOOLS / "fetch-oci-attestation.py"), index, bundle,
@@ -178,6 +220,38 @@ def publisher_children(frontend, *, gh=None):
         verify_frontend_attestation(gh, index, bundle, frontend.source, environment)
         subject = index.read_bytes()
         return native_children(subject), subject, bundle.read_bytes()
+
+
+def backend_proof(backend, *, gh=None):
+    with tempfile.TemporaryDirectory(prefix="fcos-lab-pair-") as temporary:
+        root = Path(temporary)
+        environment = {"PATH": "/usr/bin:/bin", "HOME": temporary, "GH_CONFIG_DIR": temporary,
+                       "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1", "GH_TELEMETRY": "false"}
+        gh = Path(gh) if gh else TOOLS / "gh"
+        verified_gh(gh, environment)
+
+        def fetch(role, digest, *options):
+            subject, bundle = root / (role + ".json"), root / (role + ".bundle.json")
+            subprocess.run([sys.executable, "-I", str(TOOLS / "fetch-oci-attestation.py"), subject, bundle,
+                            API_IMAGE, digest, "secpal/api", *options], env=environment, check=True,
+                           timeout=150, stdout=subprocess.DEVNULL)
+            verify_attestation(gh, subject, bundle, backend.source, environment, "api")
+            return subject.read_bytes(), bundle.read_bytes()
+
+        document_path = root / "runtime-pair.json"
+        binding = asdict(backend)
+        del binding["pair"]
+        pair = fetch("pair", backend.pair, "--runtime-pair-output", document_path,
+                     "--reviewed-lab-runtime-pair", json.dumps(binding))
+        document = document_path.read_bytes()
+        images = json.loads(document)["images"]
+        fpm = fetch("php-fpm", backend.fpm)
+        nginx = fetch("nginx", backend.nginx)
+        for role, subject in (("php-fpm", fpm[0]), ("nginx", nginx[0])):
+            subjects = images[role]["platforms"]
+            if len(subjects) != 2 or {p["platform"]: p["manifest_digest"] for p in subjects} != native_children(subject):
+                raise ValueError("native indexes do not match the signed runtime pair")
+        return (*pair, document, *fpm, *nginx)
 
 
 class Network(HTTPSHandler):
@@ -296,11 +370,18 @@ def main():
         ssh = ssh_arguments(host, address, PRIVATE)
         if operation == "prepare":
             repo = Path(os.environ["SECPAL_ROLLOUT_STATE"]) / "release.git"
-            frontend = admit_source(repo, release)
-            prior = admit_source(repo, previous)
-            if frontend.index == prior.index:
+            source = admit_source_text(repo, release)
+            prior = admit_source_text(repo, previous)
+            frontend, backend = Frontend.from_source(source), Backend.from_source(source)
+            old_frontend, old_backend = Frontend.from_source(prior), Backend.from_source(prior)
+            if backend != old_backend and frontend == old_frontend:
+                if backend.pair == old_backend.pair or (backend.fpm, backend.nginx) == (old_backend.fpm, old_backend.nginx):
+                    return 1
+                message = backend_request(host, platform, release, previous, backend.pair, backend_proof(backend))
+            elif backend == old_backend and frontend.index != old_frontend.index:
+                message = prepare_request(host, platform, release, previous, publisher_children(frontend))
+            else:
                 return 1
-            message = prepare_request(host, platform, release, previous, publisher_children(frontend))
         else:
             message = request_line(operation, host, platform, release, previous)
         if operation in {"accept", "rollback"}:

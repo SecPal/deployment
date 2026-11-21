@@ -67,19 +67,48 @@ remains on major 18 and its approved image layout. CRS also needs ruleset
 authenticity. Version proposals use immutable publisher identities. SecPal's
 product SemVer release decisions remain with the product publishers.
 
-## First release scope
+## Migration-free release lanes
 
 The adapter accepts the lab-only `LAB_FRONTEND_DIGEST` and
 `LAB_FRONTEND_SOURCE_COMMIT` overrides in
 `scripts/integration_runtime_contract.py`. Without these overrides it reads
 the frontend pin of the enrolled fixture. Production rendering continues to
-use its existing frontend pin. All other release inputs must match the
-enrolled fixture. The first lane rejects API changes, migrations,
-PostgreSQL upgrades, HAProxy and AppSec updates, and changes to the deployment
-layout. Health checks still exercise PostgreSQL, the application and inspection
+use its existing frontend pin. The frontend lane updates that image alone.
+Health checks still exercise PostgreSQL, the application and inspection
 services on every host. This keeps those services running during frontend
 activation and makes the previous frontend a compatible rollback target.
 Qualification of other components can extend these same five operations.
+
+The backend lane uses a complete reviewed set of lab-only pins in
+`scripts/integration_runtime_contract.py`: `LAB_API_SOURCE_COMMIT`,
+`LAB_API_PAIR_DIGEST`, `LAB_API_DIGEST`, `LAB_PHP_FPM_DIGEST` and
+`LAB_API_VEX_EXPIRES_AT`. Use the admitted publisher artifact and current
+security qualification for that exact pair. Keep the frontend pin, fixture
+source and production pins fixed within a backend release. Backend proposals
+are prepared through review.
+
+The controller and each guest verify the publisher signature on the pair and
+both component indexes, including the pair's exact native platform bindings.
+Each guest stages its native children and validates the staged Nginx and
+PHP-FPM configuration and generated Quadlets before activation.
+
+The first backend lane admits only candidates with the same PHP major/minor,
+loaded PHP extensions, and file content under the installed FPM image's
+`/app`, PHP and FPM configuration trees. This includes application code,
+Composer dependencies and migration files. The comparison runs in networkless
+containers without runtime mounts or credentials. The guest checks a digest of
+the PostgreSQL 18 cluster identity, schema and migration ledger at preparation,
+activation, acceptance and rollback. A changed PHP application or database
+contract requires separate qualification under #93.
+
+Activation stops API HTTP, the workers, scheduler and FPM before updating
+their image references. It starts FPM before API HTTP and the background
+units. The guest checks the pair and worker cardinality and compares the
+container IDs and start times of PostgreSQL, frontend, HAProxy, CrowdSec
+and SPOA across the switch. Rollback uses the locally retained predecessor
+and requires the same database snapshot. An ambiguous interruption stops the
+controller at the recorded host. Reconcile the observed guest state through
+the existing administrator path before resuming.
 
 The coordinator invokes the installed adapter with an operation, host,
 platform, and the candidate and previous Git revisions and fingerprints.
@@ -90,20 +119,27 @@ It binds each signed native child to its host. The guest independently
 checks the requested revision and fingerprint against protected main, independently
 verifies the supplied publisher bundle and immutable index with the same pinned
 verifier, checks the native child, pulls it as the rootless runtime user,
-and validates the frontend Quadlet and a single image drop-in in isolation.
+and validates the affected Quadlets and image drop-ins in isolation.
 
 | Operation  | Guest and controller behavior                                                                                                                                                                                               |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `observe`  | Read the installed Quadlet and running container identities. Return exactly the observed 64-character fingerprint and newline for an admitted state. Reject drift and mixed state.                                          |
-| `prepare`  | Match the accepted predecessor, enforce frontend-only scope, stage the pinned native child and validate the candidate. Persist both release identities before any switch.                                                   |
-| `activate` | Install the single image drop-in and restart the frontend only. Verify running native manifest, image configuration and unchanged roles and layout.                                                                         |
+| `prepare`  | Match the accepted predecessor and the permitted release lane. Verify and stage native images, validate the candidate and persist both release identities before any switch.                                                |
+| `activate` | Select the frontend unit or the complete backend group from the prepared record. Verify running native manifests, image configuration and unchanged roles and layout.                                                       |
 | `accept`   | Check real TLS, private app/API routing, authentication and the synthetic organisation, plus PostgreSQL cluster identity, both queues, one scheduler, rootless/SELinux and AppSec inspection. Persist the accepted release. |
-| `rollback` | Restore the admitted previous frontend and verify its health. Keep the PostgreSQL container, volumes and private inputs intact.                                                                                             |
+| `rollback` | Restore the admitted previous release and verify its health. Keep the PostgreSQL container, volumes and private inputs intact.                                                                                              |
 
 An explicit rejection returns exit code 10 from `accept`. Other errors halt
 on an ambiguous result. Successful operations other than `observe` have no
 standard output. Neither application credentials nor guest administrator
 credentials are passed as command-line arguments.
+
+For an existing enrollment, install the reviewed guest helper at the same
+fixed path on each guest and verify `observe` against its accepted baseline.
+Keep the existing policy, sudoers entry, SSH restrictions, state, and pinned
+GitHub CLI. The controller then installs the reviewed adapter and OCI fetcher
+at their existing paths. Keep the timer and its accepted state. Perform this
+upgrade before merging a backend pin change.
 
 ## One-time guest administrator handoff
 
