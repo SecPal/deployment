@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+# Native gh 2.97.0 binaries extracted from the admitted GitHub CLI release archives.
+linux/amd64 141507c337e8b202ad398550c3b73d72f5af92e86f71665214538a81efd4c409
+linux/arm64 ccbb0f14178faefac1cb0f336a853071fa63a1d0df23ef5ab7a304fe3859e082

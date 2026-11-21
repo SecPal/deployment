@@ -69,6 +69,8 @@ python3 tests/postgres-fixture-contract.py
 python3 tests/postgresql-qualification-contract.py
 python3 tests/quadlet-integration-contract.py
 python3 tests/fcos-application-poc.py
+python3 tests/fcos-lab-rollout.py
+python3 tests/fcos-lab-rollout-adapter.py
 python3 tests/quadlet-integration-lifecycle.py
 python3 tests/ci-cloud-contract.py
 python3 tests/ci-cloud-rocky-control.py
