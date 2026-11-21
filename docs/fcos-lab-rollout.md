@@ -489,7 +489,9 @@ update driver at a time.
 For an independently restartable host, confirm that its local data,
 networking, and service startup do not depend on other hosts being updated
 in any particular order. Confirm the local zone, installed workload
-assignment, maintenance window, and independent recovery path. Disable
+assignment, maintenance window, and independent recovery path. Qualify
+one controlled OS update and reboot with the assigned-workload acceptance
+below before enabling periodic maintenance. Disable
 `rpm-ostreed-automatic.timer`, allow any transaction to finish, and set
 `AutomaticUpdatePolicy=none` in `/etc/rpm-ostreed.conf`. Run
 `rpm-ostree reload`. Ensure there is no unreviewed pending deployment.
@@ -560,9 +562,11 @@ reviewed release inputs. Resume the applicable timers after read-back.
    local window cannot enforce the previous host's readiness.
    [Zincati update strategies](https://coreos.github.io/zincati/usage/updates-strategy/)
 
-Automatic staging and reboot acceptance are separate. Keep unattended
-reboots disabled until the health gate and recovery have been qualified on
-the selected topology.
+Keep unattended reboots disabled for dependent workloads. For an
+independently restartable host, the controlled update, health checks and
+independent recovery above qualify enabling the native periodic strategy.
+Record its first unattended reboot separately when a newer release is
+available.
 
 ## FCOS operations handoff
 
@@ -629,7 +633,7 @@ Keep root and operator credentials out of Git and out of Codex output.
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Source and release identity             | Protected Git refs and verified commits for deployment, API, frontend and governance. Export any unpublished work, admitted release identities, public access inventory and nonversioned operational instructions to external custody.                                                                                                                        |
 | Provider, public DNS and TLS            | Independently accessible provider Console/Rescue account, MFA and break-glass material, exact resource identity and protections, reviewed firewall and DNS bindings, TLS renewal authority. Install the broker's protected configuration and scoped credential through the independent administrator.                                                         |
-| Management connectivity                 | Root-owned NetworkManager/WireGuard configuration for both the hub link and direct test link, exact peer reservations, last applied generations, recovery SSH keys and independently pinned public host keys. Securely retain deliberate private-key continuities or authorize a fresh key and coordinated replacement.                                       |
+| Management connectivity                 | Root-owned NetworkManager/WireGuard configuration for both the hub link and direct test link, exact peer reservations, last applied generations, recovery SSH keys and independently pinned public host keys. Retain key continuity for unchanged machines under existing custody. Prepare authorized replacement for the reinstalled host's keys.            |
 | Accounts and local operations           | User IDs and mappings, systemd units and settings, Codex/maintenance lease boundaries, installer executables and constrained administrative policy. The administrator exports any local material that cannot be reproduced from reviewed Git. Preserve separate Codex, Polyscope and application accounts.                                                    |
 | Rollout controller                      | Protected `~/.config/secpal-fcos-lab-rollout/` and `~/.local/state/secpal-fcos-lab-rollout/`, with host pins, scoped SSH credential, witnesses and accepted journal. Record the exact reviewed installed helper and adapter. Keep service definitions and verifier pins from Git.                                                                             |
 | Public application and development data | A consistent off-host copy of PostgreSQL data and roles and the associated private and public file trees, exact runtime and edge configuration, and independently recoverable application encryption/decryption and other durable keys. Capture developer state required after disk loss. Verify the recovery metadata and read-back from a separate machine. |
@@ -644,11 +648,13 @@ Keep root and operator credentials out of Git and out of Codex output.
    development host under the independent provider administrator.
 2. Install the new host from admitted FCOS artifacts and authenticate the new
    SSH host key through Console. Update host pins through that authenticated
-   path. Restore the existing hub and direct WireGuard profiles and firewall
-   policy. When rotating the controller keys, update the corresponding hub and
-   guest peers through their authorized administration, retire the old keys,
-   and verify direct IPv4/IPv6 SSH and pin identity from outside secpal.dev.
-   The three test-slot identities only change if their own guests are rebuilt.
+   path. Rebuild the hub and direct WireGuard profiles from the retained
+   non-secret configuration and firewall policy. Generate fresh controller
+   WireGuard keys on the reinstalled host. Replace its public keys at the
+   hub and guests through their authorized administration, retire the old
+   controller keys, and verify direct IPv4/IPv6 SSH and pin identity from
+   outside secpal.dev. Keep the peer identities of guests whose installations
+   remain in place.
 3. Restore the restricted accounts and reviewed tools. As `codex`, reinstall
    the verified Codex CLI, sign in using `codex login --device-auth` where
    authorized, and verify `codex login status`. Reauthorize the intended
@@ -682,8 +688,8 @@ The current development maintenance's demo auto-discovery is retired.
 The update contract [#93](https://github.com/SecPal/deployment/issues/93)
 defines the reviewed reference workflow on its admitted host stack.
 After admitting the public workload on FCOS, reuse its protected release
-inputs and require publisher proof, explicit migration authority, a valid
-RecoverySet where applicable, compatible rollback and live acceptance before
+inputs and require publisher proof, explicit migration authority, a current
+valid RecoverySet, compatible rollback and live acceptance before
 enabling an automatic public rollout. The existing lab timer remains scoped
 to the enrolled private fixture. The native FCOS OS driver follows the
 host's selected maintenance mode.
