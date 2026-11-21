@@ -30,7 +30,7 @@ class RepositorySecurityTests(unittest.TestCase):
         self.assertEqual(job["permissions"], {"contents": "read"})
         self.assertNotIn("secrets", job)
         self.assertNotIn("env", job)
-        checkout, scan, acceptance = job["steps"]
+        checkout, scan, acceptance, _ = job["steps"]
         self.assertRegex(checkout["uses"], r"\Aactions/checkout@[0-9a-f]{40}\Z")
         self.assertEqual(
             checkout["with"],
@@ -55,6 +55,37 @@ class RepositorySecurityTests(unittest.TestCase):
             'bash scripts/require-repository-security.sh "$SCAN_RESULT" "$GATE_STATE"',
         )
         self.assertEqual(self.workflow["permissions"], {"contents": "read"})
+
+    def test_existing_security_check_requires_both_codeql_analyses(self):
+        jobs = self.workflow["jobs"]
+        analysis = jobs["source-analysis"]
+        self.assertEqual(analysis["strategy"], {
+            "fail-fast": "false", "matrix": {"language": ["python", "actions"]},
+        })
+        self.assertEqual(analysis["permissions"], {"contents": "read", "security-events": "write"})
+        checkout, initialize, analyze = analysis["steps"]
+        self.assertEqual(checkout["with"], {"ref": "${{ github.sha }}", "persist-credentials": "false"})
+        self.assertRegex(initialize["uses"], r"\Agithub/codeql-action/init@[0-9a-f]{40}\Z")
+        self.assertEqual(analyze["uses"], initialize["uses"].replace("/init@", "/analyze@"))
+        self.assertEqual(initialize["with"], {"languages": "${{ matrix.language }}"})
+        self.assertEqual(analyze["with"], {"category": "/language:${{ matrix.language }}"})
+        for step in (checkout, initialize, analyze):
+            self.assertNotIn("if", step)
+            self.assertNotIn("continue-on-error", step)
+        required = jobs["repository-security"]
+        self.assertEqual(required["name"], "Repository Security")
+        self.assertEqual(required["needs"], "source-analysis")
+        self.assertEqual(required["if"], "${{ !cancelled() }}")
+        gate = required["steps"][-1]
+        self.assertEqual(gate["env"], {"ANALYSIS_RESULT": "${{ needs.source-analysis.result }}"})
+        self.assertNotIn("if", gate)
+        self.assertNotIn("continue-on-error", gate)
+        for outcome in ("success", "failure", "cancelled", "skipped", ""):
+            with self.subTest(outcome=outcome):
+                observed = subprocess.run(
+                    ["bash", "-e", "-c", gate["run"]], env={"ANALYSIS_RESULT": outcome}, check=False,
+                )
+                self.assertEqual(observed.returncode == 0, outcome == "success")
 
     def test_existing_required_check_cannot_succeed_after_failed_or_skipped_scan(self):
         job = self.workflow["jobs"]["repository-contract"]
