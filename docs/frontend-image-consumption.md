@@ -27,12 +27,12 @@ below remain historical evidence and do not qualify this new deployment pair.
 
 The source deployment and disposable integration contract now select:
 
-- Image: `ghcr.io/secpal/frontend@sha256:d99c6d39cdbac1d63fbd72f2a25f4c29ea87bc6693dae65e2d4453d841fbb48f`.
-- Source: `5ca50b7f39e29f91092b649730730cb27e5f271c`.
-- Publisher run: `44535422585` (attempt `1`), workflow
+- Image: `ghcr.io/secpal/frontend@sha256:d893b3b5fc3861485f56460e85ba29e7e221cda0a729a192d3749c4c85a7342f`.
+- Source: `d1c5b82f9f07ce4fb6bdac2054eeaa70149e2e38`.
+- Publisher run: `42809674397` (attempt `1`), workflow
   `SecPal/frontend/.github/workflows/publish-container.yml` on protected main,
   GitHub-hosted runners only.
-- Accepted build evidence: `ghcr.io/secpal/frontend@sha256:9790f753327b56d674259eaad3f13269004b04c526d03afc9d2376daefe2ac48`.
+- Accepted build evidence: `ghcr.io/secpal/frontend@sha256:27cc637c5fc799d237ea640da0fdf27aa86021025ad648aeed3399b911bb1e34`.
 
 The existing OCI/attestation fetcher independently verifies this exact index and
 source before staging. The frontend release monitor re-evaluates the signed
@@ -40,12 +40,7 @@ publisher's authoritative Syft SPDX with Grype and each exact native subject wit
 Trivy through SecPal/.github#636. Scanner failures or stale databases cannot
 qualify deployment.
 
-The source selects this release for the migration-free FCOS lab lane. The
-[rollout procedure](fcos-lab-rollout.md) records activation separately.
-The previous lab release used the signed index
-`ghcr.io/secpal/frontend@sha256:d893b3b5fc3861485f56460e85ba29e7e221cda0a729a192d3749c4c85a7342f` from source
-`d1c5b82f9f07ce4fb6bdac2054eeaa70149e2e38`. Publisher run: `42809674397` (attempt `1`).
-The operator confirmed that
+This is source-contract acceptance, not activation. The operator confirmed that
 the demo frontend remained at
 `ghcr.io/secpal/frontend@sha256:1c737d692e633d355f2ee92e82f0d78929c4dcf43f959e3e17d1cdc6c41fb0c9`
 during the API cutover on 2026-11-10. Its independent monitoring is retained.
@@ -53,6 +48,22 @@ No complete cross-environment inventory of historical consumers or permitted
 recovery/rollback targets exists. Historical CVE findings remain open unless
 subject-specific remediation or complete retirement is established; neither a
 new publication nor this source change proves retirement.
+
+## FCOS lab rollout release
+
+The protected-main lab override admits the frontend-only rollout on
+the existing FCOS test guests. It uses:
+
+- Image: `ghcr.io/secpal/frontend@sha256:d99c6d39cdbac1d63fbd72f2a25f4c29ea87bc6693dae65e2d4453d841fbb48f`.
+- Source: `5ca50b7f39e29f91092b649730730cb27e5f271c`.
+- Publisher run: `44535422585` (attempt `1`), workflow
+  `SecPal/frontend/.github/workflows/publish-container.yml` on protected main,
+  GitHub-hosted runners only.
+- Accepted build evidence: `ghcr.io/secpal/frontend@sha256:9790f753327b56d674259eaad3f13269004b04c526d03afc9d2376daefe2ac48`.
+
+The [FCOS lab rollout procedure](fcos-lab-rollout.md) governs activation.
+Production rendering, trusted cloud evidence and the base integration
+fixtures continue to consume the current accepted release above.
 
 ## Historical Phase C.3 identity and evidence
 
