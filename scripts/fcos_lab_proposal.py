@@ -95,6 +95,8 @@ def evidence_agrees(build, source_scan, proposal):
                 "run_id": str(proposal.run_id), "run_attempt": str(proposal.run_attempt)}
     subject = build["subject"]
     platforms = subject["platforms"]
+    # The signed publisher acceptance owns full schema and database-deadline
+    # admission. Recheck the closed scan result consumed by this proposal.
     scan_bytes = json.dumps(source_scan, sort_keys=True, separators=(",", ":")).encode()
     if (build["schema_version"] != "1.0.0" or build["workflow"] != workflow
             or build["source"]["repository"] != ref or build["source"]["commit"] != proposal.source
@@ -102,6 +104,9 @@ def evidence_agrees(build, source_scan, proposal):
             or len(platforms) != len(native)
             or {p["platform"]: p["manifest_digest"] for p in platforms} != native
             or any(p["user"] != "101:101" for p in platforms)
+            or source_scan["schema_version"] != "secpal-trivy-repository-scan-v5"
+            or source_scan["operation"] != {"name": "TRIVY_REPOSITORY_SCAN", "status": "SUCCEEDED"}
+            or source_scan["database"]["status"] != "FRESH"
             or source_scan["gate_state"] != "CLEAN"
             or source_scan["subject"] != {"repository": UPSTREAM, "commit": proposal.source}
             or build["extensions"][ref]["source_security_sha256"] != sha256(scan_bytes)):
@@ -150,8 +155,9 @@ def verify_publication(report):
             raise ValueError("invalid OCI index")
         children, _, _ = publisher_children(Frontend(index, source), gh=gh)
         evidence, signature = root / "build-evidence.json", root / "bundle.json"
-        evidence.write_bytes(build_bytes)
-        signature.write_bytes(bundle)
+        for path, content in ((evidence, build_bytes), (signature, bundle)):
+            path.touch(mode=0o600, exist_ok=False)
+            path.write_bytes(content)
         verify_frontend_attestation(gh, evidence, signature, source, environment)
     proposal = Proposal(index, source, run_id, attempt, children["linux/amd64"],
                         children["linux/arm64"], sha256(build_bytes))

@@ -50,7 +50,10 @@ class ProposalContract(unittest.TestCase):
 
     def test_signed_evidence_requires_exact_both_native_subjects_and_clean_scans(self):
         scan_digest = "sha256:" + "a" * 64
-        doc = {"gate_state": "CLEAN", "subject": {"repository": "SecPal/frontend", "commit": NEW.source}}
+        doc = {"schema_version": "secpal-trivy-repository-scan-v5", "gate_state": "CLEAN",
+               "subject": {"repository": "SecPal/frontend", "commit": NEW.source},
+               "operation": {"name": "TRIVY_REPOSITORY_SCAN", "status": "SUCCEEDED"},
+               "database": {"status": "FRESH"}}
         source = json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
         evidence = {
             "schema_version": "1.0.0",
@@ -82,6 +85,18 @@ class ProposalContract(unittest.TestCase):
                 change(altered[key])
                 with self.assertRaises(ValueError):
                     evidence_agrees(altered, doc, PROPOSAL)
+        for key, value in (("schema_version", "unknown"),
+                           ("operation", {"name": "TRIVY_REPOSITORY_SCAN", "status": "FAILED"}),
+                           ("database", {"status": "STALE"})):
+            with self.subTest(key=key):
+                source = dict(doc, **{key: value})
+                updated = deepcopy(evidence)
+                source_bytes = json.dumps(source, sort_keys=True, separators=(",", ":")).encode()
+                updated["extensions"]["https://github.com/SecPal/frontend"]["source_security_sha256"] = (
+                    "sha256:" + hashlib.sha256(source_bytes).hexdigest()
+                )
+                with self.assertRaises(ValueError):
+                    evidence_agrees(updated, source, PROPOSAL)
 
     def test_closed_candidate_pr_and_changed_base_cannot_write(self):
         with patch("fcos_lab_proposal.get", return_value={"object": {"sha": "9" * 40}}), \
