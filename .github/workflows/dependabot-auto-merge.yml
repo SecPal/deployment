@@ -29,10 +29,13 @@ concurrency:
 jobs:
   auto-merge:
     # yamllint disable-line rule:line-length
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@86c039ae722eb14680c6c3601a68befd643380f9 # main
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@482d55cf6732dd27c7075283b2a8055259f5c3c6 # main
     with:
       phase: "2"
       merge-method: squash
-      allowed-ecosystems: github_actions
+      allowed-ecosystems: github_actions,npm_and_yarn,pre_commit,docker
+      pre-commit-path: ".pre-commit-config.yaml"
+      docker-rules: >-
+        [{"image":"library/caddy","paths":["containers/phase-b-gateway/Containerfile"],"line":"2.11","suffix":"-alpine","digestRefresh":true}]
       workflow-paths: >-
         [".github/workflows/quality.yml",".github/workflows/local-integration.yml",".github/workflows/rocky-evidence-architecture.yml"]
