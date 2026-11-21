@@ -121,6 +121,17 @@ schema and ledger. Use separate storage, slot-local credentials and queues,
 and the same restricted runtime grants, including read-only access to the
 migration ledger. Test the exact signed predecessor and candidate pairs.
 
+On the disposable database, run the role helper's `prepare` operation
+before starting PostgreSQL. Apply its reviewed `grant-role-contract` SQL to
+the empty database, restore using `pg_restore --role=secpal_owner --no-owner
+--no-acl`, and apply the `restrict-migration-ledger` grant change. Set only
+the runtime login's password from the slot's protected credential file.
+Keep the migration login disabled and remove its disposable credential
+files before starting the application. Run the existing database authority
+probe to check the restored grants. For each rehearsal pair, set only the
+five backend roles' `Image=` overrides in the disposable Quadlets to the
+verified native Nginx and FPM manifests.
+
 1. Start the candidate over the restored schema with migration execution
    disabled. Check Composer platform requirements and the PHP/FPM runtime.
    Verify that `php artisan migrate:status` succeeds with no pending migrations,
