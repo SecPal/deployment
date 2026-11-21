@@ -4,6 +4,7 @@
 
 """Authenticated adapter for FCOS lab frontend and backend rollouts."""
 
+import ast
 import base64
 from dataclasses import asdict, dataclass
 import hashlib
@@ -178,7 +179,7 @@ def backend_declaration(declaration, helper):
     required = {"pair-proof", "native-image", "fpm-payload", "fpm-config", "nginx-config",
                 "database-snapshot", "quadlet-validation", "stop-http", "stop-backend",
                 "install-images", "reload-units", "start-fpm", "start-http", "start-background",
-                "running-identities", "guest-health"}
+                "running-identities", "guest-health", "helper-identity"}
     if stages != required:
         raise ValueError("backend diagnostic coverage differs from the closed operation set")
     if any(entry["id"].startswith("fcos-lab-backend.") for entry in declaration["external_operations"]):
@@ -192,11 +193,41 @@ def backend_declaration(declaration, helper):
     return declaration
 
 
+def verify_dispatch_authority(validator, renderer):
+    try:
+        source_tree = ast.parse(renderer)
+    except SyntaxError as error:
+        raise ValueError("invalid canonical dispatch source record") from error
+    definitions = [
+        node.value for node in source_tree.body if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "VALIDATOR_SOURCE" for target in node.targets)
+    ]
+    record, = definitions
+    pins = ast.literal_eval(record)
+    if not isinstance(pins, dict) or "scripts/secpal-evidence-architecture.py" not in pins:
+        raise ValueError("canonical dispatch source pins are missing")
+    checkout = validator.parent.parent
+    for name, digest in pins.items():
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts or not re.fullmatch("[a-f0-9]{64}", digest):
+            raise ValueError("invalid canonical dispatch source pin")
+        path = checkout / relative
+        if not path.is_file() or path.resolve(strict=True) != path:
+            raise ValueError("canonical dispatch source path differs")
+        with path.open("rb") as source:
+            content = source.read(65537)
+        if len(content) > 65536 or hashlib.sha256(content).hexdigest() != digest:
+            raise ValueError("canonical dispatch source differs from the accepted pin")
+
+
 def admit_backend_dispatch(repo, release):
     validator = TOOLS / "evidence-architecture/scripts/secpal-evidence-architecture.py"
     if not validator.is_file() or validator.is_symlink():
         raise ValueError("installed backend dispatch validator is unavailable")
     validator = validator.resolve(strict=True)
+    verify_dispatch_authority(
+        validator, git(repo, "show", f"{release.revision}:scripts/render-fcos-application-poc.py"),
+    )
     with tempfile.TemporaryDirectory(prefix="fcos-lab-dispatch-") as directory:
         root = Path(directory)
         (root / "AGENTS.md").write_bytes(git(repo, "show", f"{release.revision}:AGENTS.md"))

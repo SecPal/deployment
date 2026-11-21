@@ -95,7 +95,10 @@ Before backend dispatch the controller checks the guest helper's closed
 operation identifiers and applies the existing SecPal evidence architecture
 validator. The temporary admission input combines the protected release's
 canonical declaration with the backend operation identities. Its contents
-do not change the release fingerprint.
+do not change the release fingerprint. The controller verifies the
+validator and companion files against the existing fixture renderer's
+authority pins. The guest requires the installed helper's exact SHA-256 to
+match the protected source before staging an image or switching a release.
 
 The first backend lane admits only candidates with the same PHP major/minor,
 loaded PHP extensions, and file content under the installed FPM image's
@@ -111,7 +114,9 @@ their image references. It starts FPM before API HTTP and the background
 units. The guest checks the pair and worker cardinality and compares the
 container IDs and start times of PostgreSQL, frontend, HAProxy, CrowdSec
 and SPOA across the switch. Rollback uses the locally retained predecessor
-and requires the same database snapshot. An ambiguous interruption stops the
+and requires the same database snapshot. A previously admitted backend pair
+also needs current security qualification before it may be restarted.
+An ambiguous interruption stops the
 controller at the recorded host. Reconcile the observed guest state through
 the existing administrator path before resuming.
 

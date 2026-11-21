@@ -491,6 +491,7 @@ fpm_payload() {
                     $files[$entry->getPathname()] = ["link", readlink($entry->getPathname())];
                     continue;
                 }
+                if ($entry->isDir()) continue;
                 $hash = $entry->isFile() ? hash_file("sha256", $entry->getPathname()) : false;
                 if ($hash === false) exit(1);
                 $files[$entry->getPathname()] = $hash;
@@ -534,7 +535,7 @@ validate_backend_quadlets() {
 }
 
 prepare_backend() {
-    local installed=$1 pins=$2 old_pins=$3 publisher pair nginx fpm expires snapshot component ref config old before after
+    local installed=$1 pins=$2 old_pins=$3 publisher pair nginx fpm expires snapshot component ref config old before after helper
     local -a values previous_values
     mapfile -t values <<< "$pins"
     mapfile -t previous_values <<< "$old_pins"
@@ -544,7 +545,8 @@ prepare_backend() {
         $pair != "${previous_values[1]}" && ( $nginx != "${previous_values[2]}" || $fpm != "${previous_values[3]}" ) &&
         $(frontend_field "$revision" FRONTEND_DIGEST "$digest") == "$(frontend_field "$previous" FRONTEND_DIGEST "$digest")" &&
         $(frontend_field "$revision" FRONTEND_SOURCE_COMMIT "$sha") == "$(frontend_field "$previous" FRONTEND_SOURCE_COMMIT "$sha")" ]] || return 1
-    backend_expiry "$expires" &&
+    helper=$(backend_step helper-identity backend_helper_hash) &&
+        backend_expiry "$expires" &&
         backend_step pair-proof verify_backend "$publisher" "$pair" "$nginx" "$fpm" || return 1
     local images='{}' native raw user digest_seen architecture
     for component in fpm nginx; do
@@ -578,8 +580,17 @@ prepare_backend() {
         --arg expires "$expires" --argjson images "$images" \
         '.revision=$revision | .fingerprint=$fingerprint | .backend=($images+{pair:$pair,expires:$expires})' <<< "$installed") &&
         backend_step quadlet-validation validate_backend_quadlets "$candidate" || return 1
-    save prepared.json "$(jq -cn --argjson before "$installed" --argjson next "$candidate" --arg database "$snapshot" \
-        '{before:$before,next:$next,database:$database}')"
+    save prepared.json "$(jq -cn --argjson before "$installed" --argjson next "$candidate" \
+        --arg database "$snapshot" --arg helper "$helper" '{before:$before,next:$next,database:$database,helper:$helper}')"
+}
+
+backend_helper_hash() {
+    local expected actual
+    [[ -f $peer/guest && ! -L $peer/guest && $(stat -c '%u %g %a' -- "$peer/guest") == '0 0 755' ]] || return 1
+    expected=$(git_object show "$revision:scripts/fcos-lab-rollout-guest.sh" | sha256sum) &&
+        actual=$(sha256sum < "$peer/guest") || return 1
+    [[ $expected == "$actual" && $actual == *'  -' && ${actual%% *} =~ ^$hash$ ]] || return 1
+    printf '%s\n' "${actual%% *}"
 }
 
 backend_expiry() {
@@ -624,8 +635,11 @@ backend_running() {
 }
 
 switch_backend() {
-    local record=$1 role ref service untouched
+    local record=$1 role ref service untouched expires
     local -a services=()
+    if jq -e 'has("backend")' <<< "$record" >/dev/null; then
+        expires=$(jq -er .backend.expires <<< "$record") && backend_expiry "$expires" || return 1
+    fi
     for role in "${backend_roles[@]}"; do
         services+=("$slot-$role.service")
         ref=$(backend_role_ref "$record" "$role") &&
@@ -763,6 +777,7 @@ main() {
         $(jq -r '[.revision,.fingerprint]|join(" ")' <<< "$next") == "$revision $wanted" ]] || deny
     database=$(jq -er '.database // ""' <<< "$prepared") || deny
     if [[ -n $database ]]; then
+        [[ $(backend_step helper-identity backend_helper_hash) == "$(jq -er .helper <<< "$prepared")" ]] || deny
         same_backend_database "$database" || deny
         case "$operation" in
             activate)

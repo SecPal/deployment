@@ -15,7 +15,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from fcos_lab_rollout_adapter import Backend, Frontend, backend_declaration, backend_request, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments
+from fcos_lab_rollout_adapter import Backend, Frontend, backend_declaration, backend_request, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments, verify_dispatch_authority
 from fcos_lab_rollout import RELEASE_PATHS, Release, source_release
 
 OLD = Release("1" * 40, "2" * 64)
@@ -25,6 +25,23 @@ SOURCE = "7" * 40
 
 
 class AdapterContract(unittest.TestCase):
+    def test_dispatch_authority_requires_exact_companion_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            scripts = root / "scripts"
+            scripts.mkdir()
+            validator = scripts / "secpal-evidence-architecture.py"
+            module = scripts / "companion.py"
+            validator.write_bytes(b"validator")
+            module.write_bytes(b"companion")
+            pins = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in (validator, module)}
+            renderer = ("VALIDATOR_SOURCE = " + repr(pins)).encode()
+            verify_dispatch_authority(validator, renderer)
+            module.write_bytes(b"changed")
+            with self.assertRaises(ValueError):
+                verify_dispatch_authority(validator, renderer)
+
     def test_backend_dispatch_declaration_fails_on_missing_diagnostic(self):
         root = Path(__file__).resolve().parents[1]
         helper = (root / "scripts/fcos-lab-rollout-guest.sh").read_text()
@@ -200,6 +217,18 @@ class GuestContract(unittest.TestCase):
                                     capture_output=True, check=False)
             self.assertEqual(result.returncode == 0, expected)
 
+    def test_backend_guest_rejects_helper_bytes_absent_from_reviewed_source(self):
+        command = ('source "$1"; peer=$2; revision="$3"; '
+                   'stat() { printf "0 0 755\n"; }; '
+                   'git_object() { printf "%s" "$expected_content"; }; '
+                   'expected_content=$4; backend_helper_hash')
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "guest").write_text("reviewed")
+            for expected, accepted in (("reviewed", True), ("unrelated", False)):
+                result = subprocess.run(["bash", "-c", command, "test", self.guest, temp, SOURCE, expected],
+                                        capture_output=True, check=False)
+                self.assertEqual(result.returncode == 0, accepted)
+
     def test_backend_switch_stops_http_and_background_roles_before_restarting_the_pair(self):
         command = (
             'source "$1"; units=$2; migration=$4; '
@@ -212,7 +241,7 @@ class GuestContract(unittest.TestCase):
             '"systemctl --user show "*"-migrate.service") printf "%s\n" "$migration";; '
             '"systemctl --user show "*) printf "inactive\n";; '
             '"systemctl --user "*) printf "%s\n" "$*";; '
-            '*) return 1;; esac; }; switch_backend "{}"'
+            '*) return 1;; esac; }; switch_backend "$5"'
         )
         slot = "secpal-int-haproxy01"
         with tempfile.TemporaryDirectory() as temp:
@@ -220,11 +249,16 @@ class GuestContract(unittest.TestCase):
                 directory = Path(temp) / f"{slot}-{role}.container.d"
                 directory.mkdir()
                 (directory / "90-rollout.conf").write_text("candidate override")
-            active = subprocess.run(["bash", "-c", command, "test", self.guest, temp, DIGEST, "active"],
+            active = subprocess.run(["bash", "-c", command, "test", self.guest, temp, DIGEST, "active", "{}"],
                                     capture_output=True, text=True, check=False)
             self.assertNotEqual(active.returncode, 0)
             self.assertEqual(active.stdout, "")
-            result = subprocess.run(["bash", "-c", command, "test", self.guest, temp, DIGEST, "inactive"],
+            expired = subprocess.run(["bash", "-c", command, "test", self.guest, temp, DIGEST, "inactive",
+                                      '{"backend":{"expires":"2000-01-01T00:00:00Z"}}'],
+                                     capture_output=True, text=True, check=False)
+            self.assertNotEqual(expired.returncode, 0)
+            self.assertEqual(expired.stdout, "")
+            result = subprocess.run(["bash", "-c", command, "test", self.guest, temp, DIGEST, "inactive", "{}"],
                                     capture_output=True, text=True, check=True)
             self.assertEqual(list(Path(temp).iterdir()), [])
         background = " ".join(f"{slot}-{role}.service"
