@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 
-from integration_runtime_contract import API_SOURCE_COMMIT, FRONTEND_SOURCE_COMMIT
+from integration_runtime_contract import API_SOURCE_COMMIT, LAB_FRONTEND_SOURCE_COMMIT
 
 
 def greatest_version(tags, pattern):
@@ -44,7 +44,7 @@ def stable_release(releases, pattern):
 def product_candidate(document, repo):
     run, = document["workflow_runs"]
     commit = run["head_sha"]
-    run_id = run["id"]
+    run_id, attempt = run["id"], run["run_attempt"]
     if (
         run["head_branch"] != "main"
         or run["event"] not in {"push", "workflow_dispatch"}
@@ -53,9 +53,11 @@ def product_candidate(document, repo):
         or re.fullmatch(r"[0-9a-f]{40}", commit) is None
         or type(run_id) is not int
         or run_id <= 0
+        or type(attempt) is not int
+        or attempt <= 0
     ):
         raise ValueError("invalid product publish result")
-    return {"source_commit": commit, "run_id": run_id}
+    return {"source_commit": commit, "run_id": run_id, "run_attempt": attempt}
 
 
 def source_relationship(document):
@@ -65,20 +67,25 @@ def source_relationship(document):
     return status
 
 
-def get(endpoint, *, raw=False):
-    args = ["gh", "api", "--method", "GET", endpoint]
+def get(endpoint, *, raw=False, paginate=False, gh="gh"):
+    args = [gh, "api", "--method", "GET", endpoint]
     if raw:
         args += ["--header", "Accept: application/vnd.github.raw+json"]
+    if paginate:
+        args += ["--paginate", "--slurp"]
     output = subprocess.run(
         args, capture_output=True, stdin=subprocess.DEVNULL,
         check=True, timeout=45, text=True,
     ).stdout
-    return output if raw else json.loads(output)
+    if raw:
+        return output
+    data = json.loads(output)
+    return [item for page in data for item in page] if paginate else data
 
 
 def discover():
     result = {}
-    products = {"api": API_SOURCE_COMMIT, "frontend": FRONTEND_SOURCE_COMMIT}
+    products = {"api": API_SOURCE_COMMIT, "frontend": LAB_FRONTEND_SOURCE_COMMIT}
     for name, commit in products.items():
         repo = f"SecPal/{name}"
         endpoint = (

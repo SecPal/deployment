@@ -22,14 +22,46 @@ Changes outside those inputs cannot trigger activation. The runner reads
 Git objects as data and executes its installed copy of the coordinator.
 Live credentials, host access and observed running state remain private.
 
-The product publishing workflows are the starting point for discovering
-SecPal releases. PostgreSQL candidates must stay on major 18 and preserve its
-supported image layout. HAProxy, CrowdSec, SPOA and OWASP CRS candidates use
-their respective upstream publishers. A discovery result is a candidate for
-a reviewed deployment change. Product signatures and attestations, official
-image provenance, the exact index and native manifests, and ruleset
-authenticity remain part of admission. Automated proposal creation and
-admission for every upstream are separate from detecting changes on main.
+The existing `FCOS Lab Release Discovery` workflow reports candidates for
+each maintained upstream. The frontend proposal compares the latest
+successful publisher run on upstream main with the active **lab** source
+pin. An identical, older, diverged or superseded publication produces no
+proposal. The read-only job verifies the publisher's exact signed index and
+build evidence, requires both native children and the matching clean source,
+Grype and Trivy results, and checks the corresponding runtime smoke results.
+The exact upstream workflow run and attempt are recorded in the draft.
+
+The publisher archive download requires an Actions read credential scoped to
+`SecPal/frontend`. Set `FCOS_FRONTEND_ACTIONS_READ_TOKEN` as a deployment
+repository secret through the existing administrator path. The token is used
+solely for the archive download. The repository's built-in workflow token
+handles public discovery and the separately enabled proposal write job.
+[GitHub artifact download permissions](https://docs.github.com/en/rest/actions/artifacts#download-an-artifact).
+
+The write job is limited to protected main and creates a draft on a branch
+named for the candidate digest and current main commit. A previous proposal
+for the same digest or another open proposal in that lane prevents further
+writes. If main advances before a PR is opened, the next run can use the new
+base. The job requires an unchanged main commit, a still-current publisher run and a GitHub-verified
+commit containing only the two lab pin edits. It leaves existing branches
+and PRs in place. Review the proposed compatibility against the current
+base. GitHub continues to enforce its normal reviews and required checks.
+After the accepted merge the existing timer handles deployment.
+
+To arm draft creation, the repository must already authorize GitHub Actions
+to create PRs and the repository variable `FCOS_LAB_RELEASE_PROPOSALS` must
+be `true`. Leaving the variable unset keeps discovery and candidate
+verification read-only. GitHub may require a writer to approve workflow runs
+on a PR opened by its Actions token. Use the native PR control and existing
+merge gates. [GitHub Actions settings](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#preventing-github-actions-from-creating-or-approving-pull-requests)
+and [workflow-token triggers](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs).
+
+The existing reports for API/PHP-FPM, HAProxy, CrowdSec, SPOA, OWASP CRS and
+PostgreSQL can feed the same proposal mechanism once each component has
+its own admitted provenance, compatibility and rollout scope. PostgreSQL
+remains on major 18 and its approved image layout. CRS also needs ruleset
+authenticity. Version proposals use immutable publisher identities. SecPal's
+product SemVer release decisions remain with the product publishers.
 
 ## First release scope
 

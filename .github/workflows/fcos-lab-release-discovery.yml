@@ -9,15 +9,22 @@ on:
     - cron: "37 8 * * 1-5"
   workflow_dispatch:
 
-permissions:
-  actions: read
-  contents: read
+permissions: {}
+
+concurrency:
+  group: fcos-lab-release-discovery
+  cancel-in-progress: false
 
 jobs:
   candidate-report:
-    if: github.ref == 'refs/heads/main'
+    if: github.repository == 'SecPal/deployment' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      proposal: ${{ steps.frontend.outputs.proposal }}
     steps:
       - name: Checkout exact source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -25,14 +32,52 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Report eligible upstream candidates
+      - name: Report and verify eligible upstream candidates
+        id: frontend
         env:
           GH_TOKEN: ${{ github.token }}
+          FCOS_FRONTEND_ACTIONS_READ_TOKEN: ${{ secrets.FCOS_FRONTEND_ACTIONS_READ_TOKEN }}
         run: |
           set -euo pipefail
           candidates="$(python3 scripts/fcos_lab_discovery.py)"
+          proposal="$(jq -c '.frontend' <<< "$candidates" | python3 scripts/fcos_lab_proposal.py verify)"
+          printf 'proposal=%s\n' "$proposal" >> "$GITHUB_OUTPUT"
+          if [[ -n "$proposal" ]]; then
+            status='Verified a frontend lab proposal.'
+          else
+            status='No eligible frontend proposal.'
+          fi
           {
             printf '## FCOS lab candidates\n\n'
-            printf 'Resolve and verify exact artifacts before preparing a deployment change.\n\n'
+            printf '%s\n\n' "$status"
             printf '%s\n' "$candidates" | sed 's/^/    /'
           } >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$status"
+
+  draft-proposal:
+    needs: candidate-report
+    if: >-
+      github.repository == 'SecPal/deployment' &&
+      github.ref == 'refs/heads/main' &&
+      vars.FCOS_LAB_RELEASE_PROPOSALS == 'true' &&
+      needs.candidate-report.outputs.proposal != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prepare a signed draft on a proposal branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROPOSAL: ${{ needs.candidate-report.outputs.proposal }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$PROPOSAL" | python3 scripts/fcos_lab_proposal.py publish
