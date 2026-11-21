@@ -49,6 +49,22 @@ recovery/rollback targets exists. Historical CVE findings remain open unless
 subject-specific remediation or complete retirement is established; neither a
 new publication nor this source change proves retirement.
 
+## FCOS lab rollout release
+
+The protected-main lab override admits the frontend-only rollout on
+the existing FCOS test guests. It uses:
+
+- Image: `ghcr.io/secpal/frontend@sha256:d99c6d39cdbac1d63fbd72f2a25f4c29ea87bc6693dae65e2d4453d841fbb48f`.
+- Source: `5ca50b7f39e29f91092b649730730cb27e5f271c`.
+- Publisher run: `44535422585` (attempt `1`), workflow
+  `SecPal/frontend/.github/workflows/publish-container.yml` on protected main,
+  GitHub-hosted runners only.
+- Accepted build evidence: `ghcr.io/secpal/frontend@sha256:9790f753327b56d674259eaad3f13269004b04c526d03afc9d2376daefe2ac48`.
+
+The [FCOS lab rollout procedure](fcos-lab-rollout.md) governs activation.
+Production rendering, trusted cloud evidence and the base integration
+fixtures continue to consume the current accepted release above.
+
 ## Historical Phase C.3 identity and evidence
 
 The completed Phase C.3 integration used:
