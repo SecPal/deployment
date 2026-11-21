@@ -490,6 +490,58 @@ def _write_private_file(path: Path, body: bytes) -> None:
         raise
 
 
+def _anonymous_registry_headers(request_bytes: RequestBytes) -> dict[str, str]:
+    _, content_type, _, token_body = request_bytes(
+        TOKEN_URL, {"Accept": "application/json"}, TOKEN_RESPONSE_LIMIT, frozenset({200}),
+    )
+    _require_media_type(content_type, "application/json", "anonymous token response")
+    token = _parse_object(token_body, "anonymous token response").get("token")
+    if not isinstance(token, str) or BEARER_PATTERN.fullmatch(token) is None:
+        raise ValueError("anonymous registry bearer was missing or malformed")
+    return {"Accept": OCI_INDEX_MEDIA_TYPE, "Authorization": f"Bearer {token}"}
+
+
+def api_publication_evidence(source, run_id, run_attempt, request_bytes=_request_bytes):
+    """Read the API publisher's public run-scoped discovery record and its review inputs."""
+    if (REPOSITORY != "secpal/api" or re.fullmatch(r"[a-f0-9]{40}", source) is None
+            or type(run_id) is not int or run_id <= 0
+            or type(run_attempt) is not int or run_attempt <= 0):
+        raise ValueError("invalid API publication identity")
+    headers = _anonymous_registry_headers(request_bytes)
+    for attempt in range(run_attempt, 0, -1):
+        # A retried acceptance may publish its original candidate attempt.
+        tag = f"runtime-pair-{source}-{run_id}-{attempt}"
+        status, media_type, digest, body = request_bytes(
+            f"{REGISTRY_BASE_URL}/manifests/{tag}", {**headers, "Accept": OCI_MANIFEST_MEDIA_TYPE},
+            MANIFEST_RESPONSE_LIMIT, frozenset({200, 404}),
+        )
+        if status == 200:
+            break
+    else:
+        return None
+    _require_media_type(media_type, OCI_MANIFEST_MEDIA_TYPE, "API discovery manifest")
+    _require_digest(digest, "API discovery manifest")
+    _validate_bytes(body, digest, len(body), "API discovery manifest")
+    manifest = _parse_object(body, "API discovery manifest")
+    if (manifest.get("schemaVersion") != 2 or manifest.get("mediaType") != OCI_MANIFEST_MEDIA_TYPE
+            or manifest.get("artifactType") != "application/vnd.secpal-build-evidence.v1+json"):
+        raise ValueError("invalid API discovery artifact kind")
+    names = ("runtime-pair.json", "php-fpm/build-evidence.json", "php-fpm/source-security.json",
+             "nginx/build-evidence.json", "nginx/source-security.json")
+    layers = manifest["layers"]
+    evidence = {}
+    for name in names:
+        layer, = (entry for entry in layers
+                  if entry.get("annotations", {}).get("org.opencontainers.image.title") == name)
+        _require_media_type(layer["mediaType"], "application/json", "API publication evidence")
+        length = _require_size(layer["size"], "API publication evidence")
+        _, _, _, content = request_bytes(blob_url(layer["digest"]), headers,
+                                          MANIFEST_RESPONSE_LIMIT, frozenset({200}))
+        _validate_bytes(content, layer["digest"], length, "API publication evidence")
+        evidence[name] = content
+    return digest, attempt, evidence
+
+
 def fetch_bundle(
     output_path: Path,
     request_bytes: RequestBytes = _request_bytes,
@@ -515,21 +567,7 @@ def fetch_bundle(
                 f"subject output directory does not exist: {subject_output_path.parent}"
             )
 
-    _status, content_type, _registry_digest, token_body = request_bytes(
-        TOKEN_URL,
-        {"Accept": "application/json"},
-        TOKEN_RESPONSE_LIMIT,
-        frozenset({200}),
-    )
-    _require_media_type(content_type, "application/json", "anonymous token response")
-    token = _parse_object(token_body, "anonymous token response").get("token")
-    if not isinstance(token, str) or BEARER_PATTERN.fullmatch(token) is None:
-        raise ValueError("anonymous registry bearer was missing or malformed")
-
-    registry_headers = {
-        "Accept": OCI_INDEX_MEDIA_TYPE,
-        "Authorization": f"Bearer {token}",
-    }
+    registry_headers = _anonymous_registry_headers(request_bytes)
     subject_body = b""
     pair_body = b""
     if subject_output_path is not None:
@@ -553,7 +591,7 @@ def fetch_bundle(
             document = documents[0]
             _require_digest(document.get("digest"), "runtime pair document")
             _require_size(document.get("size"), "runtime pair document")
-            _, _, _, pair_body = request_bytes(blob_url(document["digest"]), {"Authorization": f"Bearer {token}"}, MANIFEST_RESPONSE_LIMIT, frozenset({200}))
+            _, _, _, pair_body = request_bytes(blob_url(document["digest"]), {"Authorization": registry_headers["Authorization"]}, MANIFEST_RESPONSE_LIMIT, frozenset({200}))
             _validate_bytes(pair_body, document["digest"], document["size"], "runtime pair document")
             _validate_runtime_pair(pair_body, datetime.now(timezone.utc), reviewed_lab_pair)
 
@@ -581,7 +619,7 @@ def fetch_bundle(
         manifest_url(manifest_digest),
         {
             "Accept": OCI_MANIFEST_MEDIA_TYPE,
-            "Authorization": f"Bearer {token}",
+            "Authorization": registry_headers["Authorization"],
         },
         MANIFEST_RESPONSE_LIMIT,
         frozenset({200}),
@@ -598,7 +636,7 @@ def fetch_bundle(
         blob_url(bundle_digest),
         {
             "Accept": BUNDLE_MEDIA_TYPE,
-            "Authorization": f"Bearer {token}",
+            "Authorization": registry_headers["Authorization"],
         },
         BUNDLE_RESPONSE_LIMIT,
         frozenset({200}),

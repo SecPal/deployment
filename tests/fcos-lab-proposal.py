@@ -6,20 +6,24 @@ import base64
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 import hashlib
 from io import StringIO
 import json
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from fcos_lab_proposal import (
-    FILE, Proposal, evidence_agrees, proposed_file, candidate, main, publish, publisher_archive, write,
+    BACKEND_DRAFT_FILE, FILE, BackendProposal, Proposal, backend_candidate, evidence_agrees, proposed_file,
+    candidate, main, publish, publisher_archive, sha256, verify_backend_publication, write,
 )
-from fcos_lab_rollout_adapter import Frontend
+from fcos_lab_rollout_adapter import Backend, Frontend
+from fcos_lab_rollout import RELEASE_PATHS
 
 OLD = Frontend("sha256:" + "1" * 64, "2" * 40)
 NEW = Frontend("sha256:" + "3" * 64, "4" * 40)
@@ -34,6 +38,99 @@ SOURCE = (f'FRONTEND_DIGEST = "{OLD.index}"\n'
 
 
 class ProposalContract(unittest.TestCase):
+    def test_backend_draft_cannot_change_live_release_inputs(self):
+        expires = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        plan = BackendProposal(NEW.index, NEW.source, 12, 2, "sha256:" + "a" * 64, "sha256:" + "b" * 64,
+                               CHILDREN["linux/amd64"], CHILDREN["linux/arm64"],
+                               "sha256:" + "c" * 64, "sha256:" + "d" * 64, expires)
+        current = Backend(OLD.source, OLD.index, "sha256:" + "e" * 64, "sha256:" + "f" * 64, expires, None)
+        report = dict(plan.publication, source_relationship="ahead")
+        for relation in ("behind", "diverged", "identical"):
+            self.assertIsNone(backend_candidate(dict(report, source_relationship=relation), current))
+        with patch("fcos_lab_proposal.verify_backend_publication", return_value=plan):
+            self.assertEqual(backend_candidate(report, current), plan)
+            self.assertIsNone(backend_candidate(report, Backend(OLD.source, current.nginx, current.fpm,
+                                                                plan.index, expires, None)))
+        self.assertTrue(all(BACKEND_DRAFT_FILE != path and not BACKEND_DRAFT_FILE.startswith(path + "/")
+                            for path in RELEASE_PATHS))
+        self.assertNotEqual(BACKEND_DRAFT_FILE, FILE)
+        self.assertIn("Compatibility evidence is outstanding", plan.draft_body())
+
+        text = (f'API_SOURCE_COMMIT = "{current.source}"\nAPI_DIGEST = "{current.nginx}"\n'
+                f'PHP_FPM_DIGEST = "{current.fpm}"\nAPI_PAIR_DIGEST = "{current.pair}"\n'
+                f'API_VEX_EXPIRES_AT = "{current.expires}"\n')
+        ref = {"object": {"sha": BASE}}
+        tip = "9" * 40
+        workflow = {"workflow_runs": [{"head_branch": "main", "event": "workflow_dispatch",
+                    "conclusion": "success", "head_repository": {"full_name": "SecPal/api"},
+                    "head_sha": plan.source, "id": plan.run_id, "run_attempt": plan.run_attempt}]}
+        commit = {"parents": [{"sha": BASE}], "files": [{"filename": BACKEND_DRAFT_FILE}],
+                  "commit": {"verification": {"verified": True}}}
+        signed = {"data": {"createCommitOnBranch": {"commit": {"oid": tip}}}}
+        with patch("fcos_lab_proposal.get", side_effect=[ref, [], workflow, {"status": "ahead"}, [], commit]) as read, \
+                patch("fcos_lab_proposal.write", side_effect=[ref, signed, {"number": 99}]) as writer:
+            # Verify the exact read-back using the bytes written to the signed commit.
+            def get(endpoint, **kwargs):
+                if endpoint.endswith(f"contents/{BACKEND_DRAFT_FILE}?ref={tip}"):
+                    payload = writer.call_args_list[1].args[2]["variables"]["input"]["fileChanges"]["additions"]
+                    self.assertEqual([item["path"] for item in payload], [BACKEND_DRAFT_FILE])
+                    return base64.b64decode(payload[0]["contents"]).decode()
+                if read.call_count == 8:
+                    return ref
+                return responses.pop(0)
+
+            responses = [ref, [], workflow, {"status": "ahead"}, [], commit]
+            read.side_effect = get
+            self.assertEqual(publish(plan, BASE, text, token=WRITE_TOKEN), "draft proposal #99 created")
+            pr = writer.call_args.args[2]
+            self.assertTrue(pr["draft"])
+            self.assertIn("Compatibility evidence is outstanding", pr["body"])
+        expired = BackendProposal(**dict(asdict(plan), expires="2000-01-01T00:00:00Z"))
+        with patch("fcos_lab_proposal.get", return_value=ref), patch("fcos_lab_proposal.write") as writer:
+            self.assertIn("expired", publish(expired, BASE, text, token=WRITE_TOKEN))
+            writer.assert_not_called()
+
+    def test_backend_admission_reads_the_original_or_reattested_acceptance_attempt(self):
+        repo = "SecPal/api"
+        ref = "https://github.com/" + repo
+        workflow = {"repository": repo, "path": ".github/workflows/publish-container.yml",
+                    "commit": NEW.source, "run_id": "12", "run_attempt": "1"}
+        for attempt, reattested, eligible in ((1, False, True), (2, False, False), (2, True, True)):
+            with self.subTest(attempt=attempt, reattested=reattested):
+                pair = {"schema_version": "1.0.0", "source": {"repository": ref, "commit": NEW.source},
+                        "workflow": workflow, "images": {}}
+                files = {}
+                def encode(value):
+                    return json.dumps(value).encode()
+                for role, index, targets in (("php-fpm", "a", ("b", "c")), ("nginx", "d", ("e", "f"))):
+                    platforms = [{"platform": f"linux/{arch}", "manifest_digest": "sha256:" + digest * 64,
+                                  "labels": {"secpal.dev/runtime-component": role}}
+                                 for arch, digest in zip(("amd64", "arm64"), targets)]
+                    extension = {"acceptance_execution": {"commit": NEW.source, "run_id": "12", "run_attempt": "2"}}
+                    evidence = encode({"subject": {"platforms": platforms}, "source": {"runtime": role},
+                                       "extensions": {ref: extension if reattested else {}}})
+                    pair["images"][role] = {"reference": "ghcr.io/secpal/api@sha256:" + index * 64,
+                                            "platforms": platforms, "build_evidence_sha256": sha256(evidence)}
+                    files[f"{role}/build-evidence.json"] = evidence
+                    deadline = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+                    files[f"{role}/source-security.json"] = encode({"database": {"next_update": deadline}})
+                files["runtime-pair.json"] = encode(pair)
+                reader = SimpleNamespace(api_publication_evidence=lambda *_: (OLD.index, 1, files))
+                report = {"source_commit": NEW.source, "run_id": 12, "run_attempt": attempt}
+                with (patch("fcos_lab_proposal.spec_from_file_location"),
+                      patch("fcos_lab_proposal.module_from_spec", return_value=reader),
+                      patch("fcos_lab_proposal.get", return_value={"status": "ahead"}),
+                      patch("fcos_lab_proposal.evidence_agrees"),
+                      patch("fcos_lab_proposal.stage_gh_cli"),
+                      patch("fcos_lab_proposal.backend_proof", return_value=[None, None, files["runtime-pair.json"]]) as proof):
+                    if not eligible:
+                        with self.assertRaises(ValueError):
+                            verify_backend_publication(report)
+                        proof.assert_not_called()
+                        continue
+                    self.assertEqual(verify_backend_publication(report).publication, report)
+                    proof.assert_called_once()
+
     def test_only_ahead_and_different_can_be_proposed(self):
         case = {"source_commit": NEW.source, "run_id": 12, "run_attempt": 2}
         for state in ("identical", "behind", "diverged"):

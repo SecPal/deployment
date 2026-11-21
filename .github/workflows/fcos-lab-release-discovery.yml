@@ -25,6 +25,7 @@ jobs:
       contents: read
     outputs:
       proposal: ${{ steps.frontend.outputs.proposal }}
+      backend-proposal: ${{ steps.backend.outputs.proposal }}
     steps:
       - name: Checkout exact source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,35 +33,61 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Report and verify eligible upstream candidates
+      - name: Report upstream candidates
+        id: discovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          candidates="$(python3 scripts/fcos_lab_discovery.py)"
+          printf 'candidates=%s\n' "$(jq -c . <<< "$candidates")" >> "$GITHUB_OUTPUT"
+          {
+            printf '## FCOS lab candidates\n\n'
+            printf '%s\n' "$candidates" | sed 's/^/    /'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify eligible frontend publisher evidence
         id: frontend
         env:
           GH_TOKEN: ${{ github.token }}
           FCOS_FRONTEND_ACTIONS_READ_TOKEN: ${{ secrets.FCOS_FRONTEND_ACTIONS_READ_TOKEN }}
+          CANDIDATES: ${{ steps.discovery.outputs.candidates }}
         run: |
           set -euo pipefail
-          candidates="$(python3 scripts/fcos_lab_discovery.py)"
-          proposal="$(jq -c '.frontend' <<< "$candidates" | python3 scripts/fcos_lab_proposal.py verify)"
+          proposal="$(jq -c '.frontend' <<< "$CANDIDATES" | python3 scripts/fcos_lab_proposal.py verify)"
           printf 'proposal=%s\n' "$proposal" >> "$GITHUB_OUTPUT"
           if [[ -n "$proposal" ]]; then
             status='Verified a frontend lab proposal.'
           else
             status='No eligible frontend proposal.'
           fi
-          {
-            printf '## FCOS lab candidates\n\n'
-            printf '%s\n\n' "$status"
-            printf '%s\n' "$candidates" | sed 's/^/    /'
-          } >> "$GITHUB_STEP_SUMMARY"
-          printf '%s\n' "$status"
+          printf '%s\n' "$status" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify eligible backend publisher evidence
+        if: ${{ !cancelled() && steps.discovery.outcome == 'success' }}
+        id: backend
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATES: ${{ steps.discovery.outputs.candidates }}
+        run: |
+          set -euo pipefail
+          proposal="$(jq -c '.api' <<< "$CANDIDATES" | python3 scripts/fcos_lab_proposal.py backend-verify)"
+          printf 'proposal=%s\n' "$proposal" >> "$GITHUB_OUTPUT"
+          if [[ -n "$proposal" ]]; then
+            status='Verified a backend lab proposal. Compatibility evidence is outstanding.'
+          else
+            status='No eligible backend proposal.'
+          fi
+          printf '%s\n' "$status" | tee -a "$GITHUB_STEP_SUMMARY"
 
   draft-proposal:
     needs: candidate-report
     if: >-
+      !cancelled() &&
       github.repository == 'SecPal/deployment' &&
       github.ref == 'refs/heads/main' &&
       vars.FCOS_LAB_RELEASE_PROPOSALS == 'true' &&
-      needs.candidate-report.outputs.proposal != ''
+      (needs.candidate-report.outputs.proposal != '' || needs.candidate-report.outputs.backend-proposal != '')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -74,7 +101,8 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Prepare a signed draft on a proposal branch
+      - name: Prepare a signed frontend draft on a proposal branch
+        if: needs.candidate-report.outputs.proposal != ''
         env:
           GH_TOKEN: ${{ github.token }}
           FCOS_FRONTEND_PROPOSAL_WRITE_TOKEN: ${{ secrets.FCOS_FRONTEND_PROPOSAL_WRITE_TOKEN }}
@@ -82,3 +110,13 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "$PROPOSAL" | python3 scripts/fcos_lab_proposal.py publish
+
+      - name: Prepare a signed backend draft on a proposal branch
+        if: ${{ !cancelled() && needs.candidate-report.outputs.backend-proposal != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FCOS_FRONTEND_PROPOSAL_WRITE_TOKEN: ${{ secrets.FCOS_FRONTEND_PROPOSAL_WRITE_TOKEN }}
+          PROPOSAL: ${{ needs.candidate-report.outputs.backend-proposal }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$PROPOSAL" | python3 scripts/fcos_lab_proposal.py backend-publish
