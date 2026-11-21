@@ -200,6 +200,30 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
+def release_witness(request, api, record, fingerprint):
+    collection = "/v1/organizational-units"
+    path = f"{collection}/{record}"
+    parent = json.loads(request(api, path, 200))["data"]
+    if parent["id"] != record or parent["name"] != "FCOS lab rollout witness":
+        raise ValueError("organisation is not the designated synthetic witness")
+    name = f"FCOS rollout receipt {fingerprint}"
+
+    def descendants():
+        values = json.loads(request(api, path + "/descendants", 200))["data"]
+        present = [item for item in values if item["name"] == name]
+        if len(present) > 1 or (present and present[0]["type"] != "company"):
+            raise ValueError("ambiguous synthetic rollout receipt")
+        return str(UUID(present[0]["id"])) if present else None
+
+    if descendants() is None:
+        request(api, "/sanctum/csrf-cookie", 204)
+        response = json.loads(request(api, collection, 201, method="POST",
+                                      data={"type": "company", "name": name, "parent_id": record}))
+        created = str(UUID(response["data"]["id"]))
+        if descendants() != created:
+            raise ValueError("synthetic rollout receipt did not persist under the witness")
+
+
 def health(domain, address, settings, release):
     if set(settings) != {"email", "password", "organisation"}:
         raise ValueError("invalid synthetic witness configuration")
@@ -244,20 +268,7 @@ def health(domain, address, settings, release):
     request(api, "/v1/auth/login", 200, method="POST",
             data={"email": settings["email"], "password": settings["password"]})
     request(api, "/v1/me", 200)
-    path = f"/v1/organizational-units/{record}"
-    value = f"FCOS lab rollout {release.fingerprint[:16]}"
-
-    def witness():
-        item = json.loads(request(api, path, 200))["data"]
-        if item["id"] != record or item["name"] != "FCOS lab rollout witness":
-            raise ValueError("organisation is not the designated synthetic witness")
-        return item
-
-    if witness()["description"] != value:
-        request(api, "/sanctum/csrf-cookie", 204)
-        request(api, path, 200, method="PATCH", data={"description": value})
-    if witness()["description"] != value:
-        raise ValueError("synthetic witnessed write did not persist")
+    release_witness(request, api, record, release.fingerprint)
 
 
 def main():

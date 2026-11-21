@@ -15,7 +15,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from fcos_lab_rollout_adapter import Frontend, check_host_pin, native_children, prepare_request, request_line, ssh_arguments
+from fcos_lab_rollout_adapter import Frontend, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments
 from fcos_lab_rollout import RELEASE_PATHS, Release, source_release
 
 OLD = Release("1" * 40, "2" * 64)
@@ -58,6 +58,34 @@ class AdapterContract(unittest.TestCase):
         ):
             with self.subTest(host_pin=host_pin), self.assertRaises(ValueError):
                 check_host_pin("cx23", host_pin)
+
+    def test_release_writes_a_single_child_under_the_exact_witness(self):
+        witness = "00000000-0000-4000-8000-000000000001"
+        child = "00000000-0000-4000-8000-000000000002"
+        units = {}
+
+        def request(site, path, status, *, method="GET", data=None):
+            self.assertEqual(site, "https://api.example.test")
+            base = "/v1/organizational-units"
+            if path == base + "/" + witness:
+                self.assertEqual((method, status), ("GET", 200))
+                return json.dumps({"data": {"id": witness, "name": "FCOS lab rollout witness"}})
+            if path == base + "/" + witness + "/descendants":
+                self.assertEqual((method, status), ("GET", 200))
+                return json.dumps({"data": list(units.values())})
+            if path == "/sanctum/csrf-cookie":
+                self.assertEqual((method, status), ("GET", 204))
+                return ""
+            self.assertEqual((path, method, status), (base, "POST", 201))
+            self.assertEqual(data["parent_id"], witness)
+            self.assertEqual(data["type"], "company")
+            self.assertFalse(units, "repeated acceptance must not create another child")
+            units[child] = {"id": child, "name": data["name"], "type": data["type"]}
+            return json.dumps({"data": units[child]})
+
+        for _ in range(2):
+            release_witness(request, "https://api.example.test", witness, NEW.fingerprint)
+        self.assertEqual(len(units), 1)
 
     def test_prepare_only_sends_bounded_publisher_evidence(self):
         proof = ({"linux/amd64": DIGEST}, b"index", b"bundle")

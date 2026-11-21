@@ -76,9 +76,11 @@ before installing the exact reviewed source revision.
 
 1. Create one dedicated synthetic organisational unit named
    `FCOS lab rollout witness` using the existing private fixture. Record its
-   UUID and use a synthetic account permitted to read and edit that unit.
-   The acceptance check only changes that record's description and verifies
-   the resulting value. Prepare the root-only input `/secure/guest.json` with
+   UUID and use a synthetic account permitted to read that unit and create
+   a child within it. The acceptance check writes one synthetic child for
+   each distinct release fingerprint using the existing application POST
+   route. Read-back of the exact child under the witness makes a retry
+   idempotent. AppSec inspection remains active. Prepare the root-only input `/secure/guest.json` with
    the following shape:
 
    ```json
