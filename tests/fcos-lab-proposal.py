@@ -13,13 +13,14 @@ import json
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from fcos_lab_proposal import (
     BACKEND_DRAFT_FILE, FILE, BackendProposal, Proposal, backend_candidate, evidence_agrees, proposed_file,
-    candidate, main, publish, publisher_archive, write,
+    candidate, main, publish, publisher_archive, sha256, verify_backend_publication, write,
 )
 from fcos_lab_rollout_adapter import Backend, Frontend
 from fcos_lab_rollout import RELEASE_PATHS
@@ -88,6 +89,47 @@ class ProposalContract(unittest.TestCase):
         with patch("fcos_lab_proposal.get", return_value=ref), patch("fcos_lab_proposal.write") as writer:
             self.assertIn("expired", publish(expired, BASE, text, token=WRITE_TOKEN))
             writer.assert_not_called()
+
+    def test_backend_admission_reads_the_original_or_reattested_acceptance_attempt(self):
+        repo = "SecPal/api"
+        ref = "https://github.com/" + repo
+        workflow = {"repository": repo, "path": ".github/workflows/publish-container.yml",
+                    "commit": NEW.source, "run_id": "12", "run_attempt": "1"}
+        for attempt, reattested, eligible in ((1, False, True), (2, False, False), (2, True, True)):
+            with self.subTest(attempt=attempt, reattested=reattested):
+                pair = {"schema_version": "1.0.0", "source": {"repository": ref, "commit": NEW.source},
+                        "workflow": workflow, "images": {}}
+                files = {}
+                def encode(value):
+                    return json.dumps(value).encode()
+                for role, index, targets in (("php-fpm", "a", ("b", "c")), ("nginx", "d", ("e", "f"))):
+                    platforms = [{"platform": f"linux/{arch}", "manifest_digest": "sha256:" + digest * 64,
+                                  "labels": {"secpal.dev/runtime-component": role}}
+                                 for arch, digest in zip(("amd64", "arm64"), targets)]
+                    extension = {"acceptance_execution": {"commit": NEW.source, "run_id": "12", "run_attempt": "2"}}
+                    evidence = encode({"subject": {"platforms": platforms}, "source": {"runtime": role},
+                                       "extensions": {ref: extension if reattested else {}}})
+                    pair["images"][role] = {"reference": "ghcr.io/secpal/api@sha256:" + index * 64,
+                                            "platforms": platforms, "build_evidence_sha256": sha256(evidence)}
+                    files[f"{role}/build-evidence.json"] = evidence
+                    deadline = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+                    files[f"{role}/source-security.json"] = encode({"database": {"next_update": deadline}})
+                files["runtime-pair.json"] = encode(pair)
+                reader = SimpleNamespace(api_publication_evidence=lambda *_: (OLD.index, 1, files))
+                report = {"source_commit": NEW.source, "run_id": 12, "run_attempt": attempt}
+                with (patch("fcos_lab_proposal.spec_from_file_location"),
+                      patch("fcos_lab_proposal.module_from_spec", return_value=reader),
+                      patch("fcos_lab_proposal.get", return_value={"status": "ahead"}),
+                      patch("fcos_lab_proposal.evidence_agrees"),
+                      patch("fcos_lab_proposal.stage_gh_cli"),
+                      patch("fcos_lab_proposal.backend_proof", return_value=[None, None, files["runtime-pair.json"]]) as proof):
+                    if not eligible:
+                        with self.assertRaises(ValueError):
+                            verify_backend_publication(report)
+                        proof.assert_not_called()
+                        continue
+                    self.assertEqual(verify_backend_publication(report).publication, report)
+                    proof.assert_called_once()
 
     def test_only_ahead_and_different_can_be_proposed(self):
         case = {"source_commit": NEW.source, "run_id": 12, "run_attempt": 2}

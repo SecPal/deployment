@@ -252,11 +252,13 @@ def verify_backend_publication(report):
         native = {entry["platform"]: entry["manifest_digest"] for entry in component["platforms"]}
         proof = Proposal(index, source, run_id, original_attempt,
                          native["linux/amd64"], native["linux/arm64"], evidence)
+        original = {"commit": source, "run_id": str(run_id), "run_attempt": str(original_attempt)}
         accepted = {"commit": source, "run_id": str(run_id), "run_attempt": str(attempt)}
+        acceptance = manifest["extensions"][ref].get("acceptance_execution", original)
         if (component["build_evidence_sha256"] != evidence
                 or manifest["subject"]["platforms"] != component["platforms"]
                 or manifest["source"].get("runtime") != role
-                or manifest["extensions"][ref]["acceptance_execution"] != accepted
+                or acceptance != accepted
                 or any(p["labels"].get("secpal.dev/runtime-component") != role for p in component["platforms"])):
             raise ValueError("API component evidence does not bind the signed pair and acceptance attempt")
         evidence_agrees(manifest, source_scan, proof, upstream=API, image=API_IMAGE, user="secpal")

@@ -488,7 +488,10 @@ deployments, and the unchanged boot ID.
 Staging queues a deployment for the next boot. Treat an unrelated reboot as
 an activation risk while a candidate is staged. Pause the timer with
 `systemctl disable --now rpm-ostreed-automatic.timer` and allow an in-flight
-staging operation to settle before inspecting or selecting a version. For an
+staging operation to settle before inspecting or selecting a version. To
+hold the booted version across a reboot, inspect the pending deployment,
+then use `rpm-ostree cleanup -p` if it may be discarded. Verify that no
+pending deployment remains. For an
 exact test version, admit the signed native digest and stage it with
 `rpm-ostree rebase --disallow-downgrade ostree-image-signed:docker://quay.io/fedora/fedora-coreos@sha256:<native-digest>`.
 Leave the timer paused for the test. Resume automatic staging after returning
@@ -522,8 +525,10 @@ the selected topology.
 1. Restore authenticated access and the direct WireGuard peers using the
    existing restricted management path. Restore protected keys only for
    deliberately retained identities. After guest reprovisioning, authenticate
-   the regenerated SSH and WireGuard identities and revoke the old peer
-   through the existing restricted replacement workflow before enrollment.
+   the regenerated SSH and WireGuard identities. Retire the old SSH host
+   pin and revoke the old peer through the existing restricted replacement
+   workflow before enrollment. Provisioning details remain tracked in
+   [Host Foundation #425](https://github.com/SecPal/deployment/issues/425).
 2. From reviewed main, restore the controller user, its installed scripts,
    verification tools, timer and user-manager state. Restore the private
    rollout key, SSH host pins, witness settings and state directory from
