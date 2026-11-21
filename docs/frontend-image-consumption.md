@@ -49,10 +49,12 @@ recovery/rollback targets exists. Historical CVE findings remain open unless
 subject-specific remediation or complete retirement is established; neither a
 new publication nor this source change proves retirement.
 
-## FCOS lab rollout release
+## First qualified FCOS lab rollout
 
-The protected-main lab override admits the frontend-only rollout on
-the existing FCOS test guests. It uses:
+The first live frontend-only rollout on the existing FCOS test guests used
+the following identities. The active lab pin remains in
+`scripts/integration_runtime_contract.py` and subsequent proposal PRs record
+their own publisher evidence.
 
 - Image: `ghcr.io/secpal/frontend@sha256:d99c6d39cdbac1d63fbd72f2a25f4c29ea87bc6693dae65e2d4453d841fbb48f`.
 - Source: `5ca50b7f39e29f91092b649730730cb27e5f271c`.

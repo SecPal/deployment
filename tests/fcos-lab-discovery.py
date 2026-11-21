@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from fcos_lab_discovery import (
     discover, main, official_tag, product_candidate, source_relationship, stable_release,
 )
-from integration_runtime_contract import API_SOURCE_COMMIT, FRONTEND_SOURCE_COMMIT
+from integration_runtime_contract import API_SOURCE_COMMIT, LAB_FRONTEND_SOURCE_COMMIT
 
 
 class CandidateSelectors(unittest.TestCase):
@@ -42,9 +42,9 @@ class CandidateSelectors(unittest.TestCase):
     def test_product_requires_successful_main_push_from_the_right_repository(self):
         source = "1" * 40
         run = {"head_branch": "main", "event": "push", "conclusion": "success",
-               "head_repository": {"full_name": "SecPal/frontend"}, "head_sha": source, "id": 42}
+               "head_repository": {"full_name": "SecPal/frontend"}, "head_sha": source, "id": 42, "run_attempt": 1}
         result = product_candidate({"workflow_runs": [run]}, "SecPal/frontend")
-        self.assertEqual(result, {"source_commit": source, "run_id": 42})
+        self.assertEqual(result, {"source_commit": source, "run_id": 42, "run_attempt": 1})
         self.assertEqual(
             product_candidate({"workflow_runs": [dict(run, event="workflow_dispatch")]}, "SecPal/frontend"),
             result,
@@ -72,7 +72,7 @@ class DiscoveryContract(unittest.TestCase):
         def publication(repo, commit, run_id):
             return json.dumps({"workflow_runs": [{
                 "head_branch": "main", "event": "push", "conclusion": "success",
-                "head_repository": {"full_name": repo}, "head_sha": commit, "id": run_id,
+                "head_repository": {"full_name": repo}, "head_sha": commit, "id": run_id, "run_attempt": 1,
             }]})
 
         frontend_revision = "a" * 40
@@ -81,7 +81,7 @@ class DiscoveryContract(unittest.TestCase):
             f"repos/SecPal/api{workflow}": publication("SecPal/api", API_SOURCE_COMMIT, 42),
             f"repos/SecPal/frontend{workflow}": publication("SecPal/frontend", frontend_revision, 43),
             f"repos/SecPal/api/compare/{API_SOURCE_COMMIT}...{API_SOURCE_COMMIT}": '{"status":"identical"}',
-            f"repos/SecPal/frontend/compare/{FRONTEND_SOURCE_COMMIT}...{frontend_revision}": '{"status":"ahead"}',
+            f"repos/SecPal/frontend/compare/{LAB_FRONTEND_SOURCE_COMMIT}...{frontend_revision}": '{"status":"ahead"}',
             "repos/docker-library/official-images/contents/library/postgres": "Tags: 18.7-bookworm",
             "repos/docker-library/official-images/contents/library/haproxy": "Tags: 3.2.27-trixie",
         }
@@ -104,8 +104,8 @@ class DiscoveryContract(unittest.TestCase):
 
         with patch("fcos_lab_discovery.subprocess.run", side_effect=get):
             self.assertEqual(discover(), {
-                "api": {"source_commit": API_SOURCE_COMMIT, "run_id": 42, "source_relationship": "identical"},
-                "frontend": {"source_commit": frontend_revision, "run_id": 43, "source_relationship": "ahead"},
+                "api": {"source_commit": API_SOURCE_COMMIT, "run_id": 42, "run_attempt": 1, "source_relationship": "identical"},
+                "frontend": {"source_commit": frontend_revision, "run_id": 43, "run_attempt": 1, "source_relationship": "ahead"},
                 "postgres": "18.7-bookworm", "haproxy": "3.2.27-trixie",
                 "crowdsec": "v1.8.2", "spoa": "v0.4.0", "crs": "v4.30.0",
             })

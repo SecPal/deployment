@@ -138,7 +138,17 @@ def admit_source(repo, release):
     return Frontend.from_source(git(repo, "show", f"{release.revision}:{RUNTIME_SOURCE}").decode())
 
 
-def publisher_children(frontend):
+def verify_frontend_attestation(gh, subject, bundle, source, environment):
+    subprocess.run(
+        [gh, "attestation", "verify", subject, "--bundle", bundle, "--repo", "SecPal/frontend",
+         "--signer-workflow", "SecPal/frontend/.github/workflows/publish-container.yml",
+         "--source-ref", "refs/heads/main", "--source-digest", source,
+         "--signer-digest", source, "--deny-self-hosted-runners", "--hostname", "github.com"],
+        env=environment, check=True, timeout=120, stdout=subprocess.DEVNULL,
+    )
+
+
+def publisher_children(frontend, *, gh=None):
     environment = {"PATH": "/usr/bin:/bin"}
     with tempfile.TemporaryDirectory(prefix="fcos-lab-image-") as temporary:
         path = Path(temporary)
@@ -146,7 +156,7 @@ def publisher_children(frontend):
             HOME=temporary, GH_CONFIG_DIR=temporary, GH_PROMPT_DISABLED="1",
             GH_NO_UPDATE_NOTIFIER="1", GH_NO_EXTENSION_UPDATE_NOTIFIER="1", GH_TELEMETRY="false",
         )
-        gh = TOOLS / "gh"
+        gh = Path(gh) if gh else TOOLS / "gh"
         local_platform = {"x86_64": "linux/amd64", "aarch64": "linux/arm64"}[machine()]
         expected, = (
             line.split()[1] for line in
@@ -165,13 +175,7 @@ def publisher_children(frontend):
              IMAGE, frontend.index, "secpal/frontend"],
             env=environment, check=True, timeout=150, stdout=subprocess.DEVNULL,
         )
-        subprocess.run(
-            [gh, "attestation", "verify", index, "--bundle", bundle, "--repo", "SecPal/frontend",
-             "--signer-workflow", "SecPal/frontend/.github/workflows/publish-container.yml",
-             "--source-ref", "refs/heads/main", "--source-digest", frontend.source,
-             "--signer-digest", frontend.source, "--deny-self-hosted-runners", "--hostname", "github.com"],
-            env=environment, check=True, timeout=120, stdout=subprocess.DEVNULL,
-        )
+        verify_frontend_attestation(gh, index, bundle, frontend.source, environment)
         subject = index.read_bytes()
         return native_children(subject), subject, bundle.read_bytes()
 
