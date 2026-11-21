@@ -102,8 +102,9 @@ authority pins. The guest requires the installed helper's exact SHA-256 to
 match the protected source before staging an image or switching a release.
 
 PHP code, Composer dependencies and PHP/FPM requirements may change. The guest
-compares the migration files and checked-in schema dumps in the old and staged
-FPM images in networkless containers without runtime mounts or credentials.
+compares the Laravel-registered migrations (including dependency migrations)
+and checked-in schema dumps in the old and staged FPM images in networkless
+containers without runtime mounts or credentials.
 It checks the PostgreSQL 18 cluster identity, schema (including ownership and
 grants) and migration ledger again before switching or accepting the release.
 Changes that require a migration stay under the broader #93 contract.
@@ -124,8 +125,9 @@ migration ledger. Test the exact signed predecessor and candidate pairs.
 On the disposable database, run the role helper's `prepare` operation
 before starting PostgreSQL. Apply its reviewed `grant-role-contract` SQL to
 the empty database, restore using `pg_restore --role=secpal_owner --no-owner
---no-acl`, and apply the `restrict-migration-ledger` grant change. Set only
-the runtime login's password from the slot's protected credential file.
+--no-acl`, and apply the `restrict-migration-ledger` grant change. Set the
+runtime password from the slot's protected credential file and enable only
+the runtime login.
 Keep the migration login disabled and remove its disposable credential
 files before starting the application. Run the existing database authority
 probe to check the restored grants. For each rehearsal pair, set only the

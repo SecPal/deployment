@@ -60,7 +60,12 @@ class AdapterContract(unittest.TestCase):
         original = "".join(f'{key} = "{value}"\n' for key, value in fields.items())
         override = "".join(f'LAB_{key} = "{value}"\n' for key, value in fields.items())
         self.assertEqual(Backend.from_source(original), Backend.from_source(original + override))
-        for broken in (original + 'LAB_API_DIGEST = "latest"\n', original + override + override):
+        self.assertIsNone(Backend.from_source(original).compatibility)
+        record = f'LAB_API_COMPATIBILITY_SHA256 = "{"a" * 64}"\n'
+        self.assertEqual(Backend.from_source(original + override + record).compatibility, "a" * 64)
+        for broken in (original + 'LAB_API_DIGEST = "latest"\n', original + override + override,
+                       original + override + 'LAB_API_COMPATIBILITY_SHA256 = "bad"\n',
+                       original + override + record * 2):
             with self.assertRaises(ValueError):
                 Backend.from_source(broken)
         head, *proof = backend_request("cx23", "linux/amd64", NEW, OLD, fields["API_PAIR_DIGEST"],
@@ -177,7 +182,7 @@ class GuestContract(unittest.TestCase):
         record = {"schema_version": 1, "previous_pair": previous, "candidate_pair": candidate,
                   "schema": "5" * 64, "ledger": "6" * 64, "forward": evidence, "rollback": None}
         command = 'source "$1"; validate_backend_compatibility "$2" "$3" "$4" "$5" "$6"'
-        cases = [(record, "false"), (dict(record, rollback=backward), "true"),
+        cases = [(record, "false"), (dict(record, rollback=backward), "true"), ([record], None),
                  (dict(record, candidate_pair=previous), None), (dict(record, schema="7" * 64), None),
                  (dict(record, ledger="7" * 64), None), (dict(record, forward={}), None),
                  (dict(record, rollback=True), None), (dict(record, rollback=evidence), None),
@@ -185,7 +190,7 @@ class GuestContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory) / "compatibility.json"
             for data, admitted in cases:
-                with self.subTest(admitted=admitted, fields=tuple(data)):
+                with self.subTest(admitted=admitted, record=data):
                     fixture.write_text(json.dumps(data))
                     result = subprocess.run(["bash", "-c", command, "test", self.guest, fixture,
                                              previous, candidate, record["schema"], record["ledger"]],

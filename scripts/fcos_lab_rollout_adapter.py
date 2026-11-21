@@ -66,6 +66,7 @@ class Backend:
     fpm: str
     pair: str
     expires: str
+    compatibility: str | None
 
     @classmethod
     def from_source(cls, text):
@@ -80,7 +81,12 @@ class Backend:
             values.append(value)
         if len(set(values[1:4])) != 3:
             raise ValueError("backend pair and indexes must be distinct")
-        return cls(*values)
+        records = re.findall(r"^LAB_API_COMPATIBILITY_SHA256[ \t]*=.*$", text, re.MULTILINE)
+        compatibility = None
+        if records:
+            record, = records
+            compatibility, = re.findall(r'^LAB_API_COMPATIBILITY_SHA256 = "([a-f0-9]{64})"$', record)
+        return cls(*values, compatibility)
 
 
 def native_children(data):
@@ -453,6 +459,8 @@ def main():
             backend_change = backend != old_backend
             if backend_change:
                 try:
+                    if backend.compatibility is None:
+                        raise ValueError("backend compatibility record is required")
                     admit_backend_dispatch(repo, release)
                 except (OSError, ValueError, KeyError, TypeError, RolloutError, subprocess.SubprocessError):
                     backend_diagnostic("controller-dispatch")

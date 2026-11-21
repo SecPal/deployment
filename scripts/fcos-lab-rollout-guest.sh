@@ -490,26 +490,39 @@ run_staged() {
 fpm_migrations() {
     # shellcheck disable=SC2016 # PHP receives a literal program.
     run_staged "$1" /usr/local/bin/php -r '
-        if (!extension_loaded("pdo_pgsql") || !is_dir("/app/database/migrations")) exit(1);
+        if (!extension_loaded("pdo_pgsql")) exit(1);
+        require "/app/vendor/autoload.php";
+        $app = require "/app/bootstrap/app.php";
+        $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+        $migrator = $app->make("migrator");
+        $paths = array_unique([$app->databasePath("migrations"), ...$migrator->paths()]);
         $files = [];
-        foreach (["/app/database/migrations", "/app/database/schema"] as $root) {
-            if (is_link($root)) exit(1);
-            if (!file_exists($root)) continue;
-            $tree = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
-            foreach ($tree as $entry) {
-                if ($entry->isLink()) exit(1);
-                $hash = $entry->isFile() ? hash_file("sha256", $entry->getPathname()) : false;
-                if ($hash === false) exit(1);
-                $files[$entry->getPathname()] = $hash;
+        foreach ($paths as $path) {
+            foreach ($migrator->getMigrationFiles([$path]) as $name => $file) {
+                $resolved = realpath($file);
+                if (isset($files[$name]) || $resolved === false || !str_starts_with($resolved, "/app/") || is_link($file)) exit(1);
+                $files[$name] = hash_file("sha256", $resolved);
+                if ($files[$name] === false) exit(1);
             }
         }
+        if ($files === []) exit(1);
         ksort($files, SORT_STRING);
-        echo hash("sha256", json_encode($files, JSON_THROW_ON_ERROR)), "\n";
+        $schemas = [];
+        $schemaPath = $app->databasePath("schema");
+        if (is_link($schemaPath) || (file_exists($schemaPath) && !is_dir($schemaPath))) exit(1);
+        $schemaFiles = is_dir($schemaPath) ? glob($schemaPath . "/*", GLOB_ERR) : [];
+        if ($schemaFiles === false) exit(1);
+        foreach ($schemaFiles as $file) {
+            if (!is_file($file) || is_link($file)) exit(1);
+            $schemas[basename($file)] = hash_file("sha256", $file);
+            if ($schemas[basename($file)] === false) exit(1);
+        }
+        echo hash("sha256", json_encode([$files, $schemas], JSON_THROW_ON_ERROR)), "\n";
     '
 }
 
 validate_backend_compatibility() {
-    jq -ers --arg previous "$2" --arg candidate "$3" --arg schema "$4" --arg ledger "$5" '
+    jq --exit-status --raw-output --slurp --arg previous "$2" --arg candidate "$3" --arg schema "$4" --arg ledger "$5" '
         def evidence:
             type == "object" and keys == ["linux/amd64","linux/arm64"]
             and all(.[]; type == "string" and test("^sha256:[a-f0-9]{64}$"));
