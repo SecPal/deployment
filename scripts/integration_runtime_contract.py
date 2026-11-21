@@ -28,6 +28,8 @@ FPM_START_COMMAND = "chmod 0700 /run/secpal-fpm && exec php-fpm --nodaemonize"
 FRONTEND_DIGEST = "sha256:d893b3b5fc3861485f56460e85ba29e7e221cda0a729a192d3749c4c85a7342f"
 FRONTEND_IMAGE = "ghcr.io/secpal/frontend@" + FRONTEND_DIGEST
 FRONTEND_SOURCE_COMMIT = "d1c5b82f9f07ce4fb6bdac2054eeaa70149e2e38"
+LAB_FRONTEND_DIGEST = "sha256:d99c6d39cdbac1d63fbd72f2a25f4c29ea87bc6693dae65e2d4453d841fbb48f"
+LAB_FRONTEND_SOURCE_COMMIT = "5ca50b7f39e29f91092b649730730cb27e5f271c"
 
 
 @dataclass(frozen=True)
