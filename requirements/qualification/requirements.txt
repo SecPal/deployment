@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+-r ../schema/requirements.txt
+PyYAML==6.0.2

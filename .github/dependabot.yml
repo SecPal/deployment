@@ -16,6 +16,17 @@ updates:
       interval: daily
       time: "04:00"
       timezone: Europe/Berlin
+  - package-ecosystem: pip
+    directories:
+      - /requirements/build
+      - /requirements/integration
+      - /requirements/qualification
+      - /requirements/quality
+      - /requirements/schema
+    schedule:
+      interval: daily
+      time: "04:00"
+      timezone: Europe/Berlin
   - package-ecosystem: pre-commit
     directory: /
     schedule:
