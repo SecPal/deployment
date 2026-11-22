@@ -108,6 +108,67 @@ class RepositorySecurityTests(unittest.TestCase):
         self.assertNotIn("continue-on-error", admission)
         self.assertNotIn("if", admission)
 
+    def test_daily_assessment_only_reuses_the_required_source_scan(self):
+        daily = yaml.load(
+            (ROOT / ".github/workflows/daily-repository-security.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
+        self.assertEqual(set(daily), {"name", "on", "permissions", "jobs"})
+        self.assertEqual(daily["on"], {
+            "schedule": [{"cron": "23 3 * * *"}], "workflow_dispatch": "",
+        })
+        self.assertEqual(daily["permissions"], {"contents": "read"})
+        self.assertEqual(set(daily["jobs"]), {"repository-security"})
+        job = daily["jobs"]["repository-security"]
+        self.assertEqual(set(job), {"name", "runs-on", "timeout-minutes", "steps"})
+        required = self.workflow["jobs"]["repository-security"]
+        for field in ("runs-on", "timeout-minutes"):
+            self.assertEqual(job[field], required[field])
+        admission, *scan = job["steps"]
+        self.assertEqual(scan, required["steps"][2:])
+        self.assertEqual(set(admission), {"name", "shell", "run"})
+        self.assertEqual(admission["shell"], "bash")
+
+    def test_daily_events_admit_only_exact_protected_main(self):
+        daily = yaml.load(
+            (ROOT / ".github/workflows/daily-repository-security.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
+        admission = daily["jobs"]["repository-security"]["steps"][0]
+        invalid_contexts = (
+            {"GITHUB_REPOSITORY": "Other/deployment"},
+            {"GITHUB_REF": "refs/heads/topic"},
+            {"GITHUB_REF": "refs/tags/main"},
+            {"GITHUB_REF_PROTECTED": "false"},
+            {"GITHUB_REF_PROTECTED": ""},
+            {"GITHUB_SHA": "main"},
+            {"GITHUB_SHA": "a" * 39},
+            {"GITHUB_SHA": ""},
+            {"GITHUB_EVENT_NAME": "pull_request"},
+        )
+        for event, changes in itertools.product(
+            ("schedule", "workflow_dispatch"), ({}, *invalid_contexts)
+        ):
+            with self.subTest(event=event, changes=changes):
+                observed = subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", admission["run"]],
+                    env={
+                        "GITHUB_EVENT_NAME": event,
+                        "GITHUB_REPOSITORY": "SecPal/deployment",
+                        "GITHUB_REF": "refs/heads/main",
+                        "GITHUB_REF_PROTECTED": "true",
+                        "GITHUB_SHA": "a" * 40,
+                        **changes,
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(observed.returncode, 1 if changes else 0)
+                self.assertEqual(observed.stdout, "")
+                if changes:
+                    self.assertIn("requires protected SecPal/deployment main", observed.stderr)
+
     def test_admission_only_accepts_successful_clean_evidence_output(self):
         for result, state in itertools.product(
             ("success", "failure", "cancelled", "skipped", ""),
