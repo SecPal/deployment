@@ -79,6 +79,33 @@ run_initializer() {
     bash "$ROOT_DIR/scripts/init-local-secrets.sh"
 }
 
+check_fixture_tls() {
+  local directory="$1"
+  local leaf="$directory/postgresql/server.crt"
+  local ca="$directory/database/postgres-ca.crt"
+  local start end
+
+  if ! start=$(openssl x509 -in "$leaf" -noout -startdate) ||
+    ! end=$(openssl x509 -in "$leaf" -noout -enddate) ||
+    ! start=$(date -u -d "${start#notBefore=}" +%s) ||
+    ! end=$(date -u -d "${end#notAfter=}" +%s); then
+    fail "could not read the PostgreSQL fixture certificate validity"
+    return
+  fi
+  if ((end - start != 365 * 24 * 60 * 60)); then
+    fail "the PostgreSQL fixture certificate validity is not exactly 365 days"
+  fi
+  for identity in db.secpal.internal postgres; do
+    if ! openssl verify -CAfile "$ca" -purpose sslserver -verify_hostname "$identity" "$leaf" >/dev/null 2>&1; then
+      fail "the PostgreSQL fixture certificate failed verification for $identity"
+    fi
+  done
+  expect_failure "an unrelated PostgreSQL TLS identity" \
+    openssl verify -CAfile "$ca" -purpose sslserver -verify_hostname unrelated.secpal.internal "$leaf"
+  expect_failure "a PostgreSQL TLS certificate past expiry" \
+    openssl verify -CAfile "$ca" -purpose sslserver -verify_hostname postgres -attime "$((end + 1))" "$leaf"
+}
+
 install -d -m 0700 "$FAKE_BIN"
 printf '%s\n' '#!/bin/sh' \
   "if [ \"\${1:-}\" = \"-u\" ]; then printf '0\\n'; else exec /usr/bin/id \"\$@\"; fi" \
@@ -205,6 +232,8 @@ fi
 rm "$FAKE_BIN/mv"
 if ! run_initializer "$publish_failure" >/dev/null 2>&1; then
   fail "secret initialization did not recover after a publication failure"
+else
+  check_fixture_tls "$publish_failure"
 fi
 
 partial="$TEMP_DIR/partial"
@@ -213,6 +242,7 @@ printf 'partial\n' >"$partial/app-key"
 if ! run_initializer "$partial" >/dev/null 2>&1; then
   fail "a partial secret set was not recovered"
 else
+  check_fixture_tls "$partial"
   if ! run_initializer "$partial" >/dev/null 2>&1; then
     fail "the complete PHP/TLS delivery was not idempotent"
   fi

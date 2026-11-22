@@ -55,7 +55,7 @@ if ($source !== '') {
     file_put_contents($config, "[req]\ndistinguished_name=dn\n[dn]\n[v3]\nbasicConstraints=critical,CA:TRUE\nsubjectAltName=DNS:db.secpal.internal,DNS:postgres\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\nextendedKeyUsage=serverAuth\n");
     $key = openssl_pkey_new(['config' => $config, 'private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
     $csr = $key ? openssl_csr_new(['commonName' => 'db.secpal.internal'], $key, ['config' => $config, 'digest_alg' => 'sha256']) : false;
-    $cert = $csr ? openssl_csr_sign($csr, null, $key, 2, ['config' => $config, 'x509_extensions' => 'v3', 'digest_alg' => 'sha256']) : false;
+    $cert = $csr ? openssl_csr_sign($csr, null, $key, 365, ['config' => $config, 'x509_extensions' => 'v3', 'digest_alg' => 'sha256']) : false;
     if (!$cert || !openssl_x509_export($cert, $pem) || !openssl_pkey_export($key, $private, null, ['config' => $config])) $fail();
     if (!unlink($config)) $fail();
     $values = ['api/app-key' => file_get_contents("$source/app-key"), 'api/app-previous-keys' => '',
