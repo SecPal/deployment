@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+[Unit]
+Description=Verify the live SecPal lab PostgreSQL certificate
+
+[Service]
+Type=oneshot
+NoNewPrivileges=yes
+TimeoutStartSec=20s
+StandardInput=file:%h/.local/lib/secpal-fcos-postgres-tls/probe.php
+ExecStart=/usr/bin/podman exec --interactive --user 10001:10001 secpal-int-haproxy01-php-fpm php

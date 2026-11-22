@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+[Unit]
+Description=Check the SecPal lab PostgreSQL certificate every day
+
+[Timer]
+OnCalendar=*-*-* 06:15:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
