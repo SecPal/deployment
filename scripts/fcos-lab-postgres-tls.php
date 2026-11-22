@@ -57,8 +57,7 @@ function postgresTlsExpiry(string $host, int $port, string $identity, string $ca
     }
 }
 
-// The installed user service passes this file to PHP on standard input.
-if (($_SERVER['SCRIPT_FILENAME'] ?? null) === '') {
+if (getenv('SECPAL_POSTGRES_TLS_PROBE') === '1') {
     $identity = 'db.secpal.internal';
     $result = postgresTlsExpiry($identity, 5432, $identity, '/run/secpal/secrets/database/postgres-ca.crt');
     echo json_encode(['schema' => 1, 'observed_at' => gmdate('Y-m-d\TH:i:s\Z')] + $result, JSON_THROW_ON_ERROR), "\n";

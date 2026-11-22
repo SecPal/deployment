@@ -9,4 +9,5 @@ Type=oneshot
 NoNewPrivileges=yes
 TimeoutStartSec=20s
 StandardInput=file:%h/.local/lib/secpal-fcos-postgres-tls/probe.php
-ExecStart=/usr/bin/podman exec --interactive --user 10001:10001 secpal-int-haproxy01-php-fpm php
+ExecStartPre=/usr/bin/test -s %h/.local/lib/secpal-fcos-postgres-tls/probe.php
+ExecStart=/usr/bin/podman exec --interactive --user 10001:10001 --env SECPAL_POSTGRES_TLS_PROBE=1 secpal-int-haproxy01-php-fpm php
