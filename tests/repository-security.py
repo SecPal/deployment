@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import itertools
+import re
+import shlex
 import subprocess
 import unittest
 from pathlib import Path
@@ -192,6 +194,84 @@ class RepositorySecurityTests(unittest.TestCase):
     def test_offline_preflight_keeps_the_admission_regression(self):
         self.assertIn("python3 tests/repository-security.py",
                       (ROOT / "scripts/preflight.sh").read_text())
+
+    def test_python_workflows_consume_distinct_pinned_inventories(self):
+        environments = {
+            "quality": ("3.15.2", "quality"),
+            "local-integration": ("3.13.14", "integration"),
+            "rocky-evidence-architecture": ("${{ matrix.python }}", "schema"),
+            "rocky-cloud-qualification": ("3.12.13", "qualification"),
+        }
+        for name, (python, inventory) in environments.items():
+            with self.subTest(workflow=name):
+                workflow = yaml.load(
+                    (ROOT / f".github/workflows/{name}.yml").read_text(),
+                    Loader=yaml.BaseLoader,
+                )
+                steps = [step for job in workflow["jobs"].values()
+                         for step in job.get("steps", [])]
+                install, = [step for step in steps if "python -m pip install" in step.get("run", "")]
+                runtime, = [step for step in steps if step.get("uses", "").startswith("actions/setup-python@")]
+                self.assertEqual(runtime["with"]["python-version"], python)
+                if inventory == "schema":
+                    gate = workflow["jobs"]["architecture-gate"]
+                    self.assertEqual(gate["strategy"]["matrix"]["python"], ["3.12.13", "3.13.14"])
+                commands = install["run"].replace("\\\n", " ").splitlines()
+                command, = [shlex.split(line) for line in commands if line.startswith("python -m pip install")]
+                options = ["--only-binary=:all:"]
+                if inventory in ("quality", "integration"):
+                    options = ["--build-constraint", "requirements/build/requirements.txt"]
+                self.assertEqual(command, [
+                    "python", "-m", "pip", "install", "--disable-pip-version-check", "--no-deps",
+                    *options, "--requirement", f"requirements/{inventory}/requirements.txt",
+                ])
+                self.assertIn("python -m pip check", commands)
+
+    def test_pip_inventory_is_pinned_and_has_one_owner_per_package(self):
+        dependencies = {
+            "schema": None,
+            "qualification": "schema",
+            "quality": "qualification",
+            "integration": "quality",
+            "build": None,
+        }
+        paths = set((ROOT / "requirements").glob("*/requirements.txt"))
+        self.assertEqual(paths, {
+            ROOT / f"requirements/{name}/requirements.txt" for name in dependencies
+        })
+        owners = {}
+        for name, parent in dependencies.items():
+            lines = [
+                line for line in (ROOT / f"requirements/{name}/requirements.txt").read_text().splitlines()
+                if line and not line.startswith("#")
+            ]
+            references = [line for line in lines if line.startswith("-r ")]
+            self.assertEqual(references, [] if parent is None else [f"-r ../{parent}/requirements.txt"])
+            pins = [line for line in lines if line not in references]
+            self.assertTrue(pins, name)
+            for pin in pins:
+                match = re.fullmatch(r'([\w.-]+)==[0-9][\w.+!-]*(; python_version < "3\.13")?', pin)
+                self.assertIsNotNone(match, pin)
+                package = re.sub(r"[-_.]+", "-", match[1]).lower()
+                self.assertNotIn(package, owners)
+                owners[package] = name
+                self.assertEqual(match[2] is not None, package == "typing-extensions")
+        self.assertEqual(owners["jsonschema"], "schema")
+        self.assertEqual(owners["pyyaml"], "qualification")
+        self.assertEqual(owners["psycopg"], "integration")
+        for package in ("reuse", "shellcheck-py", "yamllint"):
+            self.assertEqual(owners[package], "quality")
+
+        dependabot = yaml.load((ROOT / ".github/dependabot.yml").read_text(), Loader=yaml.BaseLoader)
+        pip, = [entry for entry in dependabot["updates"] if entry["package-ecosystem"] == "pip"]
+        self.assertCountEqual(pip["directories"], [f"/requirements/{name}" for name in dependencies])
+        self.assertEqual(pip["schedule"]["interval"], "daily")
+        auto_merge = yaml.load(
+            (ROOT / ".github/workflows/dependabot-auto-merge.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
+        ecosystems = auto_merge["jobs"]["auto-merge"]["with"]["allowed-ecosystems"].split(",")
+        self.assertNotIn("pip", ecosystems)
 
 
 if __name__ == "__main__":

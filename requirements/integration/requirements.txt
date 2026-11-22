@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+-r ../quality/requirements.txt
+psycopg==3.3.6
