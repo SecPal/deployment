@@ -112,6 +112,8 @@ def repair_commit(get, head, actor, files=None):
     require(commit["sha"] == signature["oid"] == head and RECONCILE.signed(commit)
             and authored(commit["author"], actor)
             and [item["sha"] for item in commit["parents"]] == [intent["base"]]
+            and verified.get("__typename") == "GpgSignature"
+            and verified.get("signer") == RECONCILE.GITHUB_SIGNER
             and verified.get("isValid") is True and verified.get("state") == "VALID"
             and verified.get("wasSignedByGitHub") is True
             and headers.splitlines()[:2] == [f"tree {tree}", f'parent {intent["base"]}']
@@ -312,19 +314,42 @@ class GitHub:
                    "--match-head-commit", head], MERGE_STAGE)
 
 
-def select(get, mode, source, base, number, head):
+def candidates(get, base, number, head):
     RECONCILE.protected_base(get, base)
-    proposals = [get(f"pulls/{number}")] if number else get(PULLS)
+    if not number:
+        return get(PULLS)
+    pr = get(f"pulls/{number}")
+    require(pr["number"] == number and pr["head"]["sha"] == head, "event proposal or repair has changed")
+    return [pr]
+
+
+def select_proposal(proposals, source):
     for pr in sorted(proposals, key=lambda item: item["number"]):
-        if mode == "prepare":
-            match = RECONCILE.BRANCH.fullmatch(pr["head"]["ref"])
-            eligible = RECONCILE.bot(pr["user"]) and match and match["source"] == source
-        else:
-            eligible = pr["head"]["ref"].startswith(f'{PREFIX}{source.rsplit("/", 1)[1]}/')
-        if eligible:
-            require(not number or pr["head"]["sha"] == head, "event head has changed")
+        match = RECONCILE.BRANCH.fullmatch(pr["head"]["ref"])
+        if RECONCILE.bot(pr["user"]) and match and match["source"] == source:
             return pr
     return None
+
+
+def select_repair(get, proposals, source, base, actor):
+    prefix = f'{PREFIX}{source.rsplit("/", 1)[1]}/'
+    current = []
+    for pr in proposals:
+        if not pr["head"]["ref"].startswith(prefix) or not authored(pr["user"], actor):
+            continue
+        head = pr["head"]["sha"]
+        intent = repair_commit(get, head, actor)
+        repair_pr(pr, intent, head, actor)
+        if intent["base"] != base:
+            continue
+        for original in intent["proposals"]:
+            proposal = get(f'pulls/{original["number"]}')
+            if proposal["state"] != "open" or proposal["head"]["sha"] != original["head"]:
+                break
+        else:
+            current.append((pr, intent))
+    require(len(current) <= 1, "conflicting current repairs for one provider")
+    return current[0] if current else None
 
 
 def run(flags, github):
@@ -336,24 +361,24 @@ def run(flags, github):
         require(intent["base"] == flags.base and intent["source"] == source, "delivery context differs from plan")
         print(f"Verified repair PR #{deliver(get, github.write, intent, files, app_actor(get))}")
         return
-    pr = select(get, flags.mode, source, flags.base, flags.pr, flags.head)
-    if pr is None:
-        return
-    number, head = pr["number"], pr["head"]["sha"]
+    proposals = candidates(get, flags.base, flags.pr, flags.head)
     if flags.mode == "admit":
         actor = app_actor(get)
-        intent = repair_commit(get, head, actor)
-        if intent["base"] != flags.base:
-            print("Repair is stale. Waiting for the next signed proposal snapshot.")
+        selected = select_repair(get, proposals, source, flags.base, actor)
+        if selected is None:
             return
-        repair_pr(pr, intent, head, actor)
+        pr, intent = selected
+        number, head = pr["number"], pr["head"]["sha"]
         if not flags.pr and not github.ready(number, intent, head):
             print("Scheduled repair still awaits all protected checks.")
             return
         first = intent["proposals"][0]
         trigger, original = first["number"], first["head"]
     else:
-        trigger, original = number, head
+        proposal = select_proposal(proposals, source)
+        if proposal is None:
+            return
+        trigger, original = proposal["number"], proposal["head"]["sha"]
     report, files = RECONCILE.reconcile(
         get, trigger, original, flags.base,
         lambda provider, version: RECONCILE.generate_lock(flags.tofu.resolve(strict=True), provider, version),

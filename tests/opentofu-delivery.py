@@ -7,6 +7,7 @@
 import base64
 import runpy
 import sys
+from unittest.mock import patch
 from pathlib import Path
 import unittest
 
@@ -67,7 +68,9 @@ class Writer(SourceGitHub):
                 "commit": {"message": message, "tree": {"sha": TREE}, "verification": verification},
             }
             self.routes[f"commit-signature/{REPAIR}"] = {
-                "oid": REPAIR, "signature": {"isValid": True, "state": "VALID", "wasSignedByGitHub": True},
+                "oid": REPAIR, "signature": {"__typename": "GpgSignature", "isValid": True,
+                                           "state": "VALID", "wasSignedByGitHub": True,
+                                           "signer": delivery.RECONCILE.GITHUB_SIGNER},
             }
             self.routes[f"git/matching-refs/heads/{self.ref}"][0]["object"]["sha"] = REPAIR
             return REPAIR
@@ -145,6 +148,32 @@ class SignedWriterTests(unittest.TestCase):
         with self.assertRaisesRegex(Rejected, "signature"):
             github.deliver()
         self.assertEqual([kind for kind, _ in github.writes], ["ref", "commit"])
+
+    def test_wrong_github_platform_signer_never_admits_a_repair(self):
+        github = Writer()
+        github.deliver()
+        signature = github.routes[f"commit-signature/{REPAIR}"]["signature"]
+        for attribute in ("signer", "__typename"):
+            with self.subTest(attribute=attribute):
+                original = signature[attribute]
+                signature[attribute] = None
+                with self.assertRaisesRegex(Rejected, "signature"):
+                    delivery.repair_commit(github.get, REPAIR, ACTOR, github.files)
+                signature[attribute] = original
+
+    def test_scheduled_admission_looks_past_a_stale_signed_repair(self):
+        github = Writer()
+        github.deliver()
+        live = github.get("pulls/484")
+        stale_base = "b" * 40
+        stale_head = "f" * 40
+        stale_intent = dict(github.intent, base=stale_base)
+        stale = dict(live, number=483, head=dict(live["head"], sha=stale_head, ref=candidate_ref(stale_intent)))
+        with patch.object(delivery, "repair_commit", side_effect=[stale_intent, github.intent]):
+            self.assertEqual(
+                delivery.select_repair(github.get, [stale, live], DO, BASE, ACTOR),
+                (live, github.intent),
+            )
 
     def test_concurrent_ref_change_blocks_pr_creation(self):
         github = Writer()
