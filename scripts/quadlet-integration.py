@@ -2175,6 +2175,7 @@ class IntegrationLifecycle:
                 "--diagnostic-stage",
                 f"workload-{label}-attestation-fetch",
                 *(["--runtime-pair-output", os.fspath(self.fixture_root / "runtime-pair.json")] if runtime_pair else []),
+                *(["--purpose", "isolated-reference-fixture"] if runtime_pair and not self.cloud_mode else []),
             ],
             environment=self.anonymous_environment(),
         )

@@ -439,11 +439,15 @@ def _validate_subject_index(body: bytes) -> None:
         raise ValueError("OCI subject index shape was invalid")
 
 
-def _validate_runtime_pair(body: bytes, now: datetime, reviewed=None) -> None:
+def _validate_runtime_pair(
+    body: bytes, now: datetime, reviewed=None, *, reference_fixture: bool = False,
+) -> None:
     """Consume the API publisher's existing pair contract, never select images."""
     pair = _parse_object(body, "runtime pair")
     expected = {"php-fpm": PHP_FPM_IMAGE, "nginx": API_IMAGE}
     source, expires = API_SOURCE_COMMIT, API_VEX_EXPIRES_AT
+    if reference_fixture and reviewed is not None:
+        raise ValueError("reference fixture cannot use a reviewed lab pair")
     if reviewed is not None:
         if not isinstance(reviewed, dict) or set(reviewed) != {"source", "nginx", "fpm", "expires"}:
             raise ValueError("invalid reviewed lab pair identity")
@@ -468,7 +472,7 @@ def _validate_runtime_pair(body: bytes, now: datetime, reviewed=None) -> None:
         )
     ):
         raise ValueError("runtime pair does not bind the accepted source and both component indexes")
-    if now >= datetime.fromisoformat(expires.replace("Z", "+00:00")):
+    if not reference_fixture and now >= datetime.fromisoformat(expires.replace("Z", "+00:00")):
         raise ValueError("runtime pair requires renewed central security qualification")
 
 
@@ -548,7 +552,11 @@ def fetch_bundle(
     subject_output_path: Path | None = None,
     runtime_pair_output: Path | None = None,
     reviewed_lab_pair: dict | None = None,
+    *,
+    reference_fixture: bool = False,
 ) -> None:
+    if reference_fixture and (runtime_pair_output is None or SUBJECT_DIGEST != API_PAIR_DIGEST or reviewed_lab_pair is not None):
+        raise ValueError("reference fixture must use the pinned reference API pair")
     if (SUBJECT_MEDIA_TYPE == OCI_MANIFEST_MEDIA_TYPE) != (runtime_pair_output is not None):
         raise ValueError("runtime pair output and subject must be selected together")
     if runtime_pair_output is not None and (runtime_pair_output.exists() or runtime_pair_output.is_symlink() or not runtime_pair_output.parent.is_dir()):
@@ -593,7 +601,10 @@ def fetch_bundle(
             _require_size(document.get("size"), "runtime pair document")
             _, _, _, pair_body = request_bytes(blob_url(document["digest"]), {"Authorization": registry_headers["Authorization"]}, MANIFEST_RESPONSE_LIMIT, frozenset({200}))
             _validate_bytes(pair_body, document["digest"], document["size"], "runtime pair document")
-            _validate_runtime_pair(pair_body, datetime.now(timezone.utc), reviewed_lab_pair)
+            _validate_runtime_pair(
+                pair_body, datetime.now(timezone.utc), reviewed_lab_pair,
+                reference_fixture=reference_fixture,
+            )
 
     status, content_type, _registry_digest, index_body = request_bytes(
         REFERRERS_URL,
@@ -666,6 +677,7 @@ def main(argv: list[str]) -> int:
     diagnostic_stage = None
     pair_output = None
     reviewed = None
+    reference_fixture = False
     if len(argv) not in {6, 8, 10, 12}:
         return 2
     options = argv[6:]
@@ -677,6 +689,8 @@ def main(argv: list[str]) -> int:
             pair_output = Path(value)
         elif name == "--reviewed-lab-runtime-pair" and reviewed is None:
             reviewed = value
+        elif name == "--purpose" and value == "isolated-reference-fixture" and not reference_fixture:
+            reference_fixture = True
         else:
             return 2
     try:
@@ -688,7 +702,7 @@ def main(argv: list[str]) -> int:
         configure_identity(argv[3], argv[4], argv[5], runtime_pair=pair_output is not None,
                            reviewed_lab_pair=reviewed is not None)
         fetch_bundle(Path(argv[2]), subject_output_path=Path(argv[1]), runtime_pair_output=pair_output,
-                     reviewed_lab_pair=binding)
+                     reviewed_lab_pair=binding, reference_fixture=reference_fixture)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         if diagnostic_stage is not None:
             reason = closed_failure_reason(error)
