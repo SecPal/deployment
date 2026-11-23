@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from fcos_lab_rollout_adapter import Backend, Frontend, backend_declaration, backend_proof, backend_request, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments, verify_dispatch_authority
 from fcos_lab_rollout import RELEASE_PATHS, Release, source_release
-from fcos_lab_rollout_adapter import frontend_acceptance
+from fcos_lab_rollout_adapter import frontend_acceptance, publisher_children
 
 OLD = Release("1" * 40, "2" * 64)
 NEW = Release("3" * 40, "4" * 64)
@@ -27,6 +27,44 @@ SOURCE = "7" * 40
 
 
 class AdapterContract(unittest.TestCase):
+    def test_publisher_children_requires_acceptance_before_returning_proof(self):
+        children = {f"linux/{arch}": "sha256:" + str(i) * 64
+                    for i, arch in enumerate(("amd64", "arm64"), 1)}
+        subject = json.dumps({"manifests": [
+            {"platform": {"os": "linux", "architecture": platform.split("/")[1]},
+             "mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": digest}
+            for platform, digest in children.items()
+        ]}).encode()
+        bundle = b"signed bundle"
+        verified = [{"verificationResult": {"signature": {"certificate": {
+            "runInvocationURI": "https://github.com/SecPal/frontend/actions/runs/123/attempts/2",
+        }}}}]
+        cli = Path("/fixture/gh")
+
+        def run(command, **_):
+            if command[0] == cli:
+                self.assertEqual(command[1:3], ["attestation", "verify"])
+                self.assertEqual(command[-2:], ["--format", "json"])
+                self.assertEqual(command[3].read_bytes(), subject)
+                self.assertEqual(command[5].read_bytes(), bundle)
+                return subprocess.CompletedProcess(command, 0, stdout=json.dumps(verified).encode())
+            self.assertEqual(command[-2:], [DIGEST, "secpal/frontend"])
+            command[3].write_bytes(subject)
+            command[4].write_bytes(bundle)
+
+        for failure in (None, ValueError("publisher acceptance did not pass")):
+            with (self.subTest(failure=failure),
+                  patch("fcos_lab_rollout_adapter.verified_gh"),
+                  patch("fcos_lab_rollout_adapter.subprocess.run", side_effect=run),
+                  patch("fcos_lab_rollout_adapter.frontend_acceptance", side_effect=failure) as accept):
+                if failure is None:
+                    proof = publisher_children(Frontend(DIGEST, SOURCE), gh=cli, require_acceptance=True)
+                    self.assertEqual(proof, (children, subject, bundle))
+                else:
+                    with self.assertRaisesRegex(ValueError, "publisher acceptance did not pass"):
+                        publisher_children(Frontend(DIGEST, SOURCE), gh=cli, require_acceptance=True)
+                accept.assert_called_once_with(verified, SOURCE)
+
     def test_verified_index_must_belong_to_the_exact_successful_publisher_attempt(self):
         invocation = "https://github.com/SecPal/frontend/actions/runs/123/attempts/2"
         verified = [{"verificationResult": {"signature": {"certificate": {
