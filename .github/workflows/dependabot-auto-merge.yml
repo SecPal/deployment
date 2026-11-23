@@ -29,12 +29,16 @@ concurrency:
 jobs:
   auto-merge:
     # yamllint disable-line rule:line-length
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@482d55cf6732dd27c7075283b2a8055259f5c3c6 # main
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@bd69f3702883f6d990f2af1209cfcea47fc79bbe # main
     with:
       phase: "2"
       merge-method: squash
-      allowed-ecosystems: github_actions,npm_and_yarn,pre_commit,docker
+      allowed-ecosystems: github_actions,npm_and_yarn,pre_commit,docker,pip
       pre-commit-path: ".pre-commit-config.yaml"
+      pip-plain-manifest-paths: >-
+        ["requirements/build/requirements.txt","requirements/integration/requirements.txt",
+        "requirements/qualification/requirements.txt","requirements/quality/requirements.txt",
+        "requirements/schema/requirements.txt"]
       docker-rules: >-
         [{"image":"library/caddy","paths":["containers/phase-b-gateway/Containerfile"],"line":"2.11","suffix":"-alpine","digestRefresh":true}]
       workflow-paths: >-
