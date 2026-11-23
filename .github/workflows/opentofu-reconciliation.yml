@@ -1,0 +1,63 @@
+---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+name: Verify Dependabot OpenTofu reconciliation
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  reconcile:
+    name: Prepare verified provider-only changes
+    if: >-
+      github.repository == 'SecPal/deployment' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'dependabot/opentofu/infra/ci-cloud/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    concurrency:
+      group: >-
+        opentofu-reconciliation-${{ startsWith(github.event.pull_request.head.ref,
+        'dependabot/opentofu/infra/ci-cloud/digitalocean/') && 'digitalocean' || 'google' }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout the exact protected base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Install the accepted OpenTofu release
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.5
+          tofu_wrapper: false
+
+      - name: Authenticate and reconcile provider sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          REQUEST_HEAD: ${{ github.event.pull_request.head.sha }}
+          PROTECTED_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          python3 -I scripts/reconcile-opentofu.py \
+            --pr "$REQUEST_NUMBER" --head "$REQUEST_HEAD" --base "$PROTECTED_BASE" \
+            --tofu "$(command -v tofu)" --output "$RUNNER_TEMP/opentofu-reconciliation"
+
+      - name: Retain the exact verified source changes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: opentofu-reconciliation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/opentofu-reconciliation
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
