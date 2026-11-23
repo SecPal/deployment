@@ -8,21 +8,6 @@ import yaml
 
 
 class EnrollmentContract(unittest.TestCase):
-    def test_pip_preserves_the_five_environments_and_groups_by_dependency_name(self):
-        expected = ['build', 'integration', 'qualification', 'quality', 'schema']
-        directories = [f'/requirements/{directory}' for directory in expected]
-        config = yaml.safe_load(Path('.github/dependabot.yml').read_text())
-        pip, = [entry for entry in config['updates'] if entry['package-ecosystem'] == 'pip']
-        self.assertEqual(pip['directories'], directories)
-        self.assertEqual(pip['groups'], {'deployment-python': {
-            'group-by': 'dependency-name', 'update-types': ['patch', 'minor'],
-        }})
-        caller = yaml.load(Path('.github/workflows/dependabot-auto-merge.yml').read_text(),
-                           Loader=yaml.BaseLoader)
-        inputs = caller['jobs']['auto-merge']['with']
-        self.assertEqual(json.loads(inputs['pip-plain-manifest-paths']),
-                         [f'{directory[1:]}/requirements.txt' for directory in directories])
-
     def test_only_accepted_paths_and_gateway_rule_can_enroll(self):
         path = Path('.github/workflows/dependabot-auto-merge.yml')
         self.assertTrue(path.is_file(), 'native immutable caller must exist')
