@@ -290,7 +290,7 @@ class ProviderReconciliation(unittest.TestCase):
             ):
                 self.assertEqual(RECONCILER.generate_lock(tool, DO, "2.108.0"), "verified lock")
 
-    def test_dispatch_coverage_requires_both_bounded_external_operations(self):
+    def test_dispatch_coverage_requires_every_bounded_external_operation(self):
         declaration = ROOT / ".secpal/evidence-architecture.json"
         RECONCILER.validate_dispatch_coverage(declaration)
         incomplete = json.loads(declaration.read_text())
@@ -314,6 +314,22 @@ class ProviderReconciliation(unittest.TestCase):
             with patch.object(sys, "argv", arguments), patch.object(
                 RECONCILER, "admit_dispatch", side_effect=RECONCILER.Rejected("dispatch rejected"),
             ), patch.object(RECONCILER, "github_get") as fetch, redirect_stderr(io.StringIO()):
+                self.assertEqual(RECONCILER.main(), 1)
+            fetch.assert_not_called()
+            self.assertFalse(output.exists())
+
+    def test_github_cli_admission_failure_precedes_any_api_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "output"
+            arguments = [
+                "reconcile-opentofu.py", "--pr", "460", "--head", "a" * 40, "--base", BASE,
+                "--tofu", "/unavailable/tofu", "--governance", tmp, "--output", str(output),
+            ]
+            with patch.object(sys, "argv", arguments), patch.object(
+                RECONCILER, "admit_dispatch",
+            ), patch.object(RECONCILER, "stage_gh_cli", side_effect=ValueError("invalid archive")), patch.object(
+                RECONCILER, "github_get",
+            ) as fetch, redirect_stderr(io.StringIO()):
                 self.assertEqual(RECONCILER.main(), 1)
             fetch.assert_not_called()
             self.assertFalse(output.exists())

@@ -253,7 +253,7 @@ class InstallationContract(unittest.TestCase):
         operations.update(fcos_renderer["database_diagnostic_ids"](
             (ROOT / "scripts/fcos-poc-db-roles.sh").read_text()))
         reconciler = runpy.run_path(str(ROOT / "scripts/reconcile-opentofu.py"))
-        operations.update((reconciler["GITHUB_READ"], reconciler["PROVIDER_LOCK"]))
+        operations.update(reconciler["DISPATCH_OPERATIONS"])
         entries = document["external_operations"]
         self.assertEqual({row["id"] for row in entries}, operations)
         self.assertEqual(len(entries), len(operations))

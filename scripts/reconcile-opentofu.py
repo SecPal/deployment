@@ -15,6 +15,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from platform import machine
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from image_attestation_runtime import CLOUD_GH_RELEASES, stage_gh_cli
 
 REPOSITORY = "SecPal/deployment"
 BOT = {"login": "dependabot[bot]", "id": 49699333, "type": "Bot"}
@@ -22,8 +26,10 @@ GITHUB_SIGNER = {"login": "web-flow", "databaseId": 19864447}
 BOT_EMAIL = "49699333+dependabot[bot]@users.noreply.github.com"
 ROOT = Path(__file__).resolve().parents[1]
 GOVERNANCE_REVISION = "70c90d00ce8f293c217ea8fe4bc5caf0554a6c43"
+GITHUB_CLI = "opentofu-reconciliation.github-cli"
 GITHUB_READ = "opentofu-reconciliation.github-read"
 PROVIDER_LOCK = "opentofu-reconciliation.provider-lock"
+DISPATCH_OPERATIONS = (GITHUB_CLI, GITHUB_READ, PROVIDER_LOCK)
 TOFU_SHA256 = "36dae7ca1e4f1552a6faef27179dc16ef403203e956f31416c17b3d87a38c3f4"
 SHA = re.compile(r"[0-9a-f]{40}")
 VERSION = r"(?:0|[1-9][0-9]{0,8})(?:\.(?:0|[1-9][0-9]{0,8})){2}"
@@ -89,7 +95,7 @@ def validate_dispatch_coverage(declaration):
     expected = [
         {"id": name, "reachable": True, "fallible": True, "trusted": True,
          "diagnostic_identity": {"id": name, "kind": "semantic"}}
-        for name in (GITHUB_READ, PROVIDER_LOCK)
+        for name in DISPATCH_OPERATIONS
     ]
     actual = [item for item in operations if item["id"].startswith("opentofu-reconciliation.")]
     require(sorted(actual, key=lambda item: item["id"]) == expected,
@@ -307,8 +313,22 @@ def reconcile(get, trigger, head, base, generate):
     return report, files
 
 
-def github_get(endpoint):
-    command = ["gh", "api", "--hostname", "github.com"]
+def admit_github_cli(directory):
+    release = CLOUD_GH_RELEASES.get(machine())
+    require(release is not None, f"{GITHUB_CLI}: unsupported runner architecture")
+
+    def fetch_archive(argv, environment):
+        subprocess.run(argv, env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, check=True, timeout=190)
+
+    try:
+        return stage_gh_cli(directory, release, fetch_archive, {"HOME": str(directory), "PATH": "/usr/bin:/bin"})
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise Rejected(f"{GITHUB_CLI}: the approved executable could not be staged") from None
+
+
+def github_get(executable, endpoint):
+    command = [executable, "api", "--hostname", "github.com"]
     paginated = endpoint.startswith("pulls?")
     signature = endpoint.startswith("commit-signature/")
     if signature:
@@ -346,10 +366,12 @@ def main():
     try:
         require(flags.pr > 0, "invalid proposal number")
         admit_dispatch(flags.governance.resolve(strict=True))
-        report, files = reconcile(
-            github_get, flags.pr, flags.head, flags.base,
-            lambda source, version: generate_lock(flags.tofu.resolve(strict=True), source, version),
-        )
+        with tempfile.TemporaryDirectory(prefix="opentofu-github-cli-") as path:
+            github_cli = admit_github_cli(Path(path))
+            report, files = reconcile(
+                lambda endpoint: github_get(github_cli, endpoint), flags.pr, flags.head, flags.base,
+                lambda source, version: generate_lock(flags.tofu.resolve(strict=True), source, version),
+            )
         flags.output.mkdir(mode=0o700)
         for name, text in sorted(files.items()):
             destination = flags.output / name

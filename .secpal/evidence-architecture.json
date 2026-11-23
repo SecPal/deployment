@@ -1897,6 +1897,16 @@
       }
     },
     {
+      "id": "opentofu-reconciliation.github-cli",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "opentofu-reconciliation.github-cli",
+        "kind": "semantic"
+      }
+    },
+    {
       "id": "opentofu-reconciliation.github-read",
       "reachable": true,
       "fallible": true,
