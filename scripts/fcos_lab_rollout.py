@@ -23,6 +23,11 @@ RELEASE_PATHS = tuple(
     line for line in Path(__file__).with_name("fcos-lab-release-paths.txt").read_text(encoding="ascii").splitlines()
     if line and not line.startswith("#")
 )
+RUNTIME_SOURCE = "scripts/integration_runtime_contract.py"
+LAB_FRONTEND_PINS = re.compile(
+    rb'^LAB_FRONTEND_(DIGEST|SOURCE_COMMIT) = "(sha256:[0-9a-f]{64}|[0-9a-f]{40})"$',
+    re.MULTILINE,
+)
 
 
 class RolloutError(Exception):
@@ -80,7 +85,7 @@ def recover(path, initial, adapter):
     write_state(path, reconciled)
 
 
-def run_rollout(desired, path, adapter, baseline):
+def run_rollout(desired, path, adapter, baseline, *, admit=None):
     if not path.exists():
         write_state(path, baseline_state(baseline, adapter))
         return
@@ -103,6 +108,8 @@ def run_rollout(desired, path, adapter, baseline):
     if state["pending"] is None:
         if previous.fingerprint == desired.fingerprint:
             return
+        if admit is not None:
+            admit(desired, previous)
         for host in HOSTS:
             if adapter("observe", host, desired, previous) != previous.fingerprint:
                 raise RolloutError(f"{host}: drift from last accepted release")
@@ -110,6 +117,8 @@ def run_rollout(desired, path, adapter, baseline):
             adapter("prepare", host, desired, previous)
         state["pending"] = asdict(desired)
         write_state(path, state)
+    elif admit is not None:
+        admit(Release(**state["pending"]), previous)
 
     release = Release(**state["pending"])
     for index, host in enumerate(HOSTS):
@@ -189,6 +198,38 @@ def source_release(repo, revision):
     return Release(revision, hashlib.sha256(tree).hexdigest())
 
 
+def admit_frontend_only(repo, release, previous, protected_main):
+    """Allow only value changes to the two pins owned by the lab frontend proposal."""
+    git(repo, "merge-base", "--is-ancestor", previous.revision, release.revision)
+    git(repo, "merge-base", "--is-ancestor", release.revision, protected_main.revision)
+    for identity in (previous, release):
+        if source_release(repo, identity.revision) != identity:
+            raise RolloutError("frontend-only: journal identity differs from protected source")
+    changed = git(repo, "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z",
+                  previous.revision, release.revision, "--", *RELEASE_PATHS)
+    if changed != RUNTIME_SOURCE.encode() + b"\0":
+        raise RolloutError("frontend-only: release changes inputs outside the lab frontend pins")
+
+    def read(identity):
+        entry = git(repo, "ls-tree", identity.revision, "--", RUNTIME_SOURCE)
+        if not entry.startswith(b"100644 blob "):
+            raise RolloutError("frontend-only: unexpected runtime contract file mode")
+        source = git(repo, "show", f"{identity.revision}:{RUNTIME_SOURCE}")
+        entries = LAB_FRONTEND_PINS.findall(source)
+        pins = dict(entries)
+        if (len(entries) != 2 or set(pins) != {b"DIGEST", b"SOURCE_COMMIT"}
+                or not pins[b"DIGEST"].startswith(b"sha256:")
+                or len(pins[b"SOURCE_COMMIT"]) != 40):
+            raise RolloutError("frontend-only: invalid lab frontend pins")
+        return pins[b"DIGEST"].decode(), pins[b"SOURCE_COMMIT"].decode(), LAB_FRONTEND_PINS.sub(rb"\1", source)
+
+    index, source, contract = read(release)
+    old_index, old_source, old_contract = read(previous)
+    if contract != old_contract or index == old_index or source == old_source:
+        raise RolloutError("frontend-only: expected a new index and source with all other inputs unchanged")
+    return index, source
+
+
 def command_adapter(executable, state_directory=None):
     environment = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home())}
     if state_directory is not None:
@@ -240,6 +281,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--inspect", action="store_true", help="report the desired source without contacting guests")
     mode.add_argument("--recover", action="store_true", help="archive a blocked rollout after baseline reconciliation")
+    mode.add_argument("--frontend-only", action="store_true", help="admit only publisher-accepted lab frontend updates")
     args = parser.parse_args()
     if args.inspect:
         if args.adapter is not None or args.baseline is not None:
@@ -264,7 +306,20 @@ def main():
             if args.recover:
                 recover(state, initial, adapter)
             else:
-                run_rollout(desired, state, adapter, baseline=initial)
+                def admit(release, previous):
+                    index, source = admit_frontend_only(repository, release, previous, desired)
+                    sys.path.insert(0, str(Path(__file__).resolve().parent))
+                    try:
+                        from fcos_lab_rollout_adapter import Frontend, publisher_children
+
+                        publisher_children(Frontend(index, source), require_acceptance=True)
+                    except (ImportError, KeyError, OSError, subprocess.SubprocessError, TypeError, ValueError):
+                        raise RolloutError("frontend-only: exact signed publisher acceptance unavailable") from None
+                    finally:
+                        sys.path.pop(0)
+
+                run_rollout(desired, state, adapter, baseline=initial,
+                            admit=admit if args.frontend_only else None)
     except (KeyError, OSError, RolloutError, TypeError, ValueError) as error:
         detail = str(error) if isinstance(error, RolloutError) else "invalid rollout configuration or state"
         print(detail, file=sys.stderr)

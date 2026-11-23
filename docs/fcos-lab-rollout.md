@@ -83,6 +83,18 @@ services on every host. This keeps those services running during frontend
 activation and makes the previous frontend a compatible rollback target.
 Qualification of other components can extend these same five operations.
 
+The timer's service runs the coordinator with `--frontend-only`. Before
+staging or resuming a journaled release, the coordinator requires the
+accepted and candidate fingerprints to match protected source. It allows
+only value changes to the two lab frontend pins. Backend, migration,
+fixture and infrastructure inputs must stay byte-for-byte unchanged.
+The index attestation identifies the exact Frontend publisher run and
+attempt. The service requires successful completion of that attempt and
+its final publication gate before contacting any guest. That publisher
+gate owns the scanner, native runtime, SBOM and attestation checks.
+Missing evidence or a rejected change fails the service and preserves
+the journal for operator review.
+
 The backend lane uses a complete reviewed set of lab-only pins in
 `scripts/integration_runtime_contract.py`: `LAB_API_SOURCE_COMMIT`,
 `LAB_API_PAIR_DIGEST`, `LAB_API_DIGEST`, `LAB_PHP_FPM_DIGEST` and

@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from fcos_lab_rollout_adapter import Backend, Frontend, backend_declaration, backend_proof, backend_request, check_host_pin, native_children, prepare_request, release_witness, request_line, ssh_arguments, verify_dispatch_authority
 from fcos_lab_rollout import RELEASE_PATHS, Release, source_release
+from fcos_lab_rollout_adapter import frontend_acceptance
 
 OLD = Release("1" * 40, "2" * 64)
 NEW = Release("3" * 40, "4" * 64)
@@ -26,6 +27,40 @@ SOURCE = "7" * 40
 
 
 class AdapterContract(unittest.TestCase):
+    def test_verified_index_must_belong_to_the_exact_successful_publisher_attempt(self):
+        invocation = "https://github.com/SecPal/frontend/actions/runs/123/attempts/2"
+        verified = [{"verificationResult": {"signature": {"certificate": {
+            "runInvocationURI": invocation,
+        }}}}]
+        run = {"id": 123, "run_attempt": 2, "head_sha": SOURCE, "head_branch": "main",
+               "path": ".github/workflows/publish-container.yml", "event": "push",
+               "head_repository": {"full_name": "SecPal/frontend"},
+               "status": "completed", "conclusion": "success"}
+        job = {"name": "Accept verified Frontend publication", "run_id": 123, "run_attempt": 2,
+               "conclusion": "success", "steps": [
+                   {"name": "Verify all subjects and publish only unique discovery tag", "conclusion": "success"},
+               ]}
+
+        def check(attempt, jobs):
+            with patch("fcos_lab_rollout_adapter.frontend_actions_json",
+                       side_effect=[attempt, {"total_count": len(jobs), "jobs": jobs}]) as api:
+                frontend_acceptance(verified, SOURCE)
+                self.assertEqual([call.args[0] for call in api.call_args_list],
+                                 ["123/attempts/2", "123/attempts/2/jobs?per_page=100"])
+
+        check(run, [job])
+        for invalid_attempt, jobs in (
+            (dict(run, conclusion="failure"), [job]),
+            (dict(run, run_attempt=3), [job]),
+            (dict(run, head_sha="8" * 40), [job]),
+            (run, []),
+            (run, [dict(job, run_attempt=1)]),
+            (run, [dict(job, conclusion="skipped")]),
+            (run, [dict(job, steps=[dict(job["steps"][0], conclusion="skipped")])]),
+        ):
+            with self.subTest(attempt=invalid_attempt, jobs=jobs), self.assertRaises(ValueError):
+                check(invalid_attempt, jobs)
+
     def test_dispatch_authority_requires_exact_companion_bytes(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()
