@@ -2,40 +2,56 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: CC0-1.0
 
-name: Verify Dependabot OpenTofu reconciliation
+name: Reconcile Dependabot OpenTofu providers
 
 on:
   pull_request_target:
     branches: [main]
     types: [opened, reopened, synchronize]
+  schedule:
+    - cron: "23 1,7,13,19 * * *"
 
-permissions:
-  contents: read
-  pull-requests: read
+cache-mode: none
+permissions: {}
+
+env:
+  PROTECTED_BASE: ${{ github.sha }}
+  REQUEST_NUMBER: ${{ github.event.pull_request.number || 0 }}
+  REQUEST_HEAD: ${{ github.event.pull_request.head.sha }}
 
 jobs:
   reconcile:
     name: Prepare verified provider-only changes
     if: >-
-      github.repository == 'SecPal/deployment' &&
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.repository == 'SecPal/deployment' && github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'schedule' && vars.OPENTOFU_RECONCILER_APP_ID != '') ||
+      (github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.event.pull_request.head.ref, 'dependabot/opentofu/infra/ci-cloud/')
+      startsWith(github.event.pull_request.head.ref, 'dependabot/opentofu/infra/ci-cloud/')))
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [google, digitalocean]
     concurrency:
-      group: >-
-        opentofu-reconciliation-${{ startsWith(github.event.pull_request.head.ref,
-        'dependabot/opentofu/infra/ci-cloud/digitalocean/') && 'digitalocean' || 'google' }}
+      group: opentofu-reconciliation-${{ matrix.provider }}
       cancel-in-progress: false
+    env:
+      PROVIDER: ${{ matrix.provider }}
     steps:
-      - name: Checkout the exact protected base
+      - &checkout
+        name: Checkout exact protected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Checkout the canonical evidence architecture
+      - &governance
+        name: Checkout the canonical evidence architecture
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: SecPal/.github
@@ -43,39 +59,108 @@ jobs:
           path: .context/evidence-architecture
           persist-credentials: false
 
-      - name: Set up Node.js for the canonical parser
+      - &node
+        name: Set up Node.js for the canonical parser
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
-      - name: Install locked canonical parser dependencies
+      - &dependencies
+        name: Install locked canonical parser dependencies
         working-directory: .context/evidence-architecture
         run: npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Install the accepted OpenTofu release
+      - &tofu
+        name: Install the accepted OpenTofu release
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
           tofu_version: 1.12.5
           tofu_wrapper: false
 
       - name: Authenticate and reconcile provider sources
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-          REQUEST_NUMBER: ${{ github.event.pull_request.number }}
-          REQUEST_HEAD: ${{ github.event.pull_request.head.sha }}
-          PROTECTED_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          python3 -I scripts/reconcile-opentofu.py \
-            --pr "$REQUEST_NUMBER" --head "$REQUEST_HEAD" --base "$PROTECTED_BASE" \
-            --governance .context/evidence-architecture \
-            --tofu "$(command -v tofu)" --output "$RUNNER_TEMP/opentofu-reconciliation"
+          output="$RUNNER_TEMP/opentofu-reconciliation"
+          python3 -I scripts/opentofu_delivery.py prepare \
+            --provider "$PROVIDER" --pr "$REQUEST_NUMBER" --head "$REQUEST_HEAD" --base "$PROTECTED_BASE" \
+            --governance .context/evidence-architecture --tofu "$(command -v tofu)" --output "$output"
+          if [[ -f "$output/reconciliation.json" ]]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Retain the exact verified source changes
+      - name: Retain exact verified source changes
+        if: steps.plan.outputs.ready == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: opentofu-reconciliation-${{ github.run_id }}-${{ github.run_attempt }}
+          name: opentofu-reconciliation-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/opentofu-reconciliation
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
+
+      - name: Mint the repository-only repair token
+        if: steps.plan.outputs.ready == 'true' && vars.OPENTOFU_RECONCILER_APP_ID != ''
+        id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          app-id: ${{ vars.OPENTOFU_RECONCILER_APP_ID }}
+          private-key: ${{ secrets.OPENTOFU_RECONCILER_PRIVATE_KEY }}
+          owner: SecPal
+          repositories: deployment
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Publish the independently admissible signed source repair
+        if: steps.app.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          python3 -I scripts/opentofu_delivery.py deliver \
+            --provider "$PROVIDER" --base "$PROTECTED_BASE" --app-slug "$APP_SLUG" \
+            --governance .context/evidence-architecture --tofu "$(command -v tofu)" \
+            --output "$RUNNER_TEMP/opentofu-reconciliation"
+
+  admission:
+    name: Independently verify the signed repair
+    if: >-
+      github.repository == 'SecPal/deployment' && github.ref == 'refs/heads/main' &&
+      vars.OPENTOFU_RECONCILER_APP_ID != '' &&
+      (github.event_name == 'schedule' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'automation/opentofu/')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+      statuses: read
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [google, digitalocean]
+    concurrency:
+      group: opentofu-repair-admission-${{ matrix.provider }}
+      cancel-in-progress: false
+    env:
+      PROVIDER: ${{ matrix.provider }}
+    steps:
+      - *checkout
+      - *governance
+      - *node
+      - *dependencies
+      - *tofu
+      - name: Reproduce signed intent and wait for protected checks before enrollment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -I scripts/opentofu_delivery.py admit \
+            --provider "$PROVIDER" --pr "$REQUEST_NUMBER" --head "$REQUEST_HEAD" --base "$PROTECTED_BASE" \
+            --governance .context/evidence-architecture --tofu "$(command -v tofu)" \
+            --output "$RUNNER_TEMP/opentofu-reconciliation"

@@ -1917,6 +1917,26 @@
       }
     },
     {
+      "id": "opentofu-reconciliation.github-write",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "opentofu-reconciliation.github-write",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "opentofu-reconciliation.protected-merge",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "opentofu-reconciliation.protected-merge",
+        "kind": "semantic"
+      }
+    },
+    {
       "id": "opentofu-reconciliation.provider-lock",
       "reachable": true,
       "fallible": true,

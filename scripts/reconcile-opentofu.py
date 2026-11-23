@@ -10,6 +10,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -29,7 +30,9 @@ GOVERNANCE_REVISION = "70c90d00ce8f293c217ea8fe4bc5caf0554a6c43"
 GITHUB_CLI = "opentofu-reconciliation.github-cli"
 GITHUB_READ = "opentofu-reconciliation.github-read"
 PROVIDER_LOCK = "opentofu-reconciliation.provider-lock"
-DISPATCH_OPERATIONS = (GITHUB_CLI, GITHUB_READ, PROVIDER_LOCK)
+GITHUB_WRITE = "opentofu-reconciliation.github-write"
+PROTECTED_MERGE = "opentofu-reconciliation.protected-merge"
+DISPATCH_OPERATIONS = tuple(sorted((GITHUB_CLI, GITHUB_READ, PROVIDER_LOCK, GITHUB_WRITE, PROTECTED_MERGE)))
 TOFU_SHA256 = "36dae7ca1e4f1552a6faef27179dc16ef403203e956f31416c17b3d87a38c3f4"
 SHA = re.compile(r"[0-9a-f]{40}")
 VERSION = r"(?:0|[1-9][0-9]{0,8})(?:\.(?:0|[1-9][0-9]{0,8})){2}"
@@ -105,19 +108,20 @@ def validate_dispatch_coverage(declaration):
 def admit_dispatch(governance):
     validate_dispatch_coverage(ROOT / ".secpal/evidence-architecture.json")
     source = ["git", "--no-replace-objects", "-C", str(governance)]
+    environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
     try:
-        revision = subprocess.check_output([*source, "rev-parse", "HEAD"], text=True, timeout=15).strip()
+        revision = subprocess.check_output([*source, "rev-parse", "HEAD"], text=True, timeout=15, env=environment).strip()
         require(revision == GOVERNANCE_REVISION, "wrong canonical evidence architecture revision")
         subprocess.run(
             [*source, "diff", "--quiet", "HEAD", "--", "scripts/secpal-evidence-architecture.py",
              "scripts/secpal_evidence_architecture", "package.json", "package-lock.json"],
-            check=True, timeout=15,
+            check=True, timeout=15, env=environment,
         )
         subprocess.run(
             [sys.executable, "-I", "-S", str(governance / "scripts/secpal-evidence-architecture.py"),
              "--repository-root", str(ROOT), "--repository", REPOSITORY, "--dispatch"],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            check=True, timeout=60,
+            check=True, timeout=60, env=environment,
         )
     except subprocess.SubprocessError:
         raise Rejected("canonical evidence architecture refused OpenTofu reconciliation dispatch") from None
@@ -329,7 +333,7 @@ def admit_github_cli(directory):
 
 def github_get(executable, endpoint):
     command = [executable, "api", "--hostname", "github.com"]
-    paginated = endpoint.startswith("pulls?")
+    paginated = endpoint.startswith("pulls?") or re.fullmatch(r"pulls/[0-9]+/files\?per_page=100", endpoint)
     signature = endpoint.startswith("commit-signature/")
     if signature:
         oid = endpoint.split("/")[1]
