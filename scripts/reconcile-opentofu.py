@@ -18,6 +18,12 @@ from pathlib import Path
 
 REPOSITORY = "SecPal/deployment"
 BOT = {"login": "dependabot[bot]", "id": 49699333, "type": "Bot"}
+GITHUB_SIGNER = {"login": "web-flow", "databaseId": 19864447}
+BOT_EMAIL = "49699333+dependabot[bot]@users.noreply.github.com"
+ROOT = Path(__file__).resolve().parents[1]
+GOVERNANCE_REVISION = "70c90d00ce8f293c217ea8fe4bc5caf0554a6c43"
+GITHUB_READ = "opentofu-reconciliation.github-read"
+PROVIDER_LOCK = "opentofu-reconciliation.provider-lock"
 TOFU_SHA256 = "36dae7ca1e4f1552a6faef27179dc16ef403203e956f31416c17b3d87a38c3f4"
 SHA = re.compile(r"[0-9a-f]{40}")
 VERSION = r"(?:0|[1-9][0-9]{0,8})(?:\.(?:0|[1-9][0-9]{0,8})){2}"
@@ -61,6 +67,54 @@ def signed(commit):
 
 def bot(actor):
     return actor is not None and all(actor.get(key) == value for key, value in BOT.items())
+
+
+def verify_bot_signature(get, oid, base, commit):
+    response = get(f"commit-signature/{oid}")
+    signature = response["signature"] or {}
+    payload = commit["commit"]["verification"].get("payload") or ""
+    headers = payload.partition("\n\n")[0].splitlines()
+    tree = commit["commit"]["tree"]["sha"]
+    require(response["oid"] == oid and signature.get("__typename") == "GpgSignature"
+            and signature.get("isValid") is True and signature.get("state") == "VALID"
+            and signature.get("wasSignedByGitHub") is True and signature.get("signer") == GITHUB_SIGNER
+            and len(headers) == 4 and headers[:2] == [f"tree {tree}", f"parent {base}"]
+            and re.fullmatch(rf"author {re.escape(BOT['login'])} <{re.escape(BOT_EMAIL)}> [0-9]+ [+-][0-9]{{4}}", headers[2])
+            and re.fullmatch(r"committer GitHub <noreply@github\.com> [0-9]+ [+-][0-9]{4}", headers[3]),
+            "the GitHub platform signature does not bind the exact Dependabot author and parent")
+
+
+def validate_dispatch_coverage(declaration):
+    operations = json.loads(declaration.read_text(encoding="utf-8"))["external_operations"]
+    expected = [
+        {"id": name, "reachable": True, "fallible": True, "trusted": True,
+         "diagnostic_identity": {"id": name, "kind": "semantic"}}
+        for name in (GITHUB_READ, PROVIDER_LOCK)
+    ]
+    actual = [item for item in operations if item["id"].startswith("opentofu-reconciliation.")]
+    require(sorted(actual, key=lambda item: item["id"]) == expected,
+            "OpenTofu reconciliation diagnostic coverage is incomplete")
+
+
+def admit_dispatch(governance):
+    validate_dispatch_coverage(ROOT / ".secpal/evidence-architecture.json")
+    source = ["git", "--no-replace-objects", "-C", str(governance)]
+    try:
+        revision = subprocess.check_output([*source, "rev-parse", "HEAD"], text=True, timeout=15).strip()
+        require(revision == GOVERNANCE_REVISION, "wrong canonical evidence architecture revision")
+        subprocess.run(
+            [*source, "diff", "--quiet", "HEAD", "--", "scripts/secpal-evidence-architecture.py",
+             "scripts/secpal_evidence_architecture", "package.json", "package-lock.json"],
+            check=True, timeout=15,
+        )
+        subprocess.run(
+            [sys.executable, "-I", "-S", str(governance / "scripts/secpal-evidence-architecture.py"),
+             "--repository-root", str(ROOT), "--repository", REPOSITORY, "--dispatch"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=True, timeout=60,
+        )
+    except subprocess.SubprocessError:
+        raise Rejected("canonical evidence architecture refused OpenTofu reconciliation dispatch") from None
 
 
 def protected_base(get, expected):
@@ -129,7 +183,10 @@ def read_blob(get, entries, path):
     blob = get(f"git/blobs/{oid}")
     require(blob["encoding"] == "base64" and blob["sha"] == oid, "wrong blob encoding or identity")
     data = base64.b64decode("".join(blob["content"].splitlines()), validate=True)
-    require(len(data) <= 16384 and hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest() == oid,
+    # GitHub already verifies the signed commit. Match Git's SHA-1 blob identifier on read-back.
+    require(len(data) <= 16384 and hashlib.sha1(
+        f"blob {len(data)}\0".encode() + data, usedforsecurity=False,
+    ).hexdigest() == oid,
             "Git blob exceeds its boundary or differs from the observed digest")
     return data.decode()
 
@@ -192,13 +249,18 @@ def generate_lock(executable, source, version):
                 },
             )
         except subprocess.SubprocessError:
-            raise Rejected("OpenTofu failed to generate signature-verified provider locks") from None
+            raise Rejected(f"{PROVIDER_LOCK}: signature-verified lock generation failed") from None
         verified = re.findall(
-            rf"^- Retrieved {re.escape(source)} {re.escape(version)} for (\w+) \(signed, key ID [0-9A-Fa-f]+\)$",
+            rf"^- Retrieved {re.escape(source)} {re.escape(version)} for (\w+) "
+            r"\(signed(?: by [^()\r\n]{1,120})?, key ID [0-9A-Fa-f]{8,40}\)$",
             process.stdout, re.MULTILINE,
         )
-        require(sorted(verified) == sorted(platforms), "missing signed provider package on a required platform")
-        return (work / ".terraform.lock.hcl").read_text(encoding="utf-8")
+        require(sorted(verified) == sorted(platforms),
+                f"{PROVIDER_LOCK}: missing signed provider package on a required platform")
+        try:
+            return (work / ".terraform.lock.hcl").read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            raise Rejected(f"{PROVIDER_LOCK}: missing or invalid generated lockfile") from None
 
 
 def reconcile(get, trigger, head, base, generate):
@@ -216,6 +278,7 @@ def reconcile(get, trigger, head, base, generate):
                 and signed(commit) and [item["sha"] for item in commit["parents"]] == [base]
                 and sorted(changes) == [(lock, "modified"), (manifest, "modified")],
                 "signed commit provenance or changed files do not match the proposal")
+        verify_bot_signature(get, oid, base, commit)
         candidate_tree = tree_entries(get, commit["commit"]["tree"]["sha"])
         old_manifest = read_blob(get, base_tree, manifest)
         files[manifest] = read_blob(get, candidate_tree, manifest)
@@ -245,13 +308,29 @@ def reconcile(get, trigger, head, base, generate):
 
 
 def github_get(endpoint):
+    command = ["gh", "api", "--hostname", "github.com"]
     paginated = endpoint.startswith("pulls?")
-    output = subprocess.run(
-        ["gh", "api", "--hostname", "github.com", "--method", "GET",
-         *(["--paginate", "--slurp"] if paginated else []), f"repos/{REPOSITORY}/{endpoint}"],
-        check=True, capture_output=True, text=True, timeout=90,
-    )
-    response = json.loads(output.stdout)
+    signature = endpoint.startswith("commit-signature/")
+    if signature:
+        oid = endpoint.split("/")[1]
+        query = """query($oid:GitObjectID!){
+          repository(owner:"SecPal",name:"deployment"){
+            object(oid:$oid){... on Commit{
+              oid signature{__typename isValid state wasSignedByGitHub signer{login databaseId}}
+            }}
+          }
+        }"""
+        command.extend(["graphql", "-f", f"query={query}", "-f", f"oid={oid}"])
+    else:
+        command.extend(["--method", "GET", *(["--paginate", "--slurp"] if paginated else []),
+                        f"repos/{REPOSITORY}/{endpoint}"])
+    try:
+        output = subprocess.run(command, check=True, capture_output=True, text=True, timeout=90)
+        response = json.loads(output.stdout)
+        if signature:
+            return response["data"]["repository"]["object"]
+    except (KeyError, OSError, ValueError, subprocess.SubprocessError):
+        raise Rejected(f"{GITHUB_READ}: GitHub source evidence could not be retrieved") from None
     return [item for page in response for item in page] if paginated else response
 
 
@@ -261,10 +340,12 @@ def main():
     parser.add_argument("--head", required=True)
     parser.add_argument("--base", required=True)
     parser.add_argument("--tofu", type=Path, required=True)
+    parser.add_argument("--governance", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     flags = parser.parse_args()
     try:
         require(flags.pr > 0, "invalid proposal number")
+        admit_dispatch(flags.governance.resolve(strict=True))
         report, files = reconcile(
             github_get, flags.pr, flags.head, flags.base,
             lambda source, version: generate_lock(flags.tofu.resolve(strict=True), source, version),

@@ -1895,6 +1895,26 @@
         "id": "verify-storage-label-policy",
         "kind": "semantic"
       }
+    },
+    {
+      "id": "opentofu-reconciliation.github-read",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "opentofu-reconciliation.github-read",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "opentofu-reconciliation.provider-lock",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "opentofu-reconciliation.provider-lock",
+        "kind": "semantic"
+      }
     }
   ],
   "pure_surfaces": [],

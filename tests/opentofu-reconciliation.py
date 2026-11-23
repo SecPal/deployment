@@ -6,8 +6,11 @@
 
 import base64
 import copy
+from contextlib import redirect_stderr
 import hashlib
 import importlib.util
+import io
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -69,12 +72,12 @@ class GitHub:
         repo = {"full_name": "SecPal/deployment"}
         head_ref = f"dependabot/opentofu/infra/ci-cloud/{directory}/{provider}-{new}"
         pr = {
-            "user": BOT,
+            "user": dict(BOT),
             "number": number,
             "state": "open",
             "commits": 1,
-            "base": {"repo": repo, "ref": "main", "sha": BASE},
-            "head": {"repo": repo, "ref": head_ref, "sha": head},
+            "base": {"repo": dict(repo), "ref": "main", "sha": BASE},
+            "head": {"repo": dict(repo), "ref": head_ref, "sha": head},
         }
         self.open.append(pr)
         self.routes[f"pulls/{number}"] = pr
@@ -85,9 +88,19 @@ class GitHub:
         base_manifest = git_file.replace(f'version = "{current_pin}"', f'version = "{base_pin}"')
         new_manifest = base_manifest.replace(f'version = "{base_pin}"', f'version = "{new}"')
         self.routes[f"commits/{head}"] = {
-            "sha": head, "parents": [{"sha": BASE}], "author": BOT, "committer": {"login": "web-flow"},
-            "commit": {"verification": dict(VERIFIED), "tree": {"sha": tree}},
+            "sha": head, "parents": [{"sha": BASE}], "author": dict(BOT), "committer": {"login": "web-flow"},
+            "commit": {"verification": dict(
+                VERIFIED, payload=f"tree {tree}\nparent {BASE}\n"
+                "author dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> 1795340656 +0000\n"
+                "committer GitHub <noreply@github.com> 1795340656 +0000\n\nproposal\n",
+            ), "tree": {"sha": tree}},
             "files": [{"filename": path, "status": "modified"} for path in paths],
+        }
+        self.routes[f"commit-signature/{head}"] = {
+            "oid": head, "signature": {
+                "__typename": "GpgSignature", "isValid": True, "state": "VALID",
+                "wasSignedByGitHub": True, "signer": {"login": "web-flow", "databaseId": 19864447},
+            },
         }
         self.routes[f"git/trees/{tree}?recursive=1"] = {"truncated": False, "tree": []}
         for path, original, updated in zip(
@@ -160,7 +173,7 @@ class ProviderReconciliation(unittest.TestCase):
                     self.reconcile(head, lambda *_: self.fail("registry must not be contacted"))
 
     def test_rejects_wrong_actor_base_head_and_extra_file(self):
-        for attack in ("actor", "unsigned", "parent", "head", "extra", "mode", "fork", "unprotected"):
+        for attack in ("actor", "unsigned", "signer", "signed-author", "parent", "head", "extra", "mode", "fork", "unprotected"):
             with self.subTest(attack=attack):
                 self.github = GitHub()
                 head = self.github.add(460, "digitalocean", DO, "2.107.0", "2.108.0")
@@ -169,6 +182,12 @@ class ProviderReconciliation(unittest.TestCase):
                 tasks = {
                     "actor": lambda: pr["user"].update(id=99),
                     "unsigned": lambda: commit["commit"]["verification"].update(verified=False),
+                    "signer": lambda: self.github.routes[f"commit-signature/{head}"]["signature"]["signer"].update(login="someone-else"),
+                    "signed-author": lambda: commit["commit"]["verification"].update(
+                        payload=commit["commit"]["verification"]["payload"].replace(
+                            "author dependabot[bot]", "author someone-else",
+                        ),
+                    ),
                     "parent": lambda: commit["parents"][0].update(sha="b" * 40),
                     "head": lambda: pr["head"].update(sha="b" * 40),
                     "extra": lambda: commit["files"].append({"filename": ".github/workflows/quality.yml", "status": "modified"}),
@@ -251,6 +270,53 @@ class ProviderReconciliation(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RECONCILER.Rejected, "missing signed provider package"):
                     RECONCILER.generate_lock(tool, DO, "2.108.0")
+
+    def test_accepts_signed_by_publisher_with_a_key_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tool = Path(tmp) / "tofu"
+            tool.write_bytes(b"test")
+
+            def provider_lock(_command, **settings):
+                settings["cwd"].joinpath(".terraform.lock.hcl").write_text("verified lock")
+                return subprocess.CompletedProcess(
+                    ["tofu"], 0, stdout="\n".join(
+                        f"- Retrieved {DO} 2.108.0 for {platform} (signed by DigitalOcean, key ID 0123456789ABCDEF)"
+                        for platform in RECONCILER.PROVIDERS[DO][1]
+                    ),
+                )
+
+            with patch.object(RECONCILER, "TOFU_SHA256", hashlib.sha256(b"test").hexdigest()), patch.object(
+                RECONCILER.subprocess, "run", side_effect=provider_lock,
+            ):
+                self.assertEqual(RECONCILER.generate_lock(tool, DO, "2.108.0"), "verified lock")
+
+    def test_dispatch_coverage_requires_both_bounded_external_operations(self):
+        declaration = ROOT / ".secpal/evidence-architecture.json"
+        RECONCILER.validate_dispatch_coverage(declaration)
+        incomplete = json.loads(declaration.read_text())
+        incomplete["external_operations"] = [
+            entry for entry in incomplete["external_operations"]
+            if entry["id"] != "opentofu-reconciliation.provider-lock"
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            broken = Path(tmp) / "evidence-architecture.json"
+            broken.write_text(json.dumps(incomplete))
+            with self.assertRaisesRegex(RECONCILER.Rejected, "diagnostic coverage"):
+                RECONCILER.validate_dispatch_coverage(broken)
+
+    def test_dispatch_rejection_precedes_any_github_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "output"
+            arguments = [
+                "reconcile-opentofu.py", "--pr", "460", "--head", "a" * 40, "--base", BASE,
+                "--tofu", "/unavailable/tofu", "--governance", tmp, "--output", str(output),
+            ]
+            with patch.object(sys, "argv", arguments), patch.object(
+                RECONCILER, "admit_dispatch", side_effect=RECONCILER.Rejected("dispatch rejected"),
+            ), patch.object(RECONCILER, "github_get") as fetch, redirect_stderr(io.StringIO()):
+                self.assertEqual(RECONCILER.main(), 1)
+            fetch.assert_not_called()
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":
