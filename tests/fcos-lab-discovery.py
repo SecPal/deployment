@@ -100,11 +100,11 @@ class DiscoveryContract(unittest.TestCase):
             )
 
         def get(command, **kwargs):
-            self.assertEqual(command[:4], ["gh", "api", "--method", "GET"])
+            self.assertEqual(command[:6], ["gh", "api", "--hostname", "github.com", "--method", "GET"])
             self.assertEqual(kwargs["timeout"], 45)
-            path = command[4]
+            path = command[6]
             headers = ["--header", "Accept: application/vnd.github.raw+json"]
-            self.assertEqual(command[5:], headers if "/contents/library/" in path else [])
+            self.assertEqual(command[7:], headers if "/contents/library/" in path else [])
             return CompletedProcess(command, 0, stdout=responses.pop(path))
 
         with patch("fcos_lab_discovery.subprocess.run", side_effect=get):
@@ -135,7 +135,7 @@ class DiscoveryContract(unittest.TestCase):
                 "fcos_lab_discovery.qualified_frontend_source", return_value=nullcontext(result)
             ) as verify:
                 actual = qualified_candidate("frontend", gh)
-                verify.assert_called_once_with(commit, gh)
+                verify.assert_called_once_with(commit, gh, current=True)
                 self.assertEqual(get.call_count, 2)
                 self.assertEqual(actual["source_commit"], commit)
                 self.assertEqual(actual["run_id"], 42)

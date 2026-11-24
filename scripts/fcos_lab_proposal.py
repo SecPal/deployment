@@ -5,7 +5,7 @@
 """Verify publisher evidence and prepare an FCOS lab release draft."""
 
 import base64
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 from importlib.util import module_from_spec, spec_from_file_location
@@ -20,8 +20,10 @@ import sys
 import tempfile
 from zipfile import BadZipFile, ZipFile
 
-from fcos_lab_discovery import get, product_candidate, registry_publications, source_relationship
-from fcos_lab_rollout_adapter import API_IMAGE, DIGEST, IMAGE, RUNTIME_SOURCE as FILE, Backend, Frontend
+from fcos_lab_discovery import get, product_candidate, protected_source, qualified_candidate, registry_publications, source_relationship
+from fcos_lab_rollout_adapter import API_ARCHIVE, API_IMAGE, DIGEST, FRONTEND_ARCHIVE, IMAGE, RUNTIME_SOURCE as FILE, Backend, Frontend
+from fcos_lab_rollout import LAB_API_PINS, git
+from fcos_lab_rollout_adapter import ProposalFailure, QualificationUnavailable, admit_source_text, github_json, proposal_stage
 from fcos_lab_rollout_adapter import backend_proof, publisher_children, verify_frontend_attestation
 from image_attestation_runtime import CLOUD_GH_RELEASES, stage_gh_cli
 
@@ -295,6 +297,26 @@ def backend_candidate(report, current):
     return proposal
 
 
+def archived_selection(product, installed, gh):
+    """Select the signed main identity. The caller still has to admit an update."""
+    report = qualified_candidate(product, gh, current=False)
+    source = report["source_commit"]
+    if product == "frontend":
+        selected = Frontend(report["index"], source, FRONTEND_ARCHIVE)
+    else:
+        selected = Backend(source, report["indexes"]["nginx"], report["indexes"]["php-fpm"],
+                           report["receipt"], report["source_security_expires"], None, API_ARCHIVE)
+    if isinstance(selected, Backend):
+        # Renewal of evidence alone cannot change the installed image.
+        installed = replace(installed, expires=selected.expires)
+    if selected == installed:
+        return None
+    relationship = github_json(gh, f"repos/SecPal/{product}/compare/{installed.source}...{source}")
+    if source_relationship(relationship) != "ahead":
+        raise ValueError("the qualified source does not advance the installed source")
+    return selected
+
+
 def proposed_file(text, proposal):
     for key, value in (("DIGEST", proposal.index), ("SOURCE_COMMIT", proposal.source)):
         text, count = re.subn(rf'^LAB_FRONTEND_{key} = "[^"\n]+"$', f'LAB_FRONTEND_{key} = "{value}"',
@@ -304,11 +326,11 @@ def proposed_file(text, proposal):
     return text
 
 
-def write(method, endpoint, payload, *, token):
+def write(method, endpoint, payload, *, token, gh="gh"):
     output = subprocess.run(
-        ["gh", "api", "--hostname", "github.com", "--method", method, endpoint, "--input", "-"],
+        [gh, "api", "--hostname", "github.com", "--method", method, endpoint, "--input", "-"],
         input=json.dumps(payload), text=True, capture_output=True, check=True, timeout=45,
-        env=dict(os.environ, GH_TOKEN=token),
+        env=dict(os.environ, GH_TOKEN=token) if token else None,
     ).stdout
     return json.loads(output)
 
@@ -351,42 +373,7 @@ def publish(proposal, base, text, *, token):
     expected = ("<!--\n" + "SPDX-" + "FileCopyrightText: 2026 SecPal Contributors\n"
                 + "SPDX-" + "License-Identifier: AGPL-3.0-or-later\n-->\n\n"
                 + "# FCOS lab backend proposal\n\n" + proposal.draft_body()) if backend else proposed_file(text, proposal)
-    ref = f"refs/heads/{branch}"
-    refs = [record for record in get(f"{prefix}/git/matching-refs/heads/{branch}") if record["ref"] == ref]
-    if refs:
-        entry, = refs
-        tip = entry["object"]["sha"]
-    else:
-        tip = write("POST", f"{prefix}/git/refs", {"ref": ref, "sha": base}, token=token)["object"]["sha"]
-        if tip != base:
-            raise ValueError("new proposal ref differs from the admitted base")
-
-    if tip == base:
-        payload = {"branch": {"repositoryNameWithOwner": REPO, "branchName": branch},
-                   "message": {"headline": f"Propose the verified FCOS lab {lane} release"},
-                   "expectedHeadOid": base, "fileChanges": {"additions": [{
-                       "path": path, "contents": base64.b64encode(expected.encode()).decode("ascii"),
-                   }]}}
-        reply = write("POST", "graphql", {
-            "query": "mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid}}}",
-            "variables": {"input": payload},
-        }, token=token)
-        tip = reply["data"]["createCommitOnBranch"]["commit"]["oid"]
-    if re.fullmatch(SHA, tip) is None:
-        raise ValueError("invalid proposal commit")
-    commit = get(f"{prefix}/commits/{tip}")
-    if ([item["sha"] for item in commit["parents"]] != [base]
-            or [file["filename"] for file in commit["files"]] != [path]
-            or commit["commit"]["verification"]["verified"] is not True
-            or get(f"{prefix}/contents/{path}?ref={tip}", raw=True) != expected):
-        raise ValueError("the proposal branch differs from the verified proposal")
-    if get(f"{prefix}/git/ref/heads/main")["object"]["sha"] != base:
-        return "base changed before opening the proposal"
-
-    result = write("POST", f"{prefix}/pulls", {
-        "title": f"Propose FCOS lab {lane} {proposal.source[:12]}",
-        "head": branch, "base": "main", "draft": True,
-        "body": proposal.draft_body() if backend else (
+    body = proposal.draft_body() if backend else (
             f"Refs #93. Frontend lab pin only.\n\n"
             f"- [Publisher run {proposal.run_id}, attempt {proposal.run_attempt}]"
             f"(https://github.com/{UPSTREAM}/actions/runs/{proposal.run_id}/attempts/{proposal.run_attempt})\n"
@@ -396,15 +383,230 @@ def publish(proposal, base, text, *, token):
             "The publisher attestation and both native subjects, CLEAN Grype/Trivy evidence and smoke results passed. "
             "Review current compatibility and approve the native required checks before merging. "
             "The existing timer handles activation after an accepted merge."
-        ),
-    }, token=token)
-    return f"draft proposal #{int(result['number'])} created"
+        )
+    result, _, _ = open_proposal(branch, base, lane, proposal.source, {path: expected}, body, token=token, draft=True)
+    return result
+
+
+def open_proposal(branch, base, lane, source, files, body, *, token, draft, gh="gh"):
+    """Use the existing GitHub-signed branch transaction for either transport."""
+    prefix = f"repos/{REPO}"
+    ref = f"refs/heads/{branch}"
+    refs = [record for record in get(f"{prefix}/git/matching-refs/heads/{branch}", gh=gh) if record["ref"] == ref]
+    if refs:
+        entry, = refs
+        tip = entry["object"]["sha"]
+    else:
+        tip = write("POST", f"{prefix}/git/refs", {"ref": ref, "sha": base}, token=token, gh=gh)["object"]["sha"]
+        if tip != base:
+            raise ValueError("new proposal ref differs from the admitted base")
+
+    if tip == base:
+        payload = {"branch": {"repositoryNameWithOwner": REPO, "branchName": branch},
+                   "message": {"headline": f"Propose the verified FCOS lab {lane} release"},
+                   "expectedHeadOid": base, "fileChanges": {"additions": [
+                       {"path": path, "contents": base64.b64encode(contents.encode()).decode("ascii")}
+                       for path, contents in sorted(files.items())
+                   ]}}
+        reply = write("POST", "graphql", {
+            "query": "mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid}}}",
+            "variables": {"input": payload},
+        }, token=token, gh=gh)
+        tip = reply["data"]["createCommitOnBranch"]["commit"]["oid"]
+    if re.fullmatch(SHA, tip) is None:
+        raise ValueError("invalid proposal commit")
+    commit = get(f"{prefix}/commits/{tip}", gh=gh)
+    if ([item["sha"] for item in commit["parents"]] != [base]
+            or sorted(file["filename"] for file in commit["files"]) != sorted(files)
+            or commit["commit"]["verification"]["verified"] is not True
+            or any(get(f"{prefix}/contents/{path}?ref={tip}", raw=True, gh=gh) != contents
+                   for path, contents in files.items())):
+        raise ValueError("the proposal branch differs from the verified proposal")
+    if get(f"{prefix}/git/ref/heads/main", gh=gh)["object"]["sha"] != base:
+        return "base changed before opening the proposal", None, None
+
+    result = write("POST", f"{prefix}/pulls", {
+        "title": f"Propose FCOS lab {lane} {source[:12]}",
+        "head": branch, "base": "main", "draft": draft, "body": body,
+    }, token=token, gh=gh)
+    number = int(result["number"])
+    return f"{'draft ' if draft else ''}proposal #{number} created", number, tip
+
+
+def archived_files(product, text, selected, evidence, *, compatibility=None):
+    if product == "frontend":
+        updated = proposed_file(text, selected)
+    else:
+        if not compatibility:
+            raise ValueError("native API compatibility record is unavailable")
+        values = {"API_SOURCE_COMMIT": selected.source, "API_DIGEST": selected.nginx,
+                  "PHP_FPM_DIGEST": selected.fpm, "API_PAIR_DIGEST": selected.pair,
+                  "API_VEX_EXPIRES_AT": selected.expires,
+                  "API_COMPATIBILITY_SHA256": hashlib.sha256(compatibility).hexdigest(),
+                  "API_TRANSPORT": API_ARCHIVE}
+        updated = LAB_API_PINS.sub(b"", text.encode()).decode()
+        updated += "".join(f'LAB_{name} = "{value}"\n' for name, value in values.items())
+    files = {FILE: updated}
+    for side, key in (("installed", "previous"), ("candidate", "candidate")):
+        for (role, platform), evaluation in sorted(evidence[key].items()):
+            arch = platform.removeprefix("linux/")
+            leaf = f"{arch}-{side}.json" if product == "frontend" else f"{role}-{arch}-{side}.json"
+            rendered = json.dumps(evaluation, sort_keys=True, separators=(",", ":")) + "\n"
+            if len(rendered.encode()) > 1024**2:
+                raise ValueError("comparison evidence exceeds the repository limit")
+            files[f"config/quadlet/fcos-lab-rollout/{product}-security/{leaf}"] = rendered
+    return files
+
+
+def proposed_files_digest(files):
+    return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+
+
+def comparison_payload(content):
+    report = json.loads(content)
+    del report["evaluated_at"]
+    for run in report["scanner_runs"]:
+        del run["completed_at"], run["run_id"]
+    for observation in report["observations"]:
+        del observation["observed_at"], observation["scanner_run_id"]
+    return report
+
+
+def existing_archive_proposal(pr, prefix, base, files, gh):
+    """Read back an interrupted signed proposal before resuming its auto-merge."""
+    head = pr["head"]
+    if pr["draft"] or re.fullmatch(re.escape(prefix) + r"[a-f0-9]{64}", head["ref"]) is None:
+        return None
+    tip, number = head["sha"], int(pr["number"])
+    if re.fullmatch(SHA, tip) is None:
+        raise ValueError("invalid interrupted proposal commit")
+    endpoint = f"repos/{REPO}"
+    commit = get(f"{endpoint}/commits/{tip}", gh=gh)
+    if ([parent["sha"] for parent in commit["parents"]] != [base]
+            or sorted(item["filename"] for item in commit["files"]) != sorted(files)
+            or commit["commit"]["verification"]["verified"] is not True):
+        raise ValueError("interrupted proposal differs from the admitted base and scope")
+    stored = {path: get(f"{endpoint}/contents/{path}?ref={tip}", raw=True, gh=gh) for path in files}
+    if head["ref"] != prefix + proposed_files_digest(stored) or stored[FILE] != files[FILE]:
+        raise ValueError("interrupted proposal identity differs from its signed evidence")
+    scheduled = json.loads(subprocess.check_output(
+        [gh, "pr", "view", str(number), "--repo", REPO, "--json", "autoMergeRequest,headRefOid"],
+        stdin=subprocess.DEVNULL, timeout=45,
+    ))
+    if scheduled["headRefOid"] != tip:
+        raise ValueError("interrupted proposal head changed")
+    if scheduled["autoMergeRequest"] is not None:
+        return ("scheduled", number, tip)
+    actor = github_json(gh, "user")["login"]
+    if pr["user"]["login"] != actor:
+        raise ValueError("a different actor owns the older proposal")
+    if all(comparison_payload(stored[path]) == comparison_payload(files[path]) for path in files if path != FILE):
+        return ("resume", number, tip)
+    write("PATCH", f"{endpoint}/pulls/{number}", {"state": "closed"}, token=None, gh=gh)
+    return ("refresh", number, tip)
+
+
+def publish_archive(product, base, selected, files, gh):
+    lane = "frontend" if product == "frontend" else "backend"
+    index = selected.index if product == "frontend" else selected.pair
+    prefix = BRANCH if product == "frontend" else BACKEND_BRANCH
+    # Interrupted writes can retry the same bytes. A fresh comparison can use
+    # a different branch without rewriting an existing signed commit.
+    branch_prefix = prefix + index.removeprefix("sha256:") + "-" + base + "-"
+    branch = branch_prefix + proposed_files_digest(files)
+    endpoint = f"repos/{REPO}"
+    if github_json(gh, f"{endpoint}/git/ref/heads/main")["object"]["sha"] != base:
+        return "deployment base changed"
+    if protected_source(product, gh) != selected.source:
+        return "protected product main changed during qualification"
+    proposals = get(f"{endpoint}/pulls?state=open&base=main&per_page=100", paginate=True, gh=gh)
+    resume = None
+    for pr in proposals:
+        head = pr["head"]
+        if (head["repo"] or {}).get("full_name") != REPO or not head["ref"].startswith((BRANCH, BACKEND_BRANCH)):
+            continue
+        existing = existing_archive_proposal(pr, branch_prefix, base, files, gh)
+        if existing is None:
+            return f"deployment proposal #{int(pr['number'])} is already open"
+        action, number, tip = existing
+        if action == "scheduled":
+            return f"deployment proposal #{number} already has auto-merge enabled"
+        if action == "resume":
+            resume = number, tip
+    if resume:
+        number, tip = resume
+        message = f"deployment proposal #{number} resumed"
+    else:
+        body = (f"Refs #93. Propose the exact archived {lane} subject `{index}` from `{selected.source}`. "
+                "Current comparative evidence is bound to the observed Lab predecessor. "
+                "The existing controller rechecks the protected candidate and evaluates this evidence before activation.")
+        message, number, tip = open_proposal(branch, base, lane, selected.source, files, body, token=None, draft=False, gh=gh)
+    if tip is not None:
+        if protected_source(product, gh) != selected.source:
+            write("PATCH", f"{endpoint}/pulls/{number}", {"state": "closed"}, token=None, gh=gh)
+            return f"proposal #{number} closed because protected product main advanced"
+        subprocess.run([gh, "pr", "merge", str(number), "--repo", REPO, "--auto", "--squash",
+                        "--match-head-commit", tip], check=True, timeout=60,
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    return message
+
+
+def propose_archives(repo, release, gh, archives, *, baseline=None):
+    """Reconcile one component against the accepted release; leave activation to its timer."""
+    from fcos_lab_scan import compare_archives
+
+    text = admit_source_text(repo, release)
+    observed = admit_source_text(repo, baseline) if baseline is not None else text
+    for product, parse in (("frontend", Frontend), ("api", Backend)):
+        installed = parse.from_source(observed)
+        if baseline is not None and installed == parse.from_source(text):
+            continue
+        print(f"FCOS Lab {product}: selecting archived candidate", flush=True)
+        try:
+            with proposal_stage("publisher-read"):
+                selected = archived_selection(product, installed, gh)
+            if selected is None or (baseline is not None and selected == parse.from_source(text)):
+                print(f"FCOS Lab {product}: already current")
+                continue
+            compatibility = None
+            if product == "api":
+                path = "config/quadlet/fcos-lab-rollout/backend-compatibility.json"
+                with proposal_stage("security-comparison"):
+                    compatibility = git(repo, "show", f"{release.revision}:{path}")
+                    record = json.loads(compatibility)
+                    if (record["previous_pair"], record["candidate_pair"]) != (installed.pair, selected.pair):
+                        print("FCOS Lab API deferred: native compatibility evidence for this pair is outstanding")
+                        continue
+            evidence = compare_archives(product, installed, selected, gh, archives)
+            with proposal_stage("proposal-write"):
+                files = archived_files(product, text, selected, evidence, compatibility=compatibility)
+                print(publish_archive(product, release.revision, selected, files, gh))
+            return
+        except QualificationUnavailable as error:
+            print(f"FCOS Lab {product} deferred: {error}")
+        except ProposalFailure as error:
+            print(f"FCOS Lab {product} deferred: {error}", file=sys.stderr)
 
 
 def main():
     try:
-        mode, = sys.argv[1:]
+        mode, *args = sys.argv[1:]
         text = Path(FILE).read_text(encoding="utf-8")
+        if mode == "archive-select":
+            product, executable = args
+            if product not in {"frontend", "api"}:
+                raise ValueError("unknown product")
+            installed = (Frontend if product == "frontend" else Backend).from_source(text)
+            try:
+                plan = archived_selection(product, installed, Path(executable).absolute())
+            except QualificationUnavailable as error:
+                print(json.dumps({"status": "deferred", "reason": str(error)}, sort_keys=True))
+                return 0
+            print(json.dumps({"status": "already-current"} if plan is None else
+                             {"status": "selected", "candidate": asdict(plan)}, sort_keys=True))
+            return 0
+        if args:
+            raise ValueError("unsupported proposal arguments")
         value = json.load(sys.stdin)
         if mode in {"verify", "backend-verify"}:
             plan = (backend_candidate(value, Backend.from_source(text)) if mode == "backend-verify"

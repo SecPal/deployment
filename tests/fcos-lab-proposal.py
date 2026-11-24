@@ -38,6 +38,125 @@ SOURCE = (f'FRONTEND_DIGEST = "{OLD.index}"\n'
 
 
 class ProposalContract(unittest.TestCase):
+    def test_archived_selection_short_circuits_the_exact_installed_subject(self):
+        from fcos_lab_proposal import archived_selection
+        from fcos_lab_rollout_adapter import FRONTEND_ARCHIVE
+        installed = Frontend(OLD.index, OLD.source, FRONTEND_ARCHIVE)
+        report = {"index": installed.index, "source_commit": installed.source}
+        with patch("fcos_lab_proposal.qualified_candidate", return_value=report) as discovery, patch(
+            "fcos_lab_proposal.github_json"
+        ) as compare:
+            self.assertEqual(archived_selection("frontend", installed, Path("/trusted/gh")), None)
+            discovery.assert_called_once_with("frontend", Path("/trusted/gh"), current=False)
+            compare.assert_not_called()
+
+    def test_archived_selection_rejects_divergence_and_preserves_exact_plan(self):
+        from fcos_lab_proposal import archived_selection
+        from fcos_lab_rollout_adapter import FRONTEND_ARCHIVE
+        report = {"index": NEW.index, "source_commit": NEW.source}
+        with patch("fcos_lab_proposal.qualified_candidate", return_value=report), patch(
+            "fcos_lab_proposal.github_json", return_value={"status": "diverged"}
+        ), self.assertRaisesRegex(ValueError, "does not advance"):
+            archived_selection("frontend", OLD, Path("/trusted/gh"))
+        with patch("fcos_lab_proposal.qualified_candidate", return_value=report), patch(
+            "fcos_lab_proposal.github_json", return_value={"status": "ahead"}
+        ):
+            self.assertEqual(archived_selection("frontend", OLD, Path("/trusted/gh")),
+                             Frontend(NEW.index, NEW.source, FRONTEND_ARCHIVE))
+
+    def test_api_evidence_renewal_does_not_propose_an_identical_pair(self):
+        from fcos_lab_proposal import archived_selection
+        from fcos_lab_rollout_adapter import API_ARCHIVE
+        installed = Backend(OLD.source, OLD.index, NEW.index, "sha256:" + "5" * 64,
+                            "2026-11-24T12:00:00Z", "6" * 64, API_ARCHIVE)
+        report = {"source_commit": installed.source, "indexes": {"nginx": installed.nginx,
+                  "php-fpm": installed.fpm}, "receipt": installed.pair,
+                  "source_security_expires": "2026-11-25T12:00:00Z"}
+        with patch("fcos_lab_proposal.qualified_candidate", return_value=report), patch(
+            "fcos_lab_proposal.github_json"
+        ) as compare:
+            self.assertIsNone(archived_selection("api", installed, Path("/trusted/gh")))
+            compare.assert_not_called()
+
+    def test_matched_scanner_snapshot_is_required_for_protected_pins(self):
+        from fcos_lab_scan import compare_material
+        previous = {("frontend", "linux/amd64"): (OLD.index, None, None)}
+        candidate = {("frontend", "linux/amd64"): (NEW.index, None, None)}
+        calls = []
+
+        def scan(product, platform, artifact):
+            calls.append((product, platform, artifact[0]))
+            return {"subject": {"oci_digest": artifact[0], "platform": platform}}
+
+        scanner = SimpleNamespace(scan=scan, trivy_database="snapshot", trivy_snapshot=lambda: "snapshot")
+        with patch("fcos_lab_scan.admit_component_update") as admit:
+            evidence = compare_material("frontend", previous, candidate, scanner)
+            self.assertEqual(calls, [("frontend", "linux/amd64", digest) for digest in (OLD.index, NEW.index)])
+            self.assertEqual(admit.call_args.kwargs["installed"], {("frontend", "linux/amd64"): OLD.index})
+            self.assertEqual(admit.call_args.kwargs["candidate"], evidence["candidate"])
+            scanner.trivy_snapshot = lambda: "other snapshot"
+            with self.assertRaisesRegex(ValueError, "snapshot changed"):
+                compare_material("frontend", previous, candidate, scanner)
+            admit.assert_called_once()
+
+    def test_fresh_comparison_can_retry_an_interrupted_signed_proposal(self):
+        from fcos_lab_proposal import publish_archive
+        gh = Path("/trusted/gh")
+        with patch("fcos_lab_proposal.github_json", return_value={"object": {"sha": BASE}}), patch(
+            "fcos_lab_proposal.protected_source", return_value=NEW.source
+        ), patch("fcos_lab_proposal.get", return_value=[]), patch(
+            "fcos_lab_proposal.open_proposal", return_value=("opened", None, None)
+        ) as create:
+            for content in ("first", "first", "fresh"):
+                publish_archive("frontend", BASE, NEW, {FILE: content}, gh)
+        original, retry, refreshed = (call.args[0] for call in create.call_args_list)
+        self.assertEqual(original, retry)
+        self.assertNotEqual(original, refreshed)
+
+    def test_superseded_source_never_schedules_published_proposal(self):
+        from fcos_lab_proposal import publish_archive
+        with patch("fcos_lab_proposal.github_json", return_value={"object": {"sha": BASE}}), patch(
+            "fcos_lab_proposal.protected_source", side_effect=[NEW.source, "a" * 40]
+        ), patch("fcos_lab_proposal.get", return_value=[]), patch(
+            "fcos_lab_proposal.open_proposal", return_value=("opened", 42, NEW.source)
+        ), patch("fcos_lab_proposal.write") as close, patch("fcos_lab_proposal.subprocess.run") as merge:
+            message = publish_archive("frontend", BASE, NEW, {FILE: "qualified"}, Path("/trusted/gh"))
+        self.assertIn("advanced", message)
+        close.assert_called_once_with("PATCH", "repos/SecPal/deployment/pulls/42", {"state": "closed"},
+                                      token=None, gh=Path("/trusted/gh"))
+        merge.assert_not_called()
+
+    def test_existing_exact_proposal_resumes_without_writing_another_branch(self):
+        from fcos_lab_proposal import BRANCH, proposed_files_digest, publish_archive
+        gh = Path("/trusted/gh")
+        leaf = "config/quadlet/fcos-lab-rollout/frontend-security/amd64-installed.json"
+        record = {"evaluated_at": "old", "scanner_runs": [], "observations": []}
+        installed = {FILE: "exact pins", leaf: json.dumps(record)}
+        fresh = {**installed, leaf: json.dumps({**record, "evaluated_at": "new"})}
+        prefix = BRANCH + NEW.index.removeprefix("sha256:") + "-" + BASE + "-"
+        tip = "e" * 40
+        pr = {"draft": False, "number": 42, "head": {"sha": tip, "ref": prefix + proposed_files_digest(installed),
+              "repo": {"full_name": "SecPal/deployment"}}, "user": {"login": "builder"}}
+        commit = {"parents": [{"sha": BASE}], "files": [{"filename": path} for path in installed],
+                  "commit": {"verification": {"verified": True}}}
+        with patch("fcos_lab_proposal.github_json", side_effect=[{"object": {"sha": BASE}}, {"login": "builder"}]), patch(
+            "fcos_lab_proposal.protected_source", return_value=NEW.source
+        ), patch("fcos_lab_proposal.get", side_effect=[[pr], commit, *installed.values()]), patch(
+            "fcos_lab_proposal.subprocess.check_output",
+            return_value=json.dumps({"autoMergeRequest": None, "headRefOid": tip}),
+        ), patch("fcos_lab_proposal.subprocess.run") as merge, patch("fcos_lab_proposal.open_proposal") as create:
+            self.assertEqual(publish_archive("frontend", BASE, NEW, fresh, gh), "deployment proposal #42 resumed")
+        create.assert_not_called()
+        self.assertEqual(merge.call_args.args[0][-2:], ["--match-head-commit", tip])
+
+    def test_proposal_diagnostics_do_not_emit_external_payloads(self):
+        from fcos_lab_rollout_adapter import PROPOSAL_STAGES, ProposalFailure, proposal_stage
+        for stage in PROPOSAL_STAGES:
+            with self.subTest(stage=stage), self.assertRaisesRegex(
+                ProposalFailure, rf"^fcos-lab-proposal\.{stage}: OSError$"
+            ), proposal_stage(stage):
+                raise OSError("external stderr that must not be logged")
+
     def test_backend_draft_cannot_change_live_release_inputs(self):
         expires = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         plan = BackendProposal(NEW.index, NEW.source, 12, 2, "sha256:" + "a" * 64, "sha256:" + "b" * 64,
