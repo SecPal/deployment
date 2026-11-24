@@ -51,9 +51,12 @@ exported by a custom runtime entrypoint or mounted into Nginx.
 Source integration is not activation authority. A later switch still requires
 a valid Recovery Set, actual schema/data compatibility, migration/deployment
 locks, current OCI/security evidence and separately authorized activation.
-Known-vulnerable historical FrankenPHP images remain recovery identities, not
-safe automatic rollback targets. A new accepted source does not relabel any
-older PostgreSQL, cloud, or browser result as current qualification.
+FrankenPHP single-image releases are retired from SecPal-owned deployment,
+rollback and recovery. Use an accepted PHP-FPM/Nginx pair and verify
+compatibility with the enrolled schema, data and recovery point under
+[deployment #93][recovery]. If rollback compatibility cannot be established,
+use the approved forward-fix or recovery path. The historical qualification
+records retain their original source, artifacts and scope.
 
 ## Previous accepted pair (historical publication)
 
@@ -65,13 +68,13 @@ The preceding source contract selected the accepted pair from source `da806926a7
 - Publisher run: `42757690047`, candidate attempt `2`, qualification/acceptance
   attempt `3`; workflow `SecPal/api/.github/workflows/publish-container.yml`.
 
-These original publication identities remain recorded for historical and recovery
-reference. This entry does not declare retirement or approve automatic rollback.
+These identities record the preceding paired publication. This pair requires
+fresh admission and recovery compatibility under [deployment #93][recovery]
+before it can be selected for a rollback.
 
 ## Historical single-image integration identity
 
-The approved API image reference for the existing application integration
-fixture is:
+The completed Phase C application integration fixture used this API image:
 
 ```text
 ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e
@@ -92,13 +95,9 @@ The publisher verified the multi-architecture OCI index for `linux/amd64` and
 `linux/arm64`, the SBOM and SLSA provenance for both platforms, and runtime
 smokes for both platforms. It created and verified a GitHub Artifact
 Attestation. An anonymous public pull by digest was also confirmed externally.
-The deployment integration runner repeats the anonymous digest pull and
-requires the fixed-identity attestation verification before it permits any
-API-based role to execute.
-
-The separate native PostgreSQL qualifier and its #81 consumer use the scoped
-runtime identity below. Existing integration fixture consumers retain their
-approved digest and evidence contract.
+The Phase C runner repeated the anonymous digest pull and verified the
+fixed-identity attestation before starting the API roles. The separate native
+PostgreSQL qualification used the scoped historical identity below.
 
 ## Historical native PostgreSQL application identity
 
@@ -113,11 +112,11 @@ run `36992636604`, attempt `1`, workflow `publish-container.yml`, on protected
 - `linux/amd64`: `sha256:8d0d960306c6989be55a9c7bc41937699e55dbdbc6193bff870f38a1b19605a3`
 - `linux/arm64`: `sha256:ed91caa822e189187d57e0ff322c54e3b9837aa679cc087015933dcda9a3be7e`
 
-This identity remains bound to the original #81 qualification and is not the current production image authority. The current renderer reads the accepted pair from `integration_runtime_contract.py`; the archived declaration is not rewritten.
-The original declaration bound it for the #81 consumer. The qualifier verified its OCI
-index and GitHub artifact attestation before a rootless application executes,
-using the same anonymous bundle retrieval and fixed GitHub CLI authority as
-the integration fixture. See
+This identity remains bound to the original #81 qualification. The
+current renderer reads the accepted pair from `integration_runtime_contract.py`.
+The historical qualifier verified the OCI index and GitHub artifact attestation
+before starting the rootless application, using the same anonymous bundle
+retrieval and fixed GitHub CLI authority as the integration fixture. See
 [native PostgreSQL qualification](postgresql-qualification.md) for application
 observations, evidence admission and cleanup.
 
@@ -181,8 +180,8 @@ never an API image, deployment, discovery, or rollback reference.
 
 The historical discovery tag
 `ghcr.io/secpal/api:build-87d1432389adac3a02574b399322928a77c5e67f-30833321334-1`
-is not a deployment reference, rollback reference, or trust anchor. It is not
-an allowed Compose value. Only the canonical digest above is consumed.
+is retained as Phase C evidence. The fixture used the canonical image
+digest recorded above.
 
 ## Reviewed updates and rollback
 
@@ -199,10 +198,14 @@ Review and merge remain required. There is no automatic move to a newest image.
 
 Every integration fixture digest update requires a new reviewed deployment pull request.
 
-Rollback also requires a new reviewed pull request. It sets the API reference
-to a previously recorded and freshly reverified digest and reruns the same
-contracts. `latest`, `main`, release tags, build tags, SHA tags, unchecked
-environment variables, and manual tag changes are never rollback inputs.
+The current accepted PHP-FPM/Nginx pair documented above is the supported
+recovery baseline. Rollback requires a new reviewed pull request, fresh
+verification of the pair and component digests, and schema and data
+compatibility under [deployment #93][recovery]. An older pair requires
+fresh admission before it can be selected. Tags, unchecked environment
+variables and manual tag changes are never rollback inputs.
+
+[recovery]: https://github.com/SecPal/deployment/issues/93#issuecomment-7126107302
 
 ## Scope status
 
