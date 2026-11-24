@@ -71,6 +71,27 @@ remains on major 18 and its approved image layout. CRS also needs ruleset
 authenticity. Version proposals use immutable publisher identities. SecPal's
 product SemVer release decisions remain with the product publishers.
 
+For SecPal-owned Lab and reference targets, protected automation may
+select technically qualified, unpublished candidates from the exact current
+protected product main. The existing discovery command can verify the signed
+pre-registry records with its installed, pinned CLI and the repository's
+scoped Actions read credentials:
+
+```bash
+python3 scripts/fcos_lab_discovery.py --qualified frontend --gh /reviewed/tools/gh
+python3 scripts/fcos_lab_discovery.py --qualified api --gh /reviewed/tools/gh
+```
+
+The reported index, platform digests and signed receipt identify immutable
+inputs to the same deployment procedure. Discovery conveys neither target
+admission nor official release acceptance. Compare equivalent current
+scanner evidence against the installed predecessor under the existing
+deployment lock. Apply target-specific exposure and compatibility requirements,
+including the public reference's exposure. The controller still honors the
+current protected Lab pins and the migration-free API compatibility contract.
+See [deployment #93](https://github.com/SecPal/deployment/issues/93) for that
+scope and the separate Managed Hosting contract.
+
 ## Migration-free release lanes
 
 The adapter accepts the lab-only `LAB_FRONTEND_DIGEST` and
@@ -642,12 +663,18 @@ available.
 
 ## FCOS operations handoff
 
-| Status                       | Scope                                                                                                                                                                                                                                                         |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| LIVE QUALIFIED               | Retained multiarch FCOS installs, direct IPv4/IPv6 WireGuard and pinned SSH, SELinux and rootless Podman/Quadlet. Native Stable staging and controlled FCOS 45 activation passed on all three lab hosts. The frontend lab timer has delivered a real release. |
-| CONFIGURED / READY           | Zincati periodic maintenance on the current independently restartable lab assignments. The existing lab backend adapter, signed-pair admission and proposals.                                                                                                 |
-| NOT YET QUALIFIED            | First unattended Zincati reboot, first live changed-code backend release, independent off-host restoration of the development host and its public endpoints, and public application automatic deployment on FCOS.                                             |
-| LATER PRODUCTION REQUIREMENT | Complete production credential custody, data recovery, activated application update/migration/rollback and any coordination required by the actual topology.                                                                                                  |
+| Status                       | Scope                                                                                                                                                                                                                                                                               |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LIVE QUALIFIED               | Retained multiarch FCOS installs, direct IPv4/IPv6 WireGuard and pinned SSH, SELinux and rootless Podman/Quadlet. Native Stable staging and controlled FCOS 45 activation passed on all three lab hosts. The lab timer has delivered real frontend and migration-free API releases. |
+| CONFIGURED / READY           | Zincati periodic maintenance on the current independently restartable lab assignments. The existing lab backend adapter, signed-pair admission and proposals.                                                                                                                       |
+| NOT YET QUALIFIED            | First unattended Zincati reboot, independent off-host restoration of the development host and its public endpoints, and public application automatic deployment on FCOS.                                                                                                            |
+| LATER PRODUCTION REQUIREMENT | Complete production credential custody, data recovery, activated application update/migration/rollback and any coordination required by the actual topology.                                                                                                                        |
+
+The first migration-free API rollout selected source `59261efc38eb` in
+[deployment #496](https://github.com/SecPal/deployment/pull/496). The existing
+timer activated the exact signed pair sequentially on CX23, CX33 and CAX21.
+PostgreSQL cluster, volume and migration ledger read-back passed on all
+three hosts, along with HTTPS, browser login and organisation read-back.
 
 The current lab assignments use separate PostgreSQL clusters and local
 Podman networks. Each host moved from FCOS `44.20261023.3.1` to

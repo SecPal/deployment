@@ -512,47 +512,48 @@ def write_backend_archive_request(output, host, platform, release, previous, bac
 
 
 @contextmanager
-def verified_frontend_archive(frontend, *, current=True):
-    gh = TOOLS / "gh"
-    prefix = "repos/SecPal/frontend/actions"
-    workflow = ".github/workflows/publish-container.yml"
-    listing = github_json(gh, f"{prefix}/workflows/publish-container.yml/runs"
-                             f"?branch=main&head_sha={frontend.source}&status=completed&per_page=20")
-    for run in listing["workflow_runs"]:
-        run_id, attempt = run["id"], run["run_attempt"]
-        if (run["head_sha"] != frontend.source or run["head_branch"] != "main"
-                or run["head_repository"]["full_name"] != "SecPal/frontend"
-                or run["event"] not in {"push", "workflow_dispatch"} or run["path"] != workflow
-                or any(type(value) is not int or value < 1 for value in (run_id, attempt))):
-            raise ValueError("archived frontend producer is outside protected main")
-        invocation = f"{prefix}/runs/{run_id}"
-        jobs = github_json(gh, f"{invocation}/attempts/{attempt}/jobs?per_page=100")
-        required = {"Repository Security / Repository Security", "Validate Frontend Image",
-                    "Authenticate protected-main publication or qualification",
-                    "Qualify both exact unpublished OCI subjects",
-                    "Build native Frontend candidates / Native frontend (amd64)",
-                    "Build native Frontend candidates / Native frontend (arm64)",
-                    "Build native Frontend candidates / Container Contract"}
-        succeeded = {job["name"] for job in jobs["jobs"] if job["conclusion"] == "success"}
-        failed = {job["name"] for job in jobs["jobs"] if job["conclusion"] not in {"success", "skipped"}}
-        registry_jobs = {"Prepare exact digest subjects", "Attest candidate index platforms and Syft artifacts",
-                         "Accept verified Frontend publication", "Published native runtime (amd64)",
-                         "Published native runtime (arm64)", "Artifact security (amd64)", "Artifact security (arm64)"}
-        registry_failure = run["event"] == "push" and run["conclusion"] == "failure" and bool(failed) and failed <= registry_jobs
-        if required <= succeeded and (run["conclusion"] == "success" or registry_failure):
-            break
-    else:
-        raise ValueError("no qualified frontend candidate for the protected source")
+def qualified_frontend_source(source, gh, *, current=True):
+    if re.fullmatch(r"[a-f0-9]{40}", source) is None:
+        raise ValueError("invalid protected frontend source")
     with tempfile.TemporaryDirectory(prefix="fcos-lab-archive-") as temporary:
         root = Path(temporary)
         environment = {"PATH": "/usr/bin:/bin", "HOME": temporary, "GH_CONFIG_DIR": temporary,
                        "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1"}
         verified_gh(gh, environment)
+        prefix = "repos/SecPal/frontend/actions"
+        workflow = ".github/workflows/publish-container.yml"
+        listing = github_json(gh, f"{prefix}/workflows/publish-container.yml/runs"
+                                 f"?branch=main&head_sha={source}&status=completed&per_page=20")
+        for run in listing["workflow_runs"]:
+            run_id, attempt = run["id"], run["run_attempt"]
+            if (run["head_sha"] != source or run["head_branch"] != "main"
+                    or run["head_repository"]["full_name"] != "SecPal/frontend"
+                    or run["event"] not in {"push", "workflow_dispatch"} or run["path"] != workflow
+                    or any(type(value) is not int or value < 1 for value in (run_id, attempt))):
+                raise ValueError("archived frontend producer is outside protected main")
+            invocation = f"{prefix}/runs/{run_id}"
+            jobs = github_json(gh, f"{invocation}/attempts/{attempt}/jobs?per_page=100")
+            required = {"Repository Security / Repository Security", "Validate Frontend Image",
+                        "Authenticate protected-main publication or qualification",
+                        "Qualify both exact unpublished OCI subjects",
+                        "Build native Frontend candidates / Native frontend (amd64)",
+                        "Build native Frontend candidates / Native frontend (arm64)",
+                        "Build native Frontend candidates / Container Contract"}
+            succeeded = {job["name"] for job in jobs["jobs"] if job["conclusion"] == "success"}
+            failed = {job["name"] for job in jobs["jobs"] if job["conclusion"] not in {"success", "skipped"}}
+            registry_jobs = {"Prepare exact digest subjects", "Attest candidate index platforms and Syft artifacts",
+                             "Accept verified Frontend publication", "Published native runtime (amd64)",
+                             "Published native runtime (arm64)", "Artifact security (amd64)", "Artifact security (arm64)"}
+            registry_failure = run["event"] == "push" and run["conclusion"] == "failure" and bool(failed) and failed <= registry_jobs
+            if required <= succeeded and (run["conclusion"] == "success" or registry_failure):
+                break
+        else:
+            raise ValueError("no qualified frontend candidate for the protected source")
         qualification = root / "qualification"
-        download_publisher_artifact(gh, "frontend", run_id, frontend.source,
+        download_publisher_artifact(gh, "frontend", run_id, source,
                                     f"frontend-pre-registry-{run_id}-{attempt}", qualification, 8 * 1024**2)
         children, _ = verify_frontend_candidate(
-            qualification, frontend.source, run_id, attempt, gh, environment, current=current,
+            qualification, source, run_id, attempt, gh, environment, current=current,
         )
         publisher = qualification / "publisher"
         artifacts = github_json(gh, f"{invocation}/artifacts?per_page=100")["artifacts"]
@@ -560,17 +561,23 @@ def verified_frontend_archive(frontend, *, current=True):
                           if artifact["name"].startswith(f"trivy-repository-evidence-{run_id}-{attempt}-")
                           and artifact["expired"] is False)
         security = root / "repository-security"
-        download_publisher_artifact(gh, "frontend", run_id, frontend.source,
+        download_publisher_artifact(gh, "frontend", run_id, source,
                                     evidence_name, security, 8 * 1024**2)
         source_report = json.loads((security / "result.json").read_bytes())
         if source_report != json.loads((publisher / "source-security.json").read_bytes()):
             raise ValueError("frontend candidate source security differs from the independent job")
         proof = tuple(publisher / name for name in (
             "pre-registry.json", "pre-registry.bundle.json", "prepared.json", "index.json"))
-        if "sha256:" + hashlib.sha256(proof[-1].read_bytes()).hexdigest() != frontend.index:
-            raise ValueError("archived frontend differs from the protected OCI pin")
         yield gh, run_id, attempt, children, proof, root
 
+
+
+@contextmanager
+def verified_frontend_archive(frontend, *, current=True):
+    with qualified_frontend_source(frontend.source, TOOLS / "gh", current=current) as result:
+        if "sha256:" + hashlib.sha256(result[4][-1].read_bytes()).hexdigest() != frontend.index:
+            raise ValueError("archived frontend differs from the protected OCI pin")
+        yield result
 
 def prepare_archived_frontend(ssh, host, platform, release, previous, frontend):
     with verified_frontend_archive(frontend) as (gh, run_id, attempt, children, proof, root):
@@ -653,8 +660,9 @@ def archived_component_evidence(repo, release, previous, protected_main):
 
 
 @contextmanager
-def verified_backend_archive(backend, *, current=True):
-    gh = TOOLS / "gh"
+def qualified_backend_source(source, gh, *, current=True):
+    if re.fullmatch(r"[a-f0-9]{40}", source) is None:
+        raise ValueError("invalid protected API source")
     prefix = "repos/SecPal/api/actions/workflows/publish-container.yml/runs"
     with tempfile.TemporaryDirectory(prefix="fcos-lab-archive-") as temporary:
         root = Path(temporary)
@@ -662,22 +670,29 @@ def verified_backend_archive(backend, *, current=True):
                             "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1",
                             "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1", "GH_TELEMETRY": "false"}
         verified_gh(gh, verification_env)
-        listing = github_json(gh, f"{prefix}?branch=main&head_sha={backend.source}&event=push&status=success&per_page=2")
+        listing = github_json(gh, f"{prefix}?branch=main&head_sha={source}&event=push&status=success&per_page=2")
         run, = listing["workflow_runs"]
         run_id, attempt = run["id"], run["run_attempt"]
-        if (run["head_sha"] != backend.source or run["head_branch"] != "main"
+        if (run["head_sha"] != source or run["head_branch"] != "main"
                 or run["head_repository"]["full_name"] != "SecPal/api" or run["event"] != "push"
                 or run["path"] != ".github/workflows/publish-container.yml" or run["conclusion"] != "success"
                 or any(type(value) is not int or value < 1 for value in (run_id, attempt))):
             raise ValueError("archived API producer is outside protected main")
         qualification = root / "qualification"
-        download_publisher_artifact(gh, "api", run_id, backend.source, f"api-candidate-{run_id}-{attempt}", qualification, 8 * 1024**2)
+        download_publisher_artifact(gh, "api", run_id, source, f"api-candidate-{run_id}-{attempt}", qualification, 8 * 1024**2)
         children, _ = verify_api_candidate(
-            qualification, backend.source, gh, verification_env, current=current, selected=(run_id, attempt),
+            qualification, source, gh, verification_env, current=current, selected=(run_id, attempt),
         )
+        yield gh, run_id, attempt, children, qualification, root
+
+
+
+@contextmanager
+def verified_backend_archive(backend, *, current=True):
+    with qualified_backend_source(backend.source, TOOLS / "gh", current=current) as result:
+        gh, run_id, attempt, children, qualification, root = result
         pair = api_archive_identity(backend, qualification)
         yield gh, run_id, attempt, children, pair, qualification, root
-
 
 def prepare_archived_backend(ssh, host, platform, release, previous, backend):
     with verified_backend_archive(backend) as (gh, run_id, attempt, children, pair, qualification, root):

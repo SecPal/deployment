@@ -4,11 +4,12 @@
 
 """Test the public candidate selectors without GitHub access."""
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from io import StringIO
 import json
 from pathlib import Path
 from subprocess import CompletedProcess
+from tempfile import TemporaryDirectory
 import sys
 import unittest
 from unittest.mock import patch
@@ -16,7 +17,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from fcos_lab_rollout_adapter import Backend
 from fcos_lab_discovery import (
-    discover, main, official_tag, product_candidate, source_relationship, stable_release,
+    discover, main, official_tag, product_candidate, qualified_candidate, source_relationship, stable_release,
 )
 from integration_runtime_contract import LAB_FRONTEND_SOURCE_COMMIT
 
@@ -114,6 +115,79 @@ class DiscoveryContract(unittest.TestCase):
                 "crowdsec": "v1.8.2", "spoa": "v0.4.0", "crs": "v4.30.0",
             })
         self.assertEqual(responses, {})
+
+    @patch("fcos_lab_discovery.verified_gh")
+    def test_qualified_frontend_requires_current_protected_main(self, verified):
+        verified.side_effect = lambda gh, env: self.assertNotIn("GH_TOKEN", env)
+        commit = "a" * 40
+        gh = Path("/trusted/gh")
+        branch = {"name": "main", "commit": {"sha": commit}, "protected": True}
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            receipt, index = root / "receipt", root / "index"
+            receipt.write_bytes(b"receipt")
+            index.write_bytes(b"index")
+            native = {("frontend", "linux/amd64"): "sha256:" + "b" * 64,
+                      ("frontend", "linux/arm64"): "sha256:" + "c" * 64}
+            result = (gh, 42, 3, native, (receipt, root / "bundle", root / "prepared", index), root)
+            with patch("fcos_lab_discovery.github_json", side_effect=[branch, branch]) as get, patch(
+                "fcos_lab_discovery.qualified_frontend_source", return_value=nullcontext(result)
+            ) as verify:
+                actual = qualified_candidate("frontend", gh)
+                verify.assert_called_once_with(commit, gh)
+                self.assertEqual(get.call_count, 2)
+                self.assertEqual(actual["source_commit"], commit)
+                self.assertEqual(actual["run_id"], 42)
+                self.assertEqual(actual["run_attempt"], 3)
+                self.assertEqual(actual["native"]["frontend:linux/arm64"], "sha256:" + "c" * 64)
+                self.assertRegex(actual["receipt"], r"^sha256:[a-f0-9]{64}$")
+
+            newer = dict(branch, commit={"sha": "f" * 40})
+            with patch("fcos_lab_discovery.github_json", side_effect=[branch, newer]), patch(
+                "fcos_lab_discovery.qualified_frontend_source", return_value=nullcontext(result)
+            ), self.assertRaisesRegex(ValueError, "main changed"):
+                qualified_candidate("frontend", gh)
+
+        with patch("fcos_lab_discovery.github_json", return_value=dict(branch, protected=False)), patch(
+            "fcos_lab_discovery.qualified_frontend_source"
+        ) as verify, self.assertRaisesRegex(ValueError, "main is not protected"):
+            qualified_candidate("frontend", gh)
+        verify.assert_not_called()
+
+    def test_api_uses_only_the_verified_executable_and_exact_current_main(self):
+        gh = Path("/trusted/gh")
+        commit = "a" * 40
+        branch = {"name": "main", "protected": True, "commit": {"sha": commit}}
+        with patch("fcos_lab_discovery.verified_gh", side_effect=ValueError("wrong digest")), patch(
+            "fcos_lab_discovery.github_json"
+        ) as fetch, self.assertRaisesRegex(ValueError, "wrong digest"):
+            qualified_candidate("api", gh)
+        fetch.assert_not_called()
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            receipt = root / "unpublished-runtime-pair.json"
+            security = root / "source-security.json"
+            image = "sha256:" + "d" * 64
+            receipt.write_text(json.dumps({"images": {"nginx": {"candidate_index_digest": image}}}))
+            security.write_text(json.dumps({"database": {"next_update": "2030-01-01T00:00:00+05:00"}}))
+            result = (gh, 42, 3, {("nginx", "linux/amd64"): image}, root, root)
+            with patch("fcos_lab_discovery.verified_gh"), patch(
+                "fcos_lab_discovery.github_json", side_effect=[branch, branch]
+            ) as fetch, patch("fcos_lab_discovery.qualified_backend_source", return_value=nullcontext(result)):
+                actual = qualified_candidate("api", gh)
+                self.assertEqual(actual["indexes"], {"nginx": image})
+                self.assertEqual(actual["source_security_expires"], "2029-12-31T19:00:00Z")
+                self.assertEqual([call.args for call in fetch.call_args_list], [(gh, "repos/SecPal/api/branches/main")] * 2)
+
+            newer = dict(branch, commit={"sha": "e" * 40})
+            with patch("fcos_lab_discovery.verified_gh"), patch(
+                "fcos_lab_discovery.github_json", side_effect=[branch, newer]
+            ), patch("fcos_lab_discovery.qualified_backend_source", return_value=nullcontext(result)), self.assertRaisesRegex(
+                ValueError, "main changed"
+            ):
+                qualified_candidate("api", gh)
 
     def test_incomplete_or_malformed_read_does_not_publish_a_report(self):
         for reply in ('{"workflow_runs":[]}', "invalid response"):
