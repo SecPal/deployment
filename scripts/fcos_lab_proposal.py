@@ -20,7 +20,7 @@ import sys
 import tempfile
 from zipfile import BadZipFile, ZipFile
 
-from fcos_lab_discovery import get, product_candidate, source_relationship
+from fcos_lab_discovery import get, product_candidate, registry_publications, source_relationship
 from fcos_lab_rollout_adapter import API_IMAGE, DIGEST, IMAGE, RUNTIME_SOURCE as FILE, Backend, Frontend
 from fcos_lab_rollout_adapter import backend_proof, publisher_children, verify_frontend_attestation
 from image_attestation_runtime import CLOUD_GH_RELEASES, stage_gh_cli
@@ -29,7 +29,6 @@ UPSTREAM = "SecPal/frontend"
 API = "SecPal/api"
 REPO = "SecPal/deployment"
 WORKFLOW = ".github/workflows/publish-container.yml"
-PUBLICATIONS = f"repos/{UPSTREAM}/actions/workflows/publish-container.yml/runs?branch=main&status=success&per_page=1"
 BRANCH = "fcos-lab-frontend-"
 BACKEND_BRANCH = "fcos-lab-backend-"
 BACKEND_DRAFT_FILE = "docs/fcos-lab-backend-proposal.md"
@@ -343,7 +342,7 @@ def publish(proposal, base, text, *, token):
     if any(pr["state"] == "open" for pr in proposals):
         return f"another {lane} proposal is open"
 
-    candidate_run = product_candidate(get(PUBLICATIONS.replace(UPSTREAM, upstream)), upstream)
+    candidate_run = product_candidate(get(registry_publications(upstream)), upstream)
     if (candidate_run != proposal.publication
             or source_relationship(get(f"repos/{upstream}/compare/{current.source}...{proposal.source}")) != "ahead"):
         return "publisher candidate changed"

@@ -45,10 +45,10 @@ class CandidateSelectors(unittest.TestCase):
                "head_repository": {"full_name": "SecPal/frontend"}, "head_sha": source, "id": 42, "run_attempt": 1}
         result = product_candidate({"workflow_runs": [run]}, "SecPal/frontend")
         self.assertEqual(result, {"source_commit": source, "run_id": 42, "run_attempt": 1})
-        self.assertEqual(
-            product_candidate({"workflow_runs": [dict(run, event="workflow_dispatch")]}, "SecPal/frontend"),
-            result,
-        )
+        with self.assertRaises(ValueError):
+            product_candidate({"workflow_runs": [dict(run, event="workflow_dispatch")]}, "SecPal/frontend")
+        with self.assertRaises(ValueError):
+            product_candidate({"workflow_runs": [dict(run, head_repository={"full_name": "SecPal/api"})]}, "SecPal/api")
         with self.assertRaises(ValueError):
             product_candidate({"workflow_runs": [dict(run, event="pull_request")]}, "SecPal/frontend")
         with self.assertRaises(ValueError):
@@ -71,15 +71,16 @@ class DiscoveryContract(unittest.TestCase):
     def test_complete_cli_read_contract(self):
         def publication(repo, commit, run_id):
             return json.dumps({"workflow_runs": [{
-                "head_branch": "main", "event": "push", "conclusion": "success",
+                "head_branch": "main", "event": "workflow_dispatch" if repo == "SecPal/api" else "push",
+                "conclusion": "success",
                 "head_repository": {"full_name": repo}, "head_sha": commit, "id": run_id, "run_attempt": 1,
             }]})
 
         frontend_revision = "a" * 40
         workflow = "/actions/workflows/publish-container.yml/runs?branch=main&status=success&per_page=1"
         responses = {
-            f"repos/SecPal/api{workflow}": publication("SecPal/api", API_SOURCE_COMMIT, 42),
-            f"repos/SecPal/frontend{workflow}": publication("SecPal/frontend", frontend_revision, 43),
+            f"repos/SecPal/api{workflow}&event=workflow_dispatch": publication("SecPal/api", API_SOURCE_COMMIT, 42),
+            f"repos/SecPal/frontend{workflow}&event=push": publication("SecPal/frontend", frontend_revision, 43),
             f"repos/SecPal/api/compare/{API_SOURCE_COMMIT}...{API_SOURCE_COMMIT}": '{"status":"identical"}',
             f"repos/SecPal/frontend/compare/{LAB_FRONTEND_SOURCE_COMMIT}...{frontend_revision}": '{"status":"ahead"}',
             "repos/docker-library/official-images/contents/library/postgres": "Tags: 18.7-bookworm",

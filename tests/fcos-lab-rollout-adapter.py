@@ -27,6 +27,145 @@ SOURCE = "7" * 40
 
 
 class AdapterContract(unittest.TestCase):
+    def test_pending_candidate_can_use_refreshed_evaluations_for_the_same_fingerprint(self):
+        from fcos_lab_rollout_adapter import FRONTEND_ARCHIVE, Frontend, archived_component_evidence
+
+        refreshed = Release("9" * 40, NEW.fingerprint)
+        unrelated = Release("8" * 40, "6" * 64)
+        frontend = Frontend(DIGEST, SOURCE, FRONTEND_ARCHIVE)
+        installed = Frontend(DIGEST, "1" * 40)
+        for latest, expected in ((refreshed, refreshed), (unrelated, NEW)):
+            with (self.subTest(latest=latest),
+                  patch("fcos_lab_rollout_adapter.admit_source_text"),
+                  patch("fcos_lab_rollout_adapter.git"),
+                  patch("fcos_lab_rollout_adapter.Backend.from_source", return_value="same"),
+                  patch("fcos_lab_rollout_adapter.Frontend.from_source", side_effect=[frontend, installed]),
+                  patch("fcos_lab_rollout_adapter.archived_frontend_evidence") as compare):
+                archived_component_evidence(Path("/repo"), NEW, OLD, latest)
+                compare.assert_called_once_with(Path("/repo"), NEW, OLD, expected)
+
+    def test_expired_installed_api_uses_exact_indexes_for_comparison_only(self):
+        from contextlib import nullcontext
+        from fcos_lab_rollout_adapter import Backend, installed_backend_children
+
+        backend = Backend(SOURCE, "sha256:" + "1" * 64, "sha256:" + "2" * 64,
+                          DIGEST, "2026-11-23T00:00:00Z", None)
+        calls = []
+
+        def fetch(role, index):
+            calls.append((role, index))
+            children = {"linux/amd64": "sha256:" + "3" * 64, "linux/arm64": "sha256:" + "4" * 64}
+            return json.dumps({"manifests": [
+                {"platform": {"os": "linux", "architecture": platform.split("/")[1]},
+                 "mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": digest}
+                for platform, digest in children.items()
+            ]}).encode(), b"verified-bundle"
+
+        with patch("fcos_lab_rollout_adapter.api_registry_subjects", return_value=nullcontext((None, fetch))):
+            subjects = installed_backend_children(backend)
+        self.assertEqual(calls, [("php-fpm", backend.fpm), ("nginx", backend.nginx)])
+        self.assertEqual(len(subjects), 4)
+
+    def test_candidate_comparison_binds_both_roles_and_platforms(self):
+        from fcos_lab_rollout_adapter import admit_component_update
+
+        def inputs(prefix):
+            children = {
+                (role, platform): "sha256:" + str(prefix + i) * 64
+                for i, (role, platform) in enumerate(
+                    (role, platform)
+                    for role in ("php-fpm", "nginx")
+                    for platform in ("linux/amd64", "linux/arm64")
+                )
+            }
+            evidence = {key: {"subject": {"platform": key[1], "oci_digest": digest}}
+                        for key, digest in children.items()}
+            return children, evidence
+
+        installed, previous = inputs(1)
+        proposed, candidate = inputs(5)
+        expected = {"predecessor": {"gate_state": "ACTIONABLE"},
+                    "candidate": {"gate_state": "REVIEW_REQUIRED"}, "review_required": []}
+        with patch("fcos_lab_rollout_adapter.compare_component_risk", return_value=expected) as compare:
+            report = admit_component_update(installed, proposed, previous, candidate,
+                                            exposure_unchanged=True, observed_at="2026-11-24T12:00:00Z")
+            self.assertEqual(set(report), set(proposed))
+            self.assertEqual(compare.call_count, 4)
+            self.assertTrue(all(entry["candidate"]["gate_state"] == "REVIEW_REQUIRED" for entry in report.values()))
+
+            def frontend(records):
+                return {("frontend", platform): value for (role, platform), value in records.items()
+                        if role == "nginx"}
+
+            front = [frontend(records) for records in (installed, proposed, previous, candidate)]
+            self.assertEqual(set(admit_component_update(*front, exposure_unchanged=True,
+                             observed_at="2026-11-24T12:00:00Z")), set(front[0]))
+            with self.assertRaisesRegex(ValueError, "incomplete platform"):
+                admit_component_update(installed, proposed, previous, front[3],
+                                       exposure_unchanged=True, observed_at="2026-11-24T12:00:00Z")
+            changed = dict(previous)
+            changed["php-fpm", "linux/amd64"] = candidate["php-fpm", "linux/amd64"]
+            with self.assertRaisesRegex(ValueError, "predecessor"):
+                admit_component_update(installed, proposed, changed, candidate,
+                                       exposure_unchanged=True, observed_at="2026-11-24T12:00:00Z")
+            with self.assertRaisesRegex(ValueError, "exposure"):
+                admit_component_update(installed, proposed, previous, candidate,
+                                       exposure_unchanged=False, observed_at="2026-11-24T12:00:00Z")
+            compare.return_value = dict(expected, review_required=[{"reason": "changed_observation"}])
+            with self.assertRaisesRegex(ValueError, "comparison requires review"):
+                admit_component_update(installed, proposed, previous, candidate,
+                                       exposure_unchanged=True, observed_at="2026-11-24T12:00:00Z")
+
+    def test_frontend_candidate_attestation_binds_native_platforms_and_scan_evidence(self):
+        from fcos_lab_rollout_adapter import verify_frontend_candidate
+
+        def put(path, value):
+            data = json.dumps(value, sort_keys=True).encode()
+            path.write_bytes(data)
+            return "sha256:" + hashlib.sha256(data).hexdigest()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            publisher = root / "publisher"
+            publisher.mkdir()
+            (publisher / "pre-registry.bundle.json").write_text("signed")
+            scans, records, inventories, manifests = [], [], [], []
+            for offset, arch in enumerate(("amd64", "arm64"), 1):
+                platform = "linux/" + arch
+                digest = "sha256:" + str(offset) * 64
+                subject = {"platform": platform, "oci_digest": digest}
+                records.append({"subject": {"platform": platform, "manifest_digest": digest},
+                                "source": {"repository": "https://github.com/SecPal/frontend", "commit": SOURCE},
+                                "runner_architecture": arch, "workflow_run_id": "123", "workflow_run_attempt": "2"})
+                inventories.append({"platform": platform, "spdx_sha256": DIGEST})
+                manifests.append({"digest": digest, "platform": {"architecture": arch, "os": "linux"},
+                                  "mediaType": "application/vnd.oci.image.manifest.v1+json"})
+                scan = root / "scan" / arch
+                scan.mkdir(parents=True)
+                evaluation = {"subject": subject, "syft": {"spdx_digest": DIGEST}}
+                scans.append({"subject": subject, "evaluation_sha256": put(scan / "evaluation.json", evaluation),
+                              "policy_sha256": put(scan / "policy-result.json",
+                                  {**evaluation, "gate_state": "REVIEW_REQUIRED", "evidence_health": {"state": "HEALTHY"}})})
+            index = put(publisher / "index.json", {"schemaVersion": 2, "manifests": manifests})
+            prepared = put(publisher / "prepared.json", {"index_digest": index, "records": records, "inventories": inventories})
+            put(publisher / "pre-registry.json", {"candidate_sha256": prepared, "results": scans})
+            put(publisher / "source-security.json",
+                {"schema_version": "secpal-trivy-repository-scan-v5",
+                 "subject": {"repository": "SecPal/frontend", "commit": SOURCE},
+                 "operation": {"name": "TRIVY_REPOSITORY_SCAN", "status": "SUCCEEDED"}, "gate_state": "CLEAN",
+                 "database": {"status": "FRESH", "updated_at": "2026-01-01T00:00:00Z", "next_update": "2040-01-01T00:00:00Z"}})
+            signer = [{"verificationResult": {"signature": {"certificate": {
+                "runInvocationURI": "https://github.com/SecPal/frontend/actions/runs/123/attempts/2"}}}}]
+            with patch("fcos_lab_rollout_adapter.verify_attestation", return_value=signer):
+                children, evidence = verify_frontend_candidate(root, SOURCE, 123, 2, Path("gh"), {})
+                self.assertEqual(len(children), 2)
+                self.assertEqual(evidence["frontend", "linux/amd64"]["subject"]["oci_digest"], children["frontend", "linux/amd64"])
+                with self.assertRaisesRegex(ValueError, "invocation"):
+                    verify_frontend_candidate(root, SOURCE, 124, 2, Path("gh"), {})
+                put(root / "scan" / "arm64" / "evaluation.json", {})
+                with self.assertRaisesRegex(ValueError, "evaluation"):
+                    verify_frontend_candidate(root, SOURCE, 123, 2, Path("gh"), {})
+
     def test_publisher_children_requires_acceptance_before_returning_proof(self):
         children = {f"linux/{arch}": "sha256:" + str(i) * 64
                     for i, arch in enumerate(("amd64", "arm64"), 1)}
@@ -338,6 +477,103 @@ class GuestContract(unittest.TestCase):
                                          sha(indexes["nginx"]), sha(indexes["php-fpm"])],
                                         capture_output=True, check=False)
                 self.assertEqual(result.returncode == 0, scenario == "accepted", result.stderr)
+
+    def test_archived_frontend_binds_index_to_signed_qualification(self):
+        def encoded(value):
+            return json.dumps(value, sort_keys=True).encode()
+
+        def sha(data):
+            return "sha256:" + hashlib.sha256(data).hexdigest()
+
+        index = encoded({"manifests": [{"digest": DIGEST}]})
+        prepared = encoded({"index_digest": sha(index)})
+        binding = encoded({"candidate_sha256": sha(prepared)})
+        command = ('source "$1"; scratch=$2; '
+                   'verify_signature() { [[ "$4" == frontend && $(cat "$2") == verified ]]; }; '
+                   'verify_archived_frontend "$3" "$4"')
+        for example, digest, images in (
+            ("admitted", sha(index), index), ("wrong-index-pin", DIGEST, index),
+            ("changed-index", sha(index), encoded({"manifests": []})),
+        ):
+            with self.subTest(example=example), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "proof").write_bytes(b"".join(
+                    base64.b64encode(value) + b"\n"
+                    for value in (binding, b"verified", prepared, images)))
+                result = subprocess.run(["bash", "-c", command, "test", self.guest,
+                                         directory, digest, SOURCE], capture_output=True, check=False)
+                self.assertEqual(result.returncode == 0, example == "admitted", result.stderr)
+
+    def test_archived_backend_matches_signed_receipt_and_deadline(self):
+        source_end = "2040-01-01T00:00:00Z"
+        expiry = "2039-12-31T00:00:00Z"
+        indexes = {"nginx": "sha256:" + "1" * 64, "php-fpm": "sha256:" + "2" * 64}
+        images = {role: {"candidate_index_digest": index, "platforms": [
+            {"subject": {"platform": platform, "manifest_digest": "sha256:" + str(i) * 64}}
+            for i, platform in enumerate(("linux/amd64", "linux/arm64"), 3 + 2 * offset)
+        ]} for offset, (role, index) in enumerate(indexes.items())}
+        receipt = {"schema_version": "1.0.0", "published": False, "qualification": "SUCCEEDED",
+                   "source": {"commit": SOURCE, "repository": "https://github.com/SecPal/api"},
+                   "images": images}
+        assessment = {"schema_version": "secpal-trivy-repository-scan-v5",
+                      "subject": {"repository": "SecPal/api", "commit": SOURCE}, "gate_state": "CLEAN",
+                      "operation": {"name": "TRIVY_REPOSITORY_SCAN", "status": "SUCCEEDED"},
+                      "database": {"status": "FRESH", "updated_at": "2026-01-01T00:00:00Z", "next_update": source_end}}
+        command = ('source "$1"; scratch=$2; platform=linux/arm64; '
+                   'verify_signature() { [[ "$4" == api && $(cat "$2") == verified ]]; }; '
+                   'verify_archived_backend "$3" "$4" "$5" "$6" "$7"')
+        for case in ("admitted", "wrong-pair", "wrong-index", "unsigned", "published", "late", "unqualified-source"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                raw = json.dumps(dict(receipt, published=case == "published")).encode()
+                pair = "sha256:" + hashlib.sha256(raw).hexdigest()
+                bundle = b"refused" if case == "unsigned" else b"verified"
+                scan = json.dumps(dict(assessment, gate_state="UNKNOWN" if case == "unqualified-source" else "CLEAN")).encode()
+                (Path(tmp) / "proof").write_bytes(b"".join(base64.b64encode(b) + b"\n" for b in (raw, bundle, scan)))
+                result = subprocess.run(["bash", "-c", command, "test", self.guest, tmp, SOURCE,
+                                         DIGEST if case == "wrong-pair" else pair,
+                                         DIGEST if case == "wrong-index" else indexes["nginx"], indexes["php-fpm"],
+                                         "2041-01-01T00:00:00Z" if case == "late" else expiry],
+                                        capture_output=True, check=False)
+                self.assertEqual(result.returncode == 0, case == "admitted", result.stderr)
+                if case == "admitted":
+                    self.assertEqual((Path(tmp) / "nginx.child").read_text().strip(), "sha256:" + "4" * 64)
+                    self.assertEqual((Path(tmp) / "fpm.child").read_text().strip(), "sha256:" + "6" * 64)
+
+    def test_archived_prepare_transports_only_bounded_complete_native_images(self):
+        import io
+        from fcos_lab_rollout_adapter import Backend, write_backend_archive_request
+
+        command = ('source "$1"; scratch=$2; host=cx23; platform=linux/amd64; '
+                   'read_request && decode_backend_evidence pair bundle source && receive_archived_backend')
+        names = ("unpublished-runtime-pair.json", "bundle.jsonl", "source-security.json")
+        data = (b"image\x00one\n", b"image\x00two\r\n")
+        candidate = Backend(SOURCE, DIGEST, DIGEST, DIGEST, "2040-01-01T00:00:00Z", None)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in names:
+                (root / name).write_text(name)
+            paths = tuple(root / role for role in ("nginx.tar", "fpm.tar"))
+            for path, content in zip(paths, data, strict=True):
+                path.write_bytes(content)
+            stream = io.BytesIO()
+            write_backend_archive_request(
+                stream, "cx23", "linux/amd64", NEW, OLD, candidate, root, paths,
+            )
+            wire = stream.getvalue()
+            for case, message in (
+                ("accepted", wire), ("truncated", wire[:-1]), ("trailing", wire + b"X"),
+                ("wrong-operation", wire.replace(b"prepare cx23", b"activate cx23", 1)),
+                ("oversize", wire.replace(f"{len(data[0])} {len(data[1])}\n".encode(),
+                                          b"150000001 12\n", 1)),
+            ):
+                with self.subTest(case=case):
+                    scratch = root / case
+                    scratch.mkdir()
+                    checked = subprocess.run(["bash", "-c", command, "test", self.guest, scratch],
+                                             input=message, capture_output=True, check=False)
+                    self.assertEqual(checked.returncode == 0, case == "accepted", checked.stderr)
+                    if case == "accepted":
+                        for image, content in zip(paths, data, strict=True):
+                            self.assertEqual((scratch / image.name).read_bytes(), content)
 
     def test_backend_database_change_fails_admission(self):
         command = ('source "$1"; current=$2; '

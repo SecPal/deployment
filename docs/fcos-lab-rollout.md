@@ -203,6 +203,14 @@ test data or credentials. Add the following keys to
 
 Set `LAB_API_COMPATIBILITY_SHA256` to the lowercase SHA-256 of the exact JSON
 file bytes. This binds the reviewed record to the existing release fingerprint.
+A technically qualified unpublished API pair can use the same preparation
+operation when the protected lab contract sets
+`LAB_API_TRANSPORT = "oci-archive-v1"`. The pair pin then binds the exact
+signed qualification receipt. The controller downloads the authenticated
+Actions archives for that invocation. Each guest verifies the receipt and
+current source-security report, imports only the exact native children, and
+applies the same compatibility, runtime inspection and activation checks.
+
 Every guest verifies the file hash and pair and compares the schema and
 ledger to its live database before staging. Missing or failed rehearsals
 leave the candidate ineligible. The guest also continues to snapshot
@@ -232,6 +240,26 @@ checks the requested revision and fingerprint against protected main, independen
 verifies the supplied publisher bundle and immutable index with the same pinned
 verifier, checks the native child, pulls it as the rootless runtime user,
 and validates the affected Quadlets and image drop-ins in isolation.
+
+An unpublished Frontend candidate can be staged with the same native archive
+transport when the protected Lab contract selects
+`LAB_FRONTEND_TRANSPORT = "oci-archive-v1"`. Its signed qualification
+binds the verified index and native descriptors. The controller checks the
+independent repository security job and both platform records before preparing
+the guest. The guest verifies the signed qualification, the exact index and
+the native import before accepting the prepared record.
+
+The existing frontend-only controller requires the unchanged normalized
+Grype and Trivy evaluations in `config/quadlet/fcos-lab-rollout/frontend-security/`
+from the protected candidate revision. For each native architecture it
+uses `ARCH-installed.json` and `ARCH-candidate.json`. Both files must
+refer to the exact native subjects with equivalent current scanner inputs.
+The controller calls the existing `component-update-v1` policy under the
+rollout lock after observing the guest and immediately before switching it.
+If the comparison evidence expires while a candidate is pending, the
+controller can use refreshed evaluations from a descendant on protected main
+with the identical release fingerprint. This does not change the pending
+candidate or admit different native subjects for the remaining guests.
 
 | Operation  | Guest and controller behavior                                                                                                                                                                                               |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -363,6 +391,15 @@ install -m 0700 scripts/fcos_lab_rollout_adapter.py "$rollout_lib/"
 install -m 0600 scripts/fcos_lab_rollout.py scripts/fcos-lab-release-paths.txt \
   scripts/fetch-oci-attestation.py scripts/integration_runtime_contract.py \
   scripts/image_attestation_runtime.py scripts/fcos-lab-gh-binary-sha256.txt "$rollout_lib/"
+git clone --no-checkout https://github.com/SecPal/.github.git "$rollout_lib/governance"
+policy=56c9ccc92c206edfaaf64c4b7ba99d02e4a64189
+git -C "$rollout_lib/governance" checkout --detach "$policy"
+test "$(git -C "$rollout_lib/governance" rev-parse HEAD)" = "$policy"
+test -z "$(git -C "$rollout_lib/governance" status --porcelain --untracked-files=all)"
+python3 -m venv "$rollout_lib/policy-venv"
+"$rollout_lib/policy-venv/bin/python3" -m pip install --only-binary=:all: \
+  --requirement "$rollout_lib/governance/requirements/requirements.txt"
+"$rollout_lib/policy-venv/bin/python3" -I -c 'import jsonschema, referencing'
 install -m 0644 config/quadlet/fcos-lab-rollout/secpal-fcos-lab-rollout.{service,timer} \
   "$HOME/.config/systemd/user/"
 ssh-keygen -q -t ed25519 -N "" -f "$rollout_config/rollout_ed25519"
