@@ -68,9 +68,9 @@ The preceding source contract selected the accepted pair from source `da806926a7
 - Publisher run: `42757690047`, candidate attempt `2`, qualification/acceptance
   attempt `3`; workflow `SecPal/api/.github/workflows/publish-container.yml`.
 
-These identities record the preceding paired publication. A rollback to a
-previous pair requires current admission and compatibility with the target
-deployment under [deployment #93][recovery].
+These identities record the preceding paired publication. This pair requires
+fresh admission and recovery compatibility under [deployment #93][recovery]
+before it can be selected for a rollback.
 
 ## Historical single-image integration identity
 
@@ -198,11 +198,12 @@ Review and merge remain required. There is no automatic move to a newest image.
 
 Every integration fixture digest update requires a new reviewed deployment pull request.
 
-Rollback also requires a new reviewed pull request. Select a still-supported,
-freshly verified PHP-FPM/Nginx pair and rerun the same contracts. Follow
-[deployment #93][recovery] for state compatibility and approval. Use immutable
-pair and component digests throughout. Tags, unchecked environment variables
-and manual tag changes are never rollback inputs.
+The current accepted PHP-FPM/Nginx pair documented above is the supported
+recovery baseline. Rollback requires a new reviewed pull request, fresh
+verification of the pair and component digests, and schema and data
+compatibility under [deployment #93][recovery]. An older pair requires
+fresh admission before it can be selected. Tags, unchecked environment
+variables and manual tag changes are never rollback inputs.
 
 [recovery]: https://github.com/SecPal/deployment/issues/93#issuecomment-7126107302
 

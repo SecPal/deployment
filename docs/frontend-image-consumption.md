@@ -44,10 +44,14 @@ This is source-contract acceptance, not activation. The operator confirmed that
 the demo frontend remained at
 `ghcr.io/secpal/frontend@sha256:1c737d692e633d355f2ee92e82f0d78929c4dcf43f959e3e17d1cdc6c41fb0c9`
 during the API cutover on 2026-11-10. Its independent monitoring is retained.
-The two earlier frontend indexes recorded in the
-[retirement decision][recovery] have left SecPal-owned deployment, rollback
-and recovery scope. Current consumer pins and their security evidence remain
-subject to the existing admission rules.
+The [retirement decision][recovery] removed these exact frontend indexes
+from SecPal-owned deployment, rollback and recovery:
+
+- `sha256:43daf20f17ad76049377f7bf16b52a74464a42394b49e91934bbc6dcf7327859`
+- `sha256:5abf611911e59c7a14cc369b39ceed19f33d3b7cd50d9124ab1171dd1fad45aa`
+
+Current consumer pins and their security evidence remain subject to the
+existing admission rules.
 
 ## First qualified FCOS lab rollout
 
