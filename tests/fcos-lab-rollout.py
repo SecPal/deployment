@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from fcos_lab_rollout import (
     LAB_API_PINS,
-    AcceptanceRejected, HOSTS, RELEASE_PATHS, Release, RolloutError,
+    AcceptanceRejected, HOSTS, RELEASE_PATHS, Release, RolloutError, SupersededRelease,
     admit_archived_api_only, admit_frontend_only, command_adapter, propose_after_reconciliation, recover, run_rollout, source_release,
 )
 
@@ -101,6 +101,26 @@ class RolloutTest(unittest.TestCase):
             run_rollout(NEXT, self.state, self.adapter, BASE, begin=verify)
         self.assertFalse(any(call[0] == "activate" for call in self.adapter.calls))
         self.assertFalse(json.loads(self.state.read_text())["in_flight"])
+
+    def test_clean_superseded_pending_reconciles_and_accepts_a_replacement(self):
+        def deferred(*args):
+            raise ValueError("wait for fresh evidence")
+
+        with self.assertRaises(RolloutError):
+            run_rollout(NEXT, self.state, self.adapter, BASE, component_evidence=deferred)
+
+        def current(candidate, previous):
+            if candidate == NEXT:
+                raise SupersededRelease("protected main advanced")
+
+        self.adapter.calls.clear()
+        self.assertTrue(run_rollout(LATER, self.state, self.adapter, BASE, begin=current))
+        status = json.loads(self.state.read_bytes())
+        self.assertIsNone(status["pending"])
+        self.assertEqual(status["accepted"], asdict(BASE))
+        self.assertEqual(self.adapter.calls, [("observe", host, NEXT.fingerprint) for host in HOSTS])
+        run_rollout(LATER, self.state, self.adapter, BASE, begin=current)
+        self.assertEqual(json.loads(self.state.read_bytes())["accepted"], asdict(LATER))
 
     def test_arm_preparation_failure_does_not_activate_any_host(self):
         self.adapter.fail = "prepare", "cax21"

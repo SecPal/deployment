@@ -458,28 +458,89 @@ def archived_files(product, text, selected, evidence, *, compatibility=None):
     return files
 
 
+def proposed_files_digest(files):
+    return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+
+
+def comparison_payload(content):
+    report = json.loads(content)
+    del report["evaluated_at"]
+    for run in report["scanner_runs"]:
+        del run["completed_at"], run["run_id"]
+    for observation in report["observations"]:
+        del observation["observed_at"], observation["scanner_run_id"]
+    return report
+
+
+def existing_archive_proposal(pr, prefix, base, files, gh):
+    """Read back an interrupted signed proposal before resuming its auto-merge."""
+    head = pr["head"]
+    if pr["draft"] or re.fullmatch(re.escape(prefix) + r"[a-f0-9]{64}", head["ref"]) is None:
+        return None
+    tip, number = head["sha"], int(pr["number"])
+    if re.fullmatch(SHA, tip) is None:
+        raise ValueError("invalid interrupted proposal commit")
+    endpoint = f"repos/{REPO}"
+    commit = get(f"{endpoint}/commits/{tip}", gh=gh)
+    if ([parent["sha"] for parent in commit["parents"]] != [base]
+            or sorted(item["filename"] for item in commit["files"]) != sorted(files)
+            or commit["commit"]["verification"]["verified"] is not True):
+        raise ValueError("interrupted proposal differs from the admitted base and scope")
+    stored = {path: get(f"{endpoint}/contents/{path}?ref={tip}", raw=True, gh=gh) for path in files}
+    if head["ref"] != prefix + proposed_files_digest(stored) or stored[FILE] != files[FILE]:
+        raise ValueError("interrupted proposal identity differs from its signed evidence")
+    scheduled = json.loads(subprocess.check_output(
+        [gh, "pr", "view", str(number), "--repo", REPO, "--json", "autoMergeRequest,headRefOid"],
+        stdin=subprocess.DEVNULL, timeout=45,
+    ))
+    if scheduled["headRefOid"] != tip:
+        raise ValueError("interrupted proposal head changed")
+    if scheduled["autoMergeRequest"] is not None:
+        return ("scheduled", number, tip)
+    actor = github_json(gh, "user")["login"]
+    if pr["user"]["login"] != actor:
+        raise ValueError("a different actor owns the older proposal")
+    if all(comparison_payload(stored[path]) == comparison_payload(files[path]) for path in files if path != FILE):
+        return ("resume", number, tip)
+    write("PATCH", f"{endpoint}/pulls/{number}", {"state": "closed"}, token=None, gh=gh)
+    return ("refresh", number, tip)
+
+
 def publish_archive(product, base, selected, files, gh):
     lane = "frontend" if product == "frontend" else "backend"
     index = selected.index if product == "frontend" else selected.pair
     prefix = BRANCH if product == "frontend" else BACKEND_BRANCH
     # Interrupted writes can retry the same bytes. A fresh comparison can use
     # a different branch without rewriting an existing signed commit.
-    fingerprint = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
-    branch = prefix + index.removeprefix("sha256:") + "-" + base + "-" + fingerprint
+    branch_prefix = prefix + index.removeprefix("sha256:") + "-" + base + "-"
+    branch = branch_prefix + proposed_files_digest(files)
     endpoint = f"repos/{REPO}"
     if github_json(gh, f"{endpoint}/git/ref/heads/main")["object"]["sha"] != base:
         return "deployment base changed"
     if protected_source(product, gh) != selected.source:
         return "protected product main changed during qualification"
     proposals = get(f"{endpoint}/pulls?state=open&base=main&per_page=100", paginate=True, gh=gh)
+    resume = None
     for pr in proposals:
         head = pr["head"]
-        if (head["repo"] or {}).get("full_name") == REPO and head["ref"].startswith((BRANCH, BACKEND_BRANCH)):
+        if (head["repo"] or {}).get("full_name") != REPO or not head["ref"].startswith((BRANCH, BACKEND_BRANCH)):
+            continue
+        existing = existing_archive_proposal(pr, branch_prefix, base, files, gh)
+        if existing is None:
             return f"deployment proposal #{int(pr['number'])} is already open"
-    body = (f"Refs #93. Propose the exact archived {lane} subject `{index}` from `{selected.source}`. "
-            "Current comparative evidence is bound to the observed Lab predecessor. "
-            "The existing controller rechecks the protected candidate and evaluates this evidence before activation.")
-    message, number, tip = open_proposal(branch, base, lane, selected.source, files, body, token=None, draft=False, gh=gh)
+        action, number, tip = existing
+        if action == "scheduled":
+            return f"deployment proposal #{number} already has auto-merge enabled"
+        if action == "resume":
+            resume = number, tip
+    if resume:
+        number, tip = resume
+        message = f"deployment proposal #{number} resumed"
+    else:
+        body = (f"Refs #93. Propose the exact archived {lane} subject `{index}` from `{selected.source}`. "
+                "Current comparative evidence is bound to the observed Lab predecessor. "
+                "The existing controller rechecks the protected candidate and evaluates this evidence before activation.")
+        message, number, tip = open_proposal(branch, base, lane, selected.source, files, body, token=None, draft=False, gh=gh)
     if tip is not None:
         if protected_source(product, gh) != selected.source:
             write("PATCH", f"{endpoint}/pulls/{number}", {"state": "closed"}, token=None, gh=gh)
@@ -490,17 +551,21 @@ def publish_archive(product, base, selected, files, gh):
     return message
 
 
-def propose_archives(repo, release, gh, archives):
+def propose_archives(repo, release, gh, archives, *, baseline=None):
     """Reconcile one component against the accepted release; leave activation to its timer."""
     from fcos_lab_scan import compare_archives
 
     text = admit_source_text(repo, release)
-    for product, installed in (("frontend", Frontend.from_source(text)), ("api", Backend.from_source(text))):
+    observed = admit_source_text(repo, baseline) if baseline is not None else text
+    for product, parse in (("frontend", Frontend), ("api", Backend)):
+        installed = parse.from_source(observed)
+        if baseline is not None and installed == parse.from_source(text):
+            continue
         print(f"FCOS Lab {product}: selecting archived candidate", flush=True)
         try:
             with proposal_stage("publisher-read"):
                 selected = archived_selection(product, installed, gh)
-            if selected is None:
+            if selected is None or (baseline is not None and selected == parse.from_source(text)):
                 print(f"FCOS Lab {product}: already current")
                 continue
             compatibility = None

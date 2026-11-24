@@ -41,6 +41,10 @@ class RolloutError(Exception):
     """A bounded failure that stops the rollout."""
 
 
+class SupersededRelease(RolloutError):
+    """Protected product main no longer selects an unstarted release."""
+
+
 class AcceptanceRejected(RolloutError):
     """A definite failed check on the observed candidate."""
 
@@ -92,6 +96,24 @@ def recover(path, initial, adapter):
     write_state(path, reconciled)
 
 
+def unstarted_superseded(begin, path, state, adapter, candidate, previous):
+    if begin is None:
+        return False
+    try:
+        begin(candidate, previous)
+    except SupersededRelease:
+        for host in HOSTS:
+            if adapter("observe", host, candidate, previous) != previous.fingerprint:
+                state["blocked"] = True
+                write_state(path, state)
+                raise RolloutError(f"{host}: superseded release cannot be reconciled from the accepted baseline")
+        state["pending"] = None
+        write_state(path, state)
+        print("Superseded Lab release discarded before the first switch.")
+        return True
+    return False
+
+
 def run_rollout(desired, path, adapter, baseline, *, admit=None, component_evidence=None, begin=None):
     """Reconcile while main holds the deployment lock through per-host admission and activation."""
     if not path.exists():
@@ -118,6 +140,8 @@ def run_rollout(desired, path, adapter, baseline, *, admit=None, component_evide
             return
         if admit is not None:
             admit(desired, previous)
+        if unstarted_superseded(begin, path, state, adapter, desired, previous):
+            return True
         for host in HOSTS:
             if adapter("observe", host, desired, previous) != previous.fingerprint:
                 raise RolloutError(f"{host}: drift from last accepted release")
@@ -125,8 +149,13 @@ def run_rollout(desired, path, adapter, baseline, *, admit=None, component_evide
             adapter("prepare", host, desired, previous)
         state["pending"] = asdict(desired)
         write_state(path, state)
-    elif admit is not None:
-        admit(Release(**state["pending"]), previous)
+    else:
+        pending = Release(**state["pending"])
+        if state["next"] == 0 and not state["in_flight"]:
+            if unstarted_superseded(begin, path, state, adapter, pending, previous):
+                return True
+        if admit is not None:
+            admit(pending, previous)
 
     release = Release(**state["pending"])
     for index, host in enumerate(HOSTS):
@@ -162,8 +191,9 @@ def run_rollout(desired, path, adapter, baseline, *, admit=None, component_evide
 
         # A resumed fleet remains on its already selected component after the
         # first host has switched. Starting a new fleet requires a current source.
-        if index == 0 and not state["in_flight"] and begin is not None:
-            begin(release, previous)
+        if index == 0 and not state["in_flight"]:
+            if unstarted_superseded(begin, path, state, adapter, release, previous):
+                return True
 
         try:
             if not state["in_flight"]:
@@ -330,13 +360,15 @@ def fetch_release(directory):
     return repository, source_release(repository, revision.decode().strip())
 
 
-def propose_after_reconciliation(repository, desired, state, adapter, archives):
+def propose_after_reconciliation(repository, desired, state, adapter, archives, *, superseded=False):
     from fcos_lab_proposal import propose_archives
     from fcos_lab_rollout_adapter import TOOLS, ProposalFailure, admit_proposal_dispatch, proposal_stage
 
     record = json.loads(state.read_bytes())
     accepted = Release(**record["accepted"])
-    if record["pending"] is not None or accepted.fingerprint != desired.fingerprint:
+    if record["blocked"] or record["pending"] is not None:
+        return
+    if not superseded and accepted.fingerprint != desired.fingerprint:
         return
     try:
         admit_proposal_dispatch(repository, desired)
@@ -353,7 +385,7 @@ def propose_after_reconciliation(repository, desired, state, adapter, archives):
                     raise ValueError(f"{host}: installed identity differs from the proposal baseline")
     except ProposalFailure as error:
         raise RolloutError(f"{host}: {error}") from None
-    propose_archives(repository, desired, TOOLS / "gh", archives)
+    propose_archives(repository, desired, TOOLS / "gh", archives, baseline=accepted if superseded else None)
 
 
 def main():
@@ -435,16 +467,17 @@ def main():
                             candidate = parse.from_source(after)
                             if (candidate != parse.from_source(before) and candidate.transport == archive
                                     and protected_source(product, TOOLS / "gh") != candidate.source):
-                                raise RolloutError(f"FCOS Lab {product}: protected main superseded the pending release")
+                                raise SupersededRelease(f"FCOS Lab {product}: protected main superseded the pending release")
                     except (KeyError, OSError, TypeError, ValueError, subprocess.SubprocessError):
                         raise RolloutError("FCOS Lab protected candidate source could not be rechecked") from None
 
-                run_rollout(desired, state, adapter, baseline=initial,
+                superseded = run_rollout(desired, state, adapter, baseline=initial,
                             admit=admit if args.frontend_only or args.component_updates else None,
                             component_evidence=component_evidence,
                             begin=begin if args.archive_proposals else None)
                 if args.archive_proposals:
-                    propose_after_reconciliation(repository, desired, state, adapter, args.archive_proposals)
+                    propose_after_reconciliation(repository, desired, state, adapter, args.archive_proposals,
+                                                 superseded=superseded)
     except (ImportError, KeyError, OSError, RolloutError, TypeError, ValueError) as error:
         detail = str(error) if isinstance(error, RolloutError) else "invalid rollout configuration or state"
         print(detail, file=sys.stderr)

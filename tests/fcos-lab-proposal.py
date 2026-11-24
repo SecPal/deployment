@@ -126,6 +126,29 @@ class ProposalContract(unittest.TestCase):
                                       token=None, gh=Path("/trusted/gh"))
         merge.assert_not_called()
 
+    def test_existing_exact_proposal_resumes_without_writing_another_branch(self):
+        from fcos_lab_proposal import BRANCH, proposed_files_digest, publish_archive
+        gh = Path("/trusted/gh")
+        leaf = "config/quadlet/fcos-lab-rollout/frontend-security/amd64-installed.json"
+        record = {"evaluated_at": "old", "scanner_runs": [], "observations": []}
+        installed = {FILE: "exact pins", leaf: json.dumps(record)}
+        fresh = {**installed, leaf: json.dumps({**record, "evaluated_at": "new"})}
+        prefix = BRANCH + NEW.index.removeprefix("sha256:") + "-" + BASE + "-"
+        tip = "e" * 40
+        pr = {"draft": False, "number": 42, "head": {"sha": tip, "ref": prefix + proposed_files_digest(installed),
+              "repo": {"full_name": "SecPal/deployment"}}, "user": {"login": "builder"}}
+        commit = {"parents": [{"sha": BASE}], "files": [{"filename": path} for path in installed],
+                  "commit": {"verification": {"verified": True}}}
+        with patch("fcos_lab_proposal.github_json", side_effect=[{"object": {"sha": BASE}}, {"login": "builder"}]), patch(
+            "fcos_lab_proposal.protected_source", return_value=NEW.source
+        ), patch("fcos_lab_proposal.get", side_effect=[[pr], commit, *installed.values()]), patch(
+            "fcos_lab_proposal.subprocess.check_output",
+            return_value=json.dumps({"autoMergeRequest": None, "headRefOid": tip}),
+        ), patch("fcos_lab_proposal.subprocess.run") as merge, patch("fcos_lab_proposal.open_proposal") as create:
+            self.assertEqual(publish_archive("frontend", BASE, NEW, fresh, gh), "deployment proposal #42 resumed")
+        create.assert_not_called()
+        self.assertEqual(merge.call_args.args[0][-2:], ["--match-head-commit", tip])
+
     def test_proposal_diagnostics_do_not_emit_external_payloads(self):
         from fcos_lab_rollout_adapter import PROPOSAL_STAGES, ProposalFailure, proposal_stage
         for stage in PROPOSAL_STAGES:
