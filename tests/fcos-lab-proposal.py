@@ -149,6 +149,18 @@ class ProposalContract(unittest.TestCase):
         create.assert_not_called()
         self.assertEqual(merge.call_args.args[0][-2:], ["--match-head-commit", tip])
 
+    def test_api_proposal_adopts_the_canonical_compatibility_record_with_the_pair(self):
+        from fcos_lab_proposal import BACKEND_COMPATIBILITY, archived_files
+        compatibility = b'{"proof":"native"}\n'
+        selected = Backend(NEW.source, OLD.index, NEW.index, "sha256:" + "5" * 64,
+                           "2026-11-25T12:00:00Z", None, "oci-archive-v1")
+        evidence = {"previous": {}, "candidate": {}}
+        changed = archived_files("api", SOURCE, selected, evidence, compatibility=compatibility)
+        self.assertEqual(changed[BACKEND_COMPATIBILITY], compatibility.decode())
+        recovered = Backend.from_source(changed[FILE])
+        self.assertEqual(recovered, selected)
+        self.assertEqual(recovered.compatibility, hashlib.sha256(compatibility).hexdigest())
+
     def test_proposal_diagnostics_do_not_emit_external_payloads(self):
         from fcos_lab_rollout_adapter import PROPOSAL_STAGES, ProposalFailure, proposal_stage
         for stage in PROPOSAL_STAGES:

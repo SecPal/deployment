@@ -34,6 +34,8 @@ WORKFLOW = ".github/workflows/publish-container.yml"
 BRANCH = "fcos-lab-frontend-"
 BACKEND_BRANCH = "fcos-lab-backend-"
 BACKEND_DRAFT_FILE = "docs/fcos-lab-backend-proposal.md"
+BACKEND_COMPATIBILITY = "config/quadlet/fcos-lab-rollout/backend-compatibility.json"
+CANDIDATE_COMPATIBILITY = "config/quadlet/fcos-lab-rollout/backend-compatibility-candidate.json"
 SHA = "[a-f0-9]{40}"
 MAX_ARCHIVE = 8 * 1024 * 1024
 
@@ -447,6 +449,8 @@ def archived_files(product, text, selected, evidence, *, compatibility=None):
         updated = LAB_API_PINS.sub(b"", text.encode()).decode()
         updated += "".join(f'LAB_{name} = "{value}"\n' for name, value in values.items())
     files = {FILE: updated}
+    if product == "api":
+        files[BACKEND_COMPATIBILITY] = compatibility.decode()
     for side, key in (("installed", "previous"), ("candidate", "candidate")):
         for (role, platform), evaluation in sorted(evidence[key].items()):
             arch = platform.removeprefix("linux/")
@@ -500,7 +504,11 @@ def existing_archive_proposal(pr, prefix, base, files, gh):
     actor = github_json(gh, "user")["login"]
     if pr["user"]["login"] != actor:
         raise ValueError("a different actor owns the older proposal")
-    if all(comparison_payload(stored[path]) == comparison_payload(files[path]) for path in files if path != FILE):
+    if all(
+        stored[path] == files[path] if path == BACKEND_COMPATIBILITY
+        else comparison_payload(stored[path]) == comparison_payload(files[path])
+        for path in files if path != FILE
+    ):
         return ("resume", number, tip)
     write("PATCH", f"{endpoint}/pulls/{number}", {"state": "closed"}, token=None, gh=gh)
     return ("refresh", number, tip)
@@ -570,9 +578,12 @@ def propose_archives(repo, release, gh, archives, *, baseline=None):
                 continue
             compatibility = None
             if product == "api":
-                path = "config/quadlet/fcos-lab-rollout/backend-compatibility.json"
                 with proposal_stage("security-comparison"):
-                    compatibility = git(repo, "show", f"{release.revision}:{path}")
+                    entry = git(repo, "ls-tree", release.revision, "--", CANDIDATE_COMPATIBILITY)
+                    if not entry.startswith(b"100644 blob "):
+                        print("FCOS Lab API deferred: no protected native compatibility record for the candidate")
+                        continue
+                    compatibility = git(repo, "show", f"{release.revision}:{CANDIDATE_COMPATIBILITY}")
                     record = json.loads(compatibility)
                     if (record["previous_pair"], record["candidate_pair"]) != (installed.pair, selected.pair):
                         print("FCOS Lab API deferred: native compatibility evidence for this pair is outstanding")
