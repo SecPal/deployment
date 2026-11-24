@@ -7,20 +7,24 @@
 import ast
 import base64
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import hashlib
 import http.client
 import http.cookiejar
 import ipaddress
+import importlib.util
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from platform import machine
 import re
+import shutil
 import socket
 import ssl
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from urllib.error import HTTPError
@@ -29,6 +33,7 @@ from urllib.request import (
     HTTPRedirectHandler, HTTPSHandler, HTTPCookieProcessor, ProxyHandler, Request, build_opener,
 )
 from uuid import UUID
+from zipfile import BadZipFile, ZipFile
 
 # The coordinator invokes the installed script in Python isolated mode.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -38,6 +43,8 @@ from image_attestation_runtime import EXPECTED_GH_VERSION
 DIGEST = r"sha256:[0-9a-f]{64}"
 IMAGE = "ghcr.io/secpal/frontend"
 API_IMAGE = "ghcr.io/secpal/api"
+API_ARCHIVE = "oci-archive-v1"
+ARCHIVE_MAX = 150_000_000
 OPERATIONS = {"observe", "prepare", "activate", "accept", "rollback"}
 PRIVATE = Path.home() / ".config/secpal-fcos-lab-rollout"
 TOOLS = Path(__file__).resolve().parent
@@ -66,6 +73,7 @@ class Backend:
     pair: str
     expires: str
     compatibility: str | None = field(compare=False)
+    transport: str = "registry"
 
     @classmethod
     def from_source(cls, text):
@@ -85,7 +93,10 @@ class Backend:
         if records:
             record, = records
             compatibility, = re.findall(r'^LAB_API_COMPATIBILITY_SHA256 = "([a-f0-9]{64})"$', record)
-        return cls(*values, compatibility)
+        modes = re.findall(r"^LAB_API_TRANSPORT[ \t]*=.*$", text, re.MULTILINE)
+        if modes and (not overlay or modes != [f'LAB_API_TRANSPORT = "{API_ARCHIVE}"']):
+            raise ValueError("invalid archived API transport pin")
+        return cls(*values, compatibility, API_ARCHIVE if modes else "registry")
 
 
 def native_children(data):
@@ -265,6 +276,298 @@ def verify_attestation(gh, subject, bundle, source, environment, product, *, rep
     )
     if report:
         return json.loads(result.stdout)
+
+
+def require_source_security(report, product, source):
+    database = report["database"]
+    now = datetime.now(timezone.utc)
+    if (report["subject"] != {"repository": f"SecPal/{product}", "commit": source}
+            or report["operation"] != {"name": "TRIVY_REPOSITORY_SCAN", "status": "SUCCEEDED"}
+            or report["gate_state"] != "CLEAN" or database["status"] != "FRESH"
+            or not datetime.fromisoformat(database["updated_at"]) <= now < datetime.fromisoformat(database["next_update"])):
+        raise ValueError(f"{product} candidate source security is unavailable or stale")
+
+
+def verify_frontend_candidate(directory, source, run, attempt, gh, environment):
+    publisher = directory / "publisher"
+    receipt = publisher / "pre-registry.json"
+    bundle = publisher / "pre-registry.bundle.json"
+    signer = verify_attestation(gh, receipt, bundle, source, environment, "frontend", report=True)
+    result, = signer
+    certificate = result["verificationResult"]["signature"]["certificate"]
+    if certificate["runInvocationURI"] != f"https://github.com/SecPal/frontend/actions/runs/{run}/attempts/{attempt}":
+        raise ValueError("frontend candidate belongs to another publisher invocation")
+
+    def verify_json(path, expected, label):
+        raw = path.read_bytes()
+        if expected != "sha256:" + hashlib.sha256(raw).hexdigest():
+            raise ValueError(f"frontend candidate {label} digest differs")
+        return json.loads(raw)
+
+    binding = json.loads(receipt.read_bytes())
+    prepared = verify_json(publisher / "prepared.json", binding["candidate_sha256"], "prepared manifest")
+    index = verify_json(publisher / "index.json", prepared["index_digest"], "OCI index")
+    require_source_security(json.loads((publisher / "source-security.json").read_bytes()), "frontend", source)
+    records, inventories, results = prepared["records"], prepared["inventories"], binding["results"]
+    if len(records) != len(set(HOSTS.values())) or index["schemaVersion"] != 2:
+        raise ValueError("frontend candidate has an incomplete OCI index")
+    children, evidence = {}, {}
+    for descriptor, record, inventory, reported in zip(index["manifests"], records, inventories, results, strict=True):
+        record_subject = record["subject"]
+        platform = record_subject["platform"]
+        arch = platform.removeprefix("linux/")
+        digest = record_subject["manifest_digest"]
+        key = "frontend", platform
+        subject = {"platform": platform, "oci_digest": digest}
+        if (platform not in HOSTS.values() or key in children or re.fullmatch(DIGEST, digest) is None
+                or descriptor["platform"] != {"os": "linux", "architecture": arch}
+                or descriptor["mediaType"] != "application/vnd.oci.image.manifest.v1+json"
+                or descriptor["digest"] != digest or record["runner_architecture"] != arch
+                or record["source"]["repository"] != "https://github.com/SecPal/frontend"
+                or record["source"]["commit"] != source or record["workflow_run_id"] != str(run)
+                or record["workflow_run_attempt"] != str(attempt)
+                or inventory["platform"] != platform or reported["subject"] != subject):
+            raise ValueError("frontend candidate does not bind to an exact native runtime")
+        scan = directory / "scan" / arch
+        evaluation = verify_json(scan / "evaluation.json", reported["evaluation_sha256"], "evaluation")
+        policy = verify_json(scan / "policy-result.json", reported["policy_sha256"], "policy result")
+        if (evaluation["subject"] != subject or policy["subject"] != subject
+                or policy["syft"] != evaluation["syft"] or evaluation["syft"]["spdx_digest"] != inventory["spdx_sha256"]
+                or policy["evidence_health"]["state"] != "HEALTHY"
+                or policy["gate_state"] not in {"CLEAN", "REVIEW_REQUIRED", "ACTIONABLE"}):
+            raise ValueError("frontend candidate scan evidence differs from the qualified OCI subject")
+        children[key], evidence[key] = digest, evaluation
+    return children, evidence
+
+
+def verify_api_candidate(directory, source, gh, environment):
+    """Verify the existing Actions qualification and evaluation subjects."""
+    if re.fullmatch(r"[a-f0-9]{40}", source) is None:
+        raise ValueError("invalid candidate source")
+    receipt = directory / "unpublished-runtime-pair.json"
+    bundle = directory / "bundle.jsonl"
+    if not bundle.is_file() or bundle.is_symlink():
+        raise ValueError("missing signed API candidate bundle")
+    report = verify_attestation(gh, receipt, bundle, source, environment, "api", report=True)
+    pair = json.loads(receipt.read_bytes())
+    workflow = pair["workflow"]
+    run, attempt = workflow["run_id"], workflow["run_attempt"]
+    if (pair["source"]["repository"] != "https://github.com/SecPal/api" or pair["source"]["commit"] != source
+            or pair["published"] is not False or pair["qualification"] != "SUCCEEDED"
+            or workflow["repository"] != "SecPal/api" or workflow["path"] != ".github/workflows/container-image.yml"
+            or any(re.fullmatch(r"[1-9][0-9]*", value) is None for value in (run, attempt))):
+        raise ValueError("API candidate identity differs from the qualified source")
+    def publisher_invocation(results):
+        found = {entry["verificationResult"]["signature"]["certificate"]["runInvocationURI"] for entry in results}
+        if len(found) != 1:
+            raise ValueError("ambiguous API candidate attestation attempt")
+        return found.pop()
+
+    invocation = publisher_invocation(report)
+    signed = re.fullmatch(rf"https://github.com/SecPal/api/actions/runs/{run}/attempts/([1-9][0-9]*)", invocation)
+    if signed is None or int(signed[1]) < int(attempt):
+        raise ValueError("API candidate evidence belongs to another publisher attempt")
+
+    def read_signed(name):
+        path = directory / name
+        observed = verify_attestation(gh, path, bundle, source, environment, "api", report=True)
+        if publisher_invocation(observed) != invocation:
+            raise ValueError("API candidate evidence belongs to another publisher attempt")
+        return json.loads(path.read_bytes())
+
+    source_security = read_signed("source-security.json")
+    require_source_security(source_security, "api", source)
+    if set(pair["images"]) != {"php-fpm", "nginx"}:
+        raise ValueError("incomplete qualified API runtime pair")
+    children, evidence = {}, {}
+    for role, image in pair["images"].items():
+        platforms = image["platforms"]
+        if len(platforms) != 2 or {item["subject"]["platform"] for item in platforms} != set(HOSTS.values()):
+            raise ValueError("incomplete API candidate platforms")
+        for item in platforms:
+            platform, digest = item["subject"]["platform"], item["subject"]["manifest_digest"]
+            key = role, platform
+            evaluation = read_signed(f"{role}/{platform.split('/')[1]}/evaluation.json")
+            if (re.fullmatch(DIGEST, digest) is None
+                    or evaluation["subject"] != {"platform": platform, "oci_digest": digest}
+                    or evaluation["syft"]["spdx_digest"] != item["sbom_sha256"]
+                    or item["smoke"]["result"] != "SUCCEEDED"
+                    or item["smoke"]["digest"] != digest or item["smoke"]["workflow_run_id"] != run):
+                raise ValueError("API candidate evidence differs from the qualified OCI subject")
+            children[key], evidence[key] = digest, evaluation
+    return children, evidence
+
+
+def github_json(gh, endpoint):
+    return json.loads(subprocess.check_output(
+        [gh, "api", "--hostname", "github.com", "--method", "GET", endpoint],
+        stdin=subprocess.DEVNULL, timeout=30,
+    ))
+
+
+def download_publisher_artifact(gh, product, run, source, name, output, limit):
+    if product not in {"api", "frontend"}:
+        raise ValueError("unknown OCI publisher")
+    prefix = f"repos/SecPal/{product}/actions"
+    data = github_json(gh, f"{prefix}/runs/{run}/artifacts?name={name}&per_page=2")
+    artifact, = data["artifacts"]
+    artifact_id, advertised = artifact["id"], artifact["size_in_bytes"]
+    if (artifact["name"] != name or artifact["expired"] is not False
+            or artifact["workflow_run"]["id"] != run or artifact["workflow_run"]["head_sha"] != source
+            or artifact["workflow_run"]["head_branch"] != "main"
+            or type(artifact_id) is not int or artifact_id <= 0
+            or type(advertised) is not int or not 0 < advertised <= limit
+            or re.fullmatch(DIGEST, artifact["digest"]) is None):
+        raise ValueError("candidate archive metadata differs")
+    archive = output.with_suffix(".zip")
+    with archive.open("xb") as target:
+        subprocess.run([gh, "api", "--hostname", "github.com", "--method", "GET",
+                        f"{prefix}/artifacts/{artifact_id}/zip"], stdin=subprocess.DEVNULL,
+                       stdout=target, check=True, timeout=220)
+    with archive.open("rb") as sealed:
+        observed = "sha256:" + hashlib.file_digest(sealed, "sha256").hexdigest()
+    if archive.stat().st_size > limit or observed != artifact["digest"]:
+        raise ValueError("candidate archive digest differs")
+    with ZipFile(archive) as contents:
+        members = contents.infolist()
+        if len(members) > 1024 or sum(entry.file_size for entry in members) > 3 * limit:
+            raise ValueError("candidate archive too large")
+        names = set()
+        for entry in members:
+            path = PurePosixPath(entry.filename)
+            if (not path.parts or path.is_absolute() or ".." in path.parts
+                    or stat.S_ISLNK(entry.external_attr >> 16) or entry.filename in names):
+                raise ValueError("ambiguous candidate archive entry")
+            names.add(entry.filename)
+        output.mkdir(mode=0o700)
+        contents.extractall(output)
+    archive.unlink()
+
+
+def api_archive_identity(backend, qualification):
+    raw = (qualification / "unpublished-runtime-pair.json").read_bytes()
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != backend.pair:
+        raise ValueError("archived API pair differs from protected pins")
+    pair = json.loads(raw)
+    for role, index in (("nginx", backend.nginx), ("php-fpm", backend.fpm)):
+        if pair["images"][role]["candidate_index_digest"] != index:
+            raise ValueError("archived API index differs from protected pins")
+    deadline = datetime.fromisoformat(
+        json.loads((qualification / "source-security.json").read_bytes())["database"]["next_update"])
+    if datetime.fromisoformat(backend.expires) > deadline:
+        raise ValueError("archived API expiry exceeds signed source evidence")
+    return pair
+
+
+def make_oci_archive(layout, child, path):
+    manifest = layout / "blobs" / "sha256" / child.removeprefix("sha256:")
+    if "sha256:" + hashlib.sha256(manifest.read_bytes()).hexdigest() != child:
+        raise ValueError("archive lacks the approved OCI manifest")
+    index = json.loads((layout / "index.json").read_bytes())
+    descriptor, = index["manifests"]
+    if descriptor["digest"] != child:
+        raise ValueError("archive OCI descriptor differs from the signed native subject")
+    with tarfile.open(path, "w") as packaged:
+        for name in ("oci-layout", "index.json", "blobs"):
+            packaged.add(layout / name, arcname=name)
+    if not 0 < path.stat().st_size <= ARCHIVE_MAX:
+        raise ValueError("native transport exceeds the guest limit")
+
+
+def write_backend_archive_request(output, host, platform, release, previous, backend, qualification, images):
+    paths = tuple(qualification / name for name in (
+        "unpublished-runtime-pair.json", "bundle.jsonl", "source-security.json"))
+    proof = b"".join(base64.b64encode(path.read_bytes()) + b"\n" for path in paths)
+    sizes = tuple(path.stat().st_size for path in images)
+    if len(proof) > 2097152 or len(sizes) != 2 or not all(0 < size <= ARCHIVE_MAX for size in sizes):
+        raise ValueError("archived backend input exceeds the guest limit")
+    output.write(API_ARCHIVE.encode() + b"\n")
+    output.write(request_line("prepare", host, platform, release, previous, backend.pair))
+    output.write(proof)
+    output.write(f"{sizes[0]} {sizes[1]}\n".encode())
+    for path in images:
+        with path.open("rb") as image:
+            shutil.copyfileobj(image, output)
+    output.seek(0)
+
+
+def prepare_archived_backend(ssh, host, platform, release, previous, backend):
+    gh = TOOLS / "gh"
+    prefix = "repos/SecPal/api/actions/workflows/publish-container.yml/runs"
+    with tempfile.TemporaryDirectory(prefix="fcos-lab-archive-") as temporary:
+        root = Path(temporary)
+        verification_env = {"PATH": "/usr/bin:/bin", "HOME": temporary, "GH_CONFIG_DIR": temporary,
+                            "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1",
+                            "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1", "GH_TELEMETRY": "false"}
+        verified_gh(gh, verification_env)
+        listing = github_json(gh, f"{prefix}?branch=main&head_sha={backend.source}&event=push&status=success&per_page=2")
+        run, = listing["workflow_runs"]
+        run_id, attempt = run["id"], run["run_attempt"]
+        if (run["head_sha"] != backend.source or run["head_branch"] != "main"
+                or run["head_repository"]["full_name"] != "SecPal/api" or run["event"] != "push"
+                or run["path"] != ".github/workflows/publish-container.yml" or run["conclusion"] != "success"
+                or any(type(value) is not int or value < 1 for value in (run_id, attempt))):
+            raise ValueError("archived API producer is outside protected main")
+        qualification = root / "qualification"
+        download_publisher_artifact(gh, "api", run_id, backend.source, f"api-candidate-{run_id}-{attempt}", qualification, 8 * 1024**2)
+        children, _ = verify_api_candidate(qualification, backend.source, gh, verification_env)
+        pair = api_archive_identity(backend, qualification)
+        arch = platform.removeprefix("linux/")
+        roles = ("nginx", "php-fpm")
+        attempts = {p["smoke"]["workflow_run_attempt"] for role in roles
+                    for p in pair["images"][role]["platforms"] if p["subject"]["platform"] == platform}
+        producing_attempt, = attempts
+        if re.fullmatch(r"[1-9][0-9]*", producing_attempt) is None or int(producing_attempt) > attempt:
+            raise ValueError("invalid native archive attempt")
+        native = root / "native"
+        download_publisher_artifact(gh, "api", run_id, backend.source, f"api-native-{arch}-{run_id}-{producing_attempt}", native, ARCHIVE_MAX)
+        archives = [root / (role + ".tar") for role in roles]
+        for role, archive in zip(roles, archives, strict=True):
+            make_oci_archive(native / role / "image", children[role, platform], archive)
+        with tempfile.TemporaryFile() as wire:
+            write_backend_archive_request(wire, host, platform, release, previous, backend, qualification, archives)
+            return subprocess.run(ssh, stdin=wire, timeout=810, check=False).returncode
+
+
+def compare_component_risk(previous, candidate, *, observed_at):
+    # This checkout is installed with the controller's trusted tools.
+    governance = TOOLS / "governance"
+    if git(governance, "rev-parse", "HEAD").strip() != b"56c9ccc92c206edfaaf64c4b7ba99d02e4a64189":
+        raise ValueError("component-update policy is unavailable")
+    if git(governance, "status", "--porcelain", "--untracked-files=all").strip():
+        raise ValueError("component-update policy checkout differs")
+    spec = importlib.util.spec_from_file_location(
+        "secpal_component_policy", governance / "scripts/secpal-vulnerability-policy.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    policy = module.load_policy(governance / "policies/vulnerability-triage-v1.json")
+    reviewed = [module.load_reviewed_vex(path) for path in sorted((governance / "reviewed-vex").glob("*.json"))]
+    return module.compare_component_risk(previous, candidate, policy, observed_at=observed_at, reviewed_vex=reviewed)
+
+
+def admit_component_update(installed, proposed, previous, candidate, *, exposure_unchanged, observed_at):
+    """Compare authenticated evidence bound to the observed predecessor."""
+    if exposure_unchanged is not True:
+        raise ValueError("component update changes the deployment exposure")
+    lane = {role for role, _ in installed}
+    if lane not in ({"frontend"}, {"php-fpm", "nginx"}):
+        raise ValueError("unsupported or mixed update lane")
+    required = {(role, platform) for role in lane for platform in HOSTS.values()}
+    if any(set(values) != required for values in (installed, proposed, previous, candidate)):
+        raise ValueError("incomplete platform evidence for the update lane")
+    report = {}
+    for key in sorted(required):
+        platform = key[1]
+        if previous[key]["subject"] != {"oci_digest": installed[key], "platform": platform}:
+            raise ValueError("component evidence differs from the installed predecessor")
+        if candidate[key]["subject"] != {"oci_digest": proposed[key], "platform": platform}:
+            raise ValueError("component evidence differs from the proposed platform subject")
+        result = compare_component_risk(previous[key], candidate[key], observed_at=observed_at)
+        if result["review_required"]:
+            raise ValueError("component comparison requires review")
+        report[key] = result
+    return report
 
 
 def verify_frontend_attestation(gh, subject, bundle, source, environment):
@@ -522,8 +825,13 @@ def main():
                 if backend.pair == old_backend.pair or (backend.fpm, backend.nginx) == (old_backend.fpm, old_backend.nginx):
                     return 1
                 try:
+                    if backend.transport == API_ARCHIVE:
+                        result = prepare_archived_backend(ssh, host, platform, release, previous, backend)
+                        if result:
+                            backend_diagnostic("guest-transport")
+                        return result
                     message = backend_request(host, platform, release, previous, backend.pair, backend_proof(backend))
-                except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                except (BadZipFile, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
                     backend_diagnostic("publisher-read")
                     return 1
             elif backend == old_backend and frontend.index != old_frontend.index:

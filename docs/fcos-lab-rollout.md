@@ -203,6 +203,14 @@ test data or credentials. Add the following keys to
 
 Set `LAB_API_COMPATIBILITY_SHA256` to the lowercase SHA-256 of the exact JSON
 file bytes. This binds the reviewed record to the existing release fingerprint.
+A technically qualified unpublished API pair can use the same preparation
+operation when the protected lab contract sets
+`LAB_API_TRANSPORT = "oci-archive-v1"`. The pair pin then binds the exact
+signed qualification receipt. The controller downloads the authenticated
+Actions archives for that invocation. Each guest verifies the receipt and
+current source-security report, imports only the exact native children, and
+applies the same compatibility, runtime inspection and activation checks.
+
 Every guest verifies the file hash and pair and compares the schema and
 ledger to its live database before staging. Missing or failed rehearsals
 leave the candidate ineligible. The guest also continues to snapshot

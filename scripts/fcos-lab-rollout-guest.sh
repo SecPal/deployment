@@ -28,6 +28,8 @@ hash='[a-f0-9]{64}'
 roles=(api php-fpm frontend worker-general worker-hash-chain scheduler postgres gateway crowdsec spoa)
 backend_roles=(api php-fpm worker-general worker-hash-chain scheduler)
 api_image=ghcr.io/secpal/api
+request_transport=registry
+archive_max=150000000
 
 deny() { printf '%s\n' 'FCOS lab guest rejected the operation' >&2; exit 1; }
 
@@ -84,7 +86,8 @@ without_lab_pins() {
         sed -E '/^LAB_(FRONTEND|API|PHP_FPM|API_PAIR)_DIGEST = "sha256:[a-f0-9]{64}"$/d;
                 /^LAB_(FRONTEND|API)_SOURCE_COMMIT = "[a-f0-9]{40}"$/d;
                 /^LAB_API_VEX_EXPIRES_AT = "[0-9T:Z-]+"$/d;
-                /^LAB_API_COMPATIBILITY_SHA256 = "[a-f0-9]{64}"$/d'
+                /^LAB_API_COMPATIBILITY_SHA256 = "[a-f0-9]{64}"$/d;
+                /^LAB_API_TRANSPORT = "oci-archive-v1"$/d'
 }
 
 lab_pins_only() {
@@ -400,9 +403,8 @@ verify_signature() {
         --deny-self-hosted-runners --hostname github.com > /dev/null 2>&1
 }
 
-verify_backend() {
-    local publisher=$1 pair=$2 nginx=$3 fpm=$4 role index native descriptor
-    local -a rows names=(pair pair.bundle.json document fpm fpm.bundle.json nginx nginx.bundle.json)
+decode_backend_evidence() {
+    local -a rows names=("$@")
     mapfile -t rows < "$scratch/proof"
     ((${#rows[@]} == ${#names[@]})) || return 1
     local i size=0
@@ -411,8 +413,13 @@ verify_backend() {
         size=$((size + ${#rows[i]} + 1))
         printf '%s' "${rows[i]}" | base64 --decode > "$scratch/${names[i]}" || return 1
     done
-    [[ $size == "$(stat -c %s -- "$scratch/proof")" &&
-        $(sha256sum < "$scratch/pair") == "${pair#sha256:}  -" ]] || return 1
+    [[ $size == "$(stat -c %s -- "$scratch/proof")" ]]
+}
+
+verify_backend() {
+    local publisher=$1 pair=$2 nginx=$3 fpm=$4 role index native descriptor
+    decode_backend_evidence pair pair.bundle.json document fpm fpm.bundle.json nginx nginx.bundle.json &&
+        [[ $(sha256sum < "$scratch/pair") == "${pair#sha256:}  -" ]] || return 1
     verify_signature "$scratch/pair" "$scratch/pair.bundle.json" "$publisher" api || return 1
     descriptor=$(jq -er '
         select(.schemaVersion == 2 and .mediaType == "application/vnd.oci.image.manifest.v1+json"
@@ -442,6 +449,67 @@ verify_backend() {
             | .[] | select(.platform == $platform) | .digest' "$scratch/$role") || return 1
         printf '%s\n' "$native" > "$scratch/$role.child" || return 1
     done
+}
+
+verify_archived_backend() {
+    local publisher=$1 pair=$2 nginx=$3 fpm=$4 expires=$5 role component index native
+    local start deadline now
+    decode_backend_evidence receipt bundle.jsonl source-security.json &&
+        [[ $(sha256sum < "$scratch/receipt") == "${pair#sha256:}  -" ]] &&
+        verify_signature "$scratch/receipt" "$scratch/bundle.jsonl" "$publisher" api &&
+        verify_signature "$scratch/source-security.json" "$scratch/bundle.jsonl" "$publisher" api || return 1
+    jq -e --arg source "$publisher" '
+        .schema_version == "1.0.0" and .published == false and .qualification == "SUCCEEDED"
+        and .source.repository == "https://github.com/SecPal/api"
+        and .source.commit == $source and (.images | keys) == ["nginx","php-fpm"]
+    ' "$scratch/receipt" >/dev/null || return 1
+    jq -e --arg source "$publisher" '
+        .subject == {repository:"SecPal/api",commit:$source}
+        and .gate_state == "CLEAN" and .database.status == "FRESH"
+        and .operation == {name:"TRIVY_REPOSITORY_SCAN",status:"SUCCEEDED"}
+    ' "$scratch/source-security.json" >/dev/null || return 1
+    start=$(date -u -d "$(jq -er .database.updated_at "$scratch/source-security.json")" +%s) &&
+        deadline=$(date -u -d "$(jq -er .database.next_update "$scratch/source-security.json")" +%s) &&
+        now=$(date -u +%s) && expires=$(date -u -d "$expires" +%s) &&
+        ((start <= now && now < expires && expires <= deadline)) || return 1
+
+    for role in nginx fpm; do
+        component=nginx index=$nginx
+        if [[ $role == fpm ]]; then component=php-fpm index=$fpm; fi
+        native=$(jq -er --arg component "$component" --arg index "$index" --arg platform "$platform" '
+            .images[$component] | select(.candidate_index_digest == $index) | .platforms
+            | map(.subject) | sort_by(.platform)
+            | select(map(.platform) == ["linux/amd64","linux/arm64"]
+                 and all(.[]; .manifest_digest | test("^sha256:[0-9a-f]{64}$"))
+                 and ([.[].manifest_digest] | unique | length) == 2)
+            | .[] | select(.platform == $platform) | .manifest_digest
+        ' "$scratch/receipt") || return 1
+        printf '%s\n' "$native" > "$scratch/$role.child" || return 1
+    done
+}
+
+receive_archived_backend() {
+    local role size
+    for role in nginx fpm; do
+        size=$archive_nginx_size
+        if [[ $role == fpm ]]; then size=$archive_fpm_size; fi
+        timeout 340 head -c "$size" > "$scratch/$role.tar" &&
+            [[ $(stat -c %s -- "$scratch/$role.tar") == "$size" ]] || return 1
+    done
+    timeout 10 head -c 1 > "$scratch/remainder" && [[ ! -s $scratch/remainder ]]
+}
+
+pull_backend_child() {
+    local role=$1 ref=$2 loaded
+    if [[ $request_transport == oci-archive-v1 ]]; then
+        chown root:20000 "$scratch/$role.tar" && chmod 0440 "$scratch/$role.tar" &&
+            chmod 0711 "$scratch" &&
+            loaded=$(runtime podman pull --quiet "oci-archive:$scratch/$role.tar") &&
+            runtime podman tag "$loaded" "$api_image:candidate-${revision:0:12}-$role"
+    else
+        runtime env DOCKER_CONFIG="$scratch" podman pull --quiet \
+            --authfile "$scratch/auth.json" --platform "$platform" "$ref" >/dev/null
+    fi
 }
 
 migrations_idle() {
@@ -604,14 +672,20 @@ prepare_backend() {
     helper=$(backend_step helper-identity backend_helper_hash) &&
         backend_expiry "$expires" &&
         singleton_roles && snapshot=$(backend_step database-snapshot backend_database) &&
-        rollback=$(backend_step compatibility-evidence backend_compatibility "${previous_values[1]}" "$pair") &&
+        rollback=$(backend_step compatibility-evidence backend_compatibility "${previous_values[1]}" "$pair") || return 1
+    if [[ $request_transport == oci-archive-v1 ]]; then
+        [[ $(backend_field "$revision" API_TRANSPORT 'oci-archive-v1') == "$request_transport" ]] &&
+            backend_step pair-proof verify_archived_backend "$publisher" "$pair" "$nginx" "$fpm" "$expires" &&
+            backend_step native-image receive_archived_backend || return 1
+    else
+        if backend_field "$revision" API_TRANSPORT 'oci-archive-v1' >/dev/null; then return 1; fi
         backend_step pair-proof verify_backend "$publisher" "$pair" "$nginx" "$fpm" || return 1
+    fi
     local images='{}' native raw user digest_seen architecture
     for component in fpm nginx; do
         native=$(cat "$scratch/$component.child") || return 1
         ref="$api_image@$native"
-        backend_step native-image runtime env DOCKER_CONFIG="$scratch" podman pull --quiet \
-            --authfile "$scratch/auth.json" --platform "$platform" "$ref" >/dev/null || return 1
+        backend_step native-image pull_backend_child "$component" "$ref" || return 1
         raw=$(backend_step native-image runtime podman image inspect \
             --format '{{.Id}} {{.Digest}} {{.Architecture}} {{.Config.User}}' "$ref") || return 1
         read -r config digest_seen architecture user <<< "$raw"
@@ -733,6 +807,7 @@ prepare() {
         prepare_backend "$installed" "$new_backend" "$old_backend"
         return
     fi
+    [[ $request_transport == registry ]] || return 1
     pin_ref=$(frontend_field "$revision" FRONTEND_DIGEST "$digest") || return 1
     publisher=$(frontend_field "$revision" FRONTEND_SOURCE_COMMIT "$sha") || return 1
     [[ $pin_ref != "$(frontend_field "$previous" FRONTEND_DIGEST "$digest")" ]] || return 1
@@ -751,6 +826,33 @@ prepare() {
     candidate=$(jq -c --argjson previous "$installed" '
         if $previous|has("backend") then .backend=$previous.backend else . end' <<< "$candidate") || return 1
     save prepared.json "$(jq -cn --argjson before "$installed" --argjson next "$candidate" '{before:$before,next:$next}')"
+}
+
+read_request() {
+    local first line
+    IFS= read -r -n 1025 -t 8 first && ((${#first} <= 1024)) || return 1
+    if [[ $first == oci-archive-v1 ]]; then
+        request_transport=$first
+        IFS= read -r -n 1025 -t 8 first && ((${#first} <= 1024)) || return 1
+    fi
+    printf '%s\n' "$first" > "$scratch/request" && parse_request "$scratch/request" || return 1
+    if [[ $request_transport == oci-archive-v1 ]]; then
+        [[ $operation == prepare ]] || return 1
+        local consumed=0
+        for _ in 1 2 3; do
+            IFS= read -r -n 2097153 -t 8 line || return 1
+            consumed=$((consumed + ${#line} + 1))
+            ((consumed <= 2097152)) || return 1
+            printf '%s\n' "$line" >> "$scratch/proof" || return 1
+        done
+        IFS=' ' read -r -n 64 -t 8 archive_nginx_size archive_fpm_size || return 1
+        [[ $archive_nginx_size =~ ^[1-9][0-9]{0,8}$ && $archive_fpm_size =~ ^[1-9][0-9]{0,8}$ ]] &&
+            ((archive_nginx_size <= archive_max && archive_fpm_size <= archive_max))
+    else
+        timeout 8 head -c 2097153 > "$scratch/proof" &&
+            ((${#first} + 1 + $(stat -c %s -- "$scratch/proof") <= 2097152)) &&
+            [[ $operation == prepare || ! -s $scratch/proof ]]
+    fi
 }
 
 main() {
@@ -804,12 +906,7 @@ main() {
         return
     fi
 
-    timeout 8 head -c 2097153 > "$scratch/wire" || deny
-    [[ $(stat -c %s -- "$scratch/wire") -le 2097152 ]] || deny
-    head -n 1 "$scratch/wire" > "$scratch/request"
-    parse_request "$scratch/request" || deny
-    tail -n +2 "$scratch/wire" > "$scratch/proof"
-    [[ $operation == prepare || ! -s $scratch/proof ]] || deny
+    read_request || deny
     check_installed || deny
     installed=$(cat "$store/accepted.json")
     if [[ $operation == prepare ]]; then

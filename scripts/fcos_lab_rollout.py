@@ -6,6 +6,7 @@
 
 import argparse
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
@@ -85,7 +86,8 @@ def recover(path, initial, adapter):
     write_state(path, reconciled)
 
 
-def run_rollout(desired, path, adapter, baseline, *, admit=None):
+def run_rollout(desired, path, adapter, baseline, *, admit=None, component_evidence=None):
+    """Reconcile while main holds the deployment lock through per-host admission and activation."""
     if not path.exists():
         write_state(path, baseline_state(baseline, adapter))
         return
@@ -133,9 +135,25 @@ def run_rollout(desired, path, adapter, baseline, *, admit=None):
                 # switch. Only a complete, observed switch is safe to continue.
                 if actual != release.fingerprint:
                     raise RolloutError(f"{host}: interrupted switch requires reconciliation")
-            else:
-                if actual != previous.fingerprint:
-                    raise RolloutError(f"{host}: unexpected installed revision before switch")
+            elif actual != previous.fingerprint:
+                raise RolloutError(f"{host}: unexpected installed revision before switch")
+        except RolloutError:
+            state["blocked"] = True
+            write_state(path, state)
+            raise
+
+        if not state["in_flight"] and component_evidence is not None:
+            from fcos_lab_rollout_adapter import admit_component_update
+
+            observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            try:
+                admit_component_update(**component_evidence(host, release, previous), observed_at=observed_at)
+            except ValueError as error:
+                # No switch has started. Fresh evidence may resume this host.
+                raise RolloutError(f"{host}: {error}") from None
+
+        try:
+            if not state["in_flight"]:
                 state["in_flight"] = True
                 write_state(path, state)
                 adapter("activate", host, release, previous)

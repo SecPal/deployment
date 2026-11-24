@@ -43,13 +43,23 @@ def stable_release(releases, pattern):
     )
 
 
+REGISTRY_EVENTS = {"SecPal/api": "workflow_dispatch", "SecPal/frontend": "push"}
+
+
+def registry_publications(repo):
+    return (
+        f"repos/{repo}/actions/workflows/publish-container.yml/runs"
+        f"?branch=main&status=success&per_page=1&event={REGISTRY_EVENTS[repo]}"
+    )
+
+
 def product_candidate(document, repo):
     run, = document["workflow_runs"]
     commit = run["head_sha"]
     run_id, attempt = run["id"], run["run_attempt"]
     if (
         run["head_branch"] != "main"
-        or run["event"] not in {"push", "workflow_dispatch"}
+        or run["event"] != REGISTRY_EVENTS[repo]
         or run["conclusion"] != "success"
         or run["head_repository"]["full_name"].lower() != repo.lower()
         or re.fullmatch(r"[0-9a-f]{40}", commit) is None
@@ -92,11 +102,7 @@ def discover():
                 "frontend": LAB_FRONTEND_SOURCE_COMMIT}
     for name, commit in products.items():
         repo = f"SecPal/{name}"
-        endpoint = (
-            f"repos/{repo}/actions/workflows/publish-container.yml/runs"
-            "?branch=main&status=success&per_page=1"
-        )
-        publication = product_candidate(get(endpoint), repo)
+        publication = product_candidate(get(registry_publications(repo)), repo)
         relationship = get(f"repos/{repo}/compare/{commit}...{publication['source_commit']}")
         result[name] = {**publication, "source_relationship": source_relationship(relationship)}
 

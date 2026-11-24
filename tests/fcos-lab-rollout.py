@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -90,6 +91,34 @@ class RolloutTest(unittest.TestCase):
             run_rollout(NEXT, self.state, self.adapter, BASE, admit=require_evidence)
         self.assertEqual(self.adapter.calls, [])
         self.assertEqual(self.state.read_bytes(), before)
+
+    def test_candidate_guard_rechecks_fresh_predecessor_before_each_switch(self):
+        self.adapter.calls.clear()
+        guarded = []
+
+        def evidence(host, release, previous):
+            self.assertEqual((release, previous), (NEXT, BASE))
+            self.assertEqual(self.adapter.calls[-1], ("observe", host, NEXT.fingerprint))
+            self.assertEqual(self.adapter.current[host], BASE.fingerprint)
+            self.assertFalse(json.loads(self.state.read_text())["in_flight"])
+            guarded.append(host)
+            return {"installed": {}, "proposed": {}, "previous": {}, "candidate": {},
+                    "exposure_unchanged": True}
+
+        with patch("fcos_lab_rollout_adapter.admit_component_update",
+                   side_effect=[{}, ValueError("comparison evidence expired")]) as policy:
+            with self.assertRaisesRegex(RolloutError, "comparison evidence expired"):
+                run_rollout(NEXT, self.state, self.adapter, BASE, component_evidence=evidence)
+        self.assertEqual(policy.call_count, 2)
+        self.assertIn("observed_at", policy.call_args.kwargs)
+        self.assertEqual(guarded, ["cx23", "cx33"])
+        self.assertEqual(self.adapter.current, {
+            "cx23": NEXT.fingerprint, "cx33": BASE.fingerprint, "cax21": BASE.fingerprint,
+        })
+        state = json.loads(self.state.read_text())
+        self.assertEqual(state["next"], 1)
+        self.assertFalse(state["blocked"])
+        self.assertFalse(state["in_flight"])
 
     def test_failed_acceptance_rolls_back_and_blocks_later_revisions(self):
         self.adapter.fail = "accept", "cx33"
