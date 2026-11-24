@@ -287,7 +287,8 @@ def verify_attestation(gh, subject, bundle, source, environment, product, *, rep
 def require_source_security(report, product, source):
     database = report["database"]
     now = datetime.now(timezone.utc)
-    if (report["subject"] != {"repository": f"SecPal/{product}", "commit": source}
+    if (report.get("schema_version") != "secpal-trivy-repository-scan-v5"
+            or report["subject"] != {"repository": f"SecPal/{product}", "commit": source}
             or report["operation"] != {"name": "TRIVY_REPOSITORY_SCAN", "status": "SUCCEEDED"}
             or report["gate_state"] != "CLEAN" or database["status"] != "FRESH"
             or not datetime.fromisoformat(database["updated_at"]) <= now < datetime.fromisoformat(database["next_update"])):
@@ -347,7 +348,7 @@ def verify_frontend_candidate(directory, source, run, attempt, gh, environment, 
     return children, evidence
 
 
-def verify_api_candidate(directory, source, gh, environment, *, current=True):
+def verify_api_candidate(directory, source, gh, environment, *, current=True, selected=None):
     """Verify the existing Actions qualification and evaluation subjects."""
     if re.fullmatch(r"[a-f0-9]{40}", source) is None:
         raise ValueError("invalid candidate source")
@@ -374,6 +375,8 @@ def verify_api_candidate(directory, source, gh, environment, *, current=True):
     signed = re.fullmatch(rf"https://github.com/SecPal/api/actions/runs/{run}/attempts/([1-9][0-9]*)", invocation)
     if signed is None or int(signed[1]) < int(attempt):
         raise ValueError("API candidate evidence belongs to another publisher attempt")
+    if selected is not None and (int(run), int(signed[1])) != selected:
+        raise ValueError("API candidate evidence differs from the selected Actions run and attempt")
 
     def read_signed(name):
         path = directory / name
@@ -523,10 +526,19 @@ def verified_frontend_archive(frontend, *, current=True):
             raise ValueError("archived frontend producer is outside protected main")
         invocation = f"{prefix}/runs/{run_id}"
         jobs = github_json(gh, f"{invocation}/attempts/{attempt}/jobs?per_page=100")
-        required = {"Repository Security / Repository Security",
+        required = {"Repository Security / Repository Security", "Validate Frontend Image",
                     "Authenticate protected-main publication or qualification",
-                    "Qualify both exact unpublished OCI subjects"}
-        if required <= {job["name"] for job in jobs["jobs"] if job["conclusion"] == "success"}:
+                    "Qualify both exact unpublished OCI subjects",
+                    "Build native Frontend candidates / Native frontend (amd64)",
+                    "Build native Frontend candidates / Native frontend (arm64)",
+                    "Build native Frontend candidates / Container Contract"}
+        succeeded = {job["name"] for job in jobs["jobs"] if job["conclusion"] == "success"}
+        failed = {job["name"] for job in jobs["jobs"] if job["conclusion"] not in {"success", "skipped"}}
+        registry_jobs = {"Prepare exact digest subjects", "Attest candidate index platforms and Syft artifacts",
+                         "Accept verified Frontend publication", "Published native runtime (amd64)",
+                         "Published native runtime (arm64)", "Artifact security (amd64)", "Artifact security (arm64)"}
+        registry_failure = run["event"] == "push" and run["conclusion"] == "failure" and bool(failed) and failed <= registry_jobs
+        if required <= succeeded and (run["conclusion"] == "success" or registry_failure):
             break
     else:
         raise ValueError("no qualified frontend candidate for the protected source")
@@ -574,7 +586,7 @@ def prepare_archived_frontend(ssh, host, platform, release, previous, frontend):
             return subprocess.run(ssh, stdin=wire, timeout=810, check=False).returncode
 
 
-def archived_frontend_evidence(repo, release, previous):
+def archived_frontend_evidence(repo, release, previous, evidence_revision):
     candidate = Frontend.from_source(admit_source_text(repo, release))
     installed = Frontend.from_source(admit_source_text(repo, previous))
     if candidate.transport != FRONTEND_ARCHIVE:
@@ -588,7 +600,7 @@ def archived_frontend_evidence(repo, release, previous):
         with verified_frontend_archive(installed, current=False) as (_, _, _, active, _, _):
             pass
 
-    return protected_comparison(repo, release, "frontend", active, proposed)
+    return protected_comparison(repo, evidence_revision, "frontend", active, proposed)
 
 
 def protected_comparison(repo, release, component, active, proposed):
@@ -611,9 +623,14 @@ def protected_comparison(repo, release, component, active, proposed):
             "candidate": evaluations("candidate"), "exposure_unchanged": True}
 
 
-def archived_component_evidence(repo, release, previous):
+def archived_component_evidence(repo, release, previous, protected_main):
     source = admit_source_text(repo, release)
     earlier = admit_source_text(repo, previous)
+    evidence_revision = release
+    if release.fingerprint == protected_main.fingerprint:
+        git(repo, "merge-base", "--is-ancestor", release.revision, protected_main.revision)
+        admit_source_text(repo, protected_main)
+        evidence_revision = protected_main
     candidate, installed = Backend.from_source(source), Backend.from_source(earlier)
     frontend, old_frontend = Frontend.from_source(source), Frontend.from_source(earlier)
     if candidate != installed and candidate.transport == API_ARCHIVE:
@@ -626,11 +643,11 @@ def archived_component_evidence(repo, release, previous):
         else:
             with verified_backend_archive(installed, current=False) as (_, _, _, active, _, _, _):
                 pass
-        return protected_comparison(repo, release, "api", active, proposed)
+        return protected_comparison(repo, evidence_revision, "api", active, proposed)
     if frontend != old_frontend and frontend.transport == FRONTEND_ARCHIVE:
         if candidate != installed:
             raise ValueError("archived frontend cannot switch the API")
-        return archived_frontend_evidence(repo, release, previous)
+        return archived_frontend_evidence(repo, release, previous, evidence_revision)
     return None
 
 
@@ -654,7 +671,9 @@ def verified_backend_archive(backend, *, current=True):
             raise ValueError("archived API producer is outside protected main")
         qualification = root / "qualification"
         download_publisher_artifact(gh, "api", run_id, backend.source, f"api-candidate-{run_id}-{attempt}", qualification, 8 * 1024**2)
-        children, _ = verify_api_candidate(qualification, backend.source, gh, verification_env, current=current)
+        children, _ = verify_api_candidate(
+            qualification, backend.source, gh, verification_env, current=current, selected=(run_id, attempt),
+        )
         pair = api_archive_identity(backend, qualification)
         yield gh, run_id, attempt, children, pair, qualification, root
 

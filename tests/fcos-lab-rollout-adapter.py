@@ -27,6 +27,23 @@ SOURCE = "7" * 40
 
 
 class AdapterContract(unittest.TestCase):
+    def test_pending_candidate_can_use_refreshed_evaluations_for_the_same_fingerprint(self):
+        from fcos_lab_rollout_adapter import FRONTEND_ARCHIVE, Frontend, archived_component_evidence
+
+        refreshed = Release("9" * 40, NEW.fingerprint)
+        unrelated = Release("8" * 40, "6" * 64)
+        frontend = Frontend(DIGEST, SOURCE, FRONTEND_ARCHIVE)
+        installed = Frontend(DIGEST, "1" * 40)
+        for latest, expected in ((refreshed, refreshed), (unrelated, NEW)):
+            with (self.subTest(latest=latest),
+                  patch("fcos_lab_rollout_adapter.admit_source_text"),
+                  patch("fcos_lab_rollout_adapter.git"),
+                  patch("fcos_lab_rollout_adapter.Backend.from_source", return_value="same"),
+                  patch("fcos_lab_rollout_adapter.Frontend.from_source", side_effect=[frontend, installed]),
+                  patch("fcos_lab_rollout_adapter.archived_frontend_evidence") as compare):
+                archived_component_evidence(Path("/repo"), NEW, OLD, latest)
+                compare.assert_called_once_with(Path("/repo"), NEW, OLD, expected)
+
     def test_expired_installed_api_uses_exact_indexes_for_comparison_only(self):
         from contextlib import nullcontext
         from fcos_lab_rollout_adapter import Backend, installed_backend_children
@@ -133,7 +150,8 @@ class AdapterContract(unittest.TestCase):
             prepared = put(publisher / "prepared.json", {"index_digest": index, "records": records, "inventories": inventories})
             put(publisher / "pre-registry.json", {"candidate_sha256": prepared, "results": scans})
             put(publisher / "source-security.json",
-                {"subject": {"repository": "SecPal/frontend", "commit": SOURCE},
+                {"schema_version": "secpal-trivy-repository-scan-v5",
+                 "subject": {"repository": "SecPal/frontend", "commit": SOURCE},
                  "operation": {"name": "TRIVY_REPOSITORY_SCAN", "status": "SUCCEEDED"}, "gate_state": "CLEAN",
                  "database": {"status": "FRESH", "updated_at": "2026-01-01T00:00:00Z", "next_update": "2040-01-01T00:00:00Z"}})
             signer = [{"verificationResult": {"signature": {"certificate": {
@@ -496,7 +514,8 @@ class GuestContract(unittest.TestCase):
         receipt = {"schema_version": "1.0.0", "published": False, "qualification": "SUCCEEDED",
                    "source": {"commit": SOURCE, "repository": "https://github.com/SecPal/api"},
                    "images": images}
-        assessment = {"subject": {"repository": "SecPal/api", "commit": SOURCE}, "gate_state": "CLEAN",
+        assessment = {"schema_version": "secpal-trivy-repository-scan-v5",
+                      "subject": {"repository": "SecPal/api", "commit": SOURCE}, "gate_state": "CLEAN",
                       "operation": {"name": "TRIVY_REPOSITORY_SCAN", "status": "SUCCEEDED"},
                       "database": {"status": "FRESH", "updated_at": "2026-01-01T00:00:00Z", "next_update": source_end}}
         command = ('source "$1"; scratch=$2; platform=linux/arm64; '

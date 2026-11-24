@@ -474,7 +474,8 @@ verify_archived_backend() {
         and .source.commit == $source and (.images | keys) == ["nginx","php-fpm"]
     ' "$scratch/receipt" >/dev/null || return 1
     jq -e --arg source "$publisher" '
-        .subject == {repository:"SecPal/api",commit:$source}
+        .schema_version == "secpal-trivy-repository-scan-v5"
+        and .subject == {repository:"SecPal/api",commit:$source}
         and .gate_state == "CLEAN" and .database.status == "FRESH"
         and .operation == {name:"TRIVY_REPOSITORY_SCAN",status:"SUCCEEDED"}
     ' "$scratch/source-security.json" >/dev/null || return 1

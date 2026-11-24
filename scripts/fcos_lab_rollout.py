@@ -369,14 +369,14 @@ def main():
                         before = git(repository, "show", f"{previous.revision}:{RUNTIME_SOURCE}").decode()
                         if args.component_updates and Backend.from_source(source) != Backend.from_source(before):
                             admit_archived_api_only(repository, release, previous, desired)
-                            archived_component_evidence(repository, release, previous)
+                            archived_component_evidence(repository, release, previous, desired)
                             return
                         admit_frontend_only(repository, release, previous, desired)
                         pins = Frontend.from_source(source)
                         if pins.transport == "registry":
                             publisher_children(pins, require_acceptance=True)
                         else:
-                            archived_component_evidence(repository, release, previous)
+                            archived_component_evidence(repository, release, previous, desired)
                     except (ImportError, KeyError, OSError, subprocess.SubprocessError, TypeError, ValueError):
                         raise RolloutError("exact signed publisher acceptance unavailable") from None
 
@@ -384,7 +384,7 @@ def main():
                     from fcos_lab_rollout_adapter import archived_component_evidence
 
                     try:
-                        return archived_component_evidence(repository, release, previous)
+                        return archived_component_evidence(repository, release, previous, desired)
                     except (KeyError, OSError, subprocess.SubprocessError, TypeError, ValueError):
                         raise RolloutError("exact comparison inputs unavailable for the observed release") from None
 
