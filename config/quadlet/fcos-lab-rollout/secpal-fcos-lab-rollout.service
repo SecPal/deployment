@@ -11,5 +11,5 @@ NoNewPrivileges=yes
 StateDirectory=secpal-fcos-lab-rollout
 StateDirectoryMode=0700
 EnvironmentFile=%h/.config/secpal-fcos-lab-rollout/rollout.conf
-ExecStart=/usr/bin/python3 -I %h/.local/lib/secpal-fcos-lab-rollout/fcos_lab_rollout.py --frontend-only --state-directory ${STATE_DIRECTORY} --baseline ${SECPAL_FCOS_BASELINE} --adapter ${SECPAL_FCOS_ADAPTER}
+ExecStart=%h/.local/lib/secpal-fcos-lab-rollout/policy-venv/bin/python3 -I %h/.local/lib/secpal-fcos-lab-rollout/fcos_lab_rollout.py --frontend-only --state-directory ${STATE_DIRECTORY} --baseline ${SECPAL_FCOS_BASELINE} --adapter ${SECPAL_FCOS_ADAPTER}
 TimeoutStartSec=4h

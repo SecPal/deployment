@@ -387,6 +387,15 @@ install -m 0700 scripts/fcos_lab_rollout_adapter.py "$rollout_lib/"
 install -m 0600 scripts/fcos_lab_rollout.py scripts/fcos-lab-release-paths.txt \
   scripts/fetch-oci-attestation.py scripts/integration_runtime_contract.py \
   scripts/image_attestation_runtime.py scripts/fcos-lab-gh-binary-sha256.txt "$rollout_lib/"
+git clone --no-checkout https://github.com/SecPal/.github.git "$rollout_lib/governance"
+policy=56c9ccc92c206edfaaf64c4b7ba99d02e4a64189
+git -C "$rollout_lib/governance" checkout --detach "$policy"
+test "$(git -C "$rollout_lib/governance" rev-parse HEAD)" = "$policy"
+test -z "$(git -C "$rollout_lib/governance" status --porcelain --untracked-files=all)"
+python3 -m venv "$rollout_lib/policy-venv"
+"$rollout_lib/policy-venv/bin/python3" -m pip install --only-binary=:all: \
+  --requirement "$rollout_lib/governance/requirements/requirements.txt"
+"$rollout_lib/policy-venv/bin/python3" -I -c 'import jsonschema, referencing'
 install -m 0644 config/quadlet/fcos-lab-rollout/secpal-fcos-lab-rollout.{service,timer} \
   "$HOME/.config/systemd/user/"
 ssh-keygen -q -t ed25519 -N "" -f "$rollout_config/rollout_ed25519"

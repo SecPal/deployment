@@ -622,9 +622,7 @@ def archived_component_evidence(repo, release, previous):
         with verified_backend_archive(candidate) as (_, _, _, proposed, _, _, _):
             pass
         if installed.transport == "registry":
-            _, _, _, fpm, _, nginx, _ = backend_proof(installed)
-            active = {(role, platform): digest for role, index in (("php-fpm", fpm), ("nginx", nginx))
-                      for platform, digest in native_children(index).items()}
+            active = installed_backend_children(installed)
         else:
             with verified_backend_archive(installed, current=False) as (_, _, _, active, _, _, _):
                 pass
@@ -809,7 +807,8 @@ def publisher_children(frontend, *, gh=None, require_acceptance=False):
         return native_children(subject), subject, bundle.read_bytes()
 
 
-def backend_proof(backend, *, gh=None):
+@contextmanager
+def api_registry_subjects(backend, gh):
     with tempfile.TemporaryDirectory(prefix="fcos-lab-pair-") as temporary:
         root = Path(temporary)
         environment = {"PATH": "/usr/bin:/bin", "HOME": temporary, "GH_CONFIG_DIR": temporary,
@@ -825,6 +824,19 @@ def backend_proof(backend, *, gh=None):
             verify_attestation(gh, subject, bundle, backend.source, environment, "api")
             return subject.read_bytes(), bundle.read_bytes()
 
+        yield root, fetch
+
+
+def installed_backend_children(backend, *, gh=None):
+    """Authenticate the installed indexes without making them eligible for activation."""
+    with api_registry_subjects(backend, gh) as (_, fetch):
+        return {(role, platform): digest
+                for role, index in (("php-fpm", backend.fpm), ("nginx", backend.nginx))
+                for platform, digest in native_children(fetch(role, index)[0]).items()}
+
+
+def backend_proof(backend, *, gh=None):
+    with api_registry_subjects(backend, gh) as (root, fetch):
         document_path = root / "runtime-pair.json"
         binding = {"source": backend.source, "nginx": backend.nginx,
                    "fpm": backend.fpm, "expires": backend.expires}
