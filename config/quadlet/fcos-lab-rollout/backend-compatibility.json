@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "previous_pair": "sha256:b95c184cfc999d8be7a36c3d9f8a8b9bf402856a0d0923c095fe828e20a3d80a",
+  "candidate_pair": "sha256:b71e01932eb4c41c23ee797c2d4af018d395a51637776a6ebbc91cf3a1bd65c0",
+  "schema": "3bd93c5d75f3d401354cfab7195392eb97b4b3141b1645d41fba77ad64836acd",
+  "ledger": "ae7f74127f0918ac00fa040edb45b3a4b0bcb35df15e370dec0b4107b2d5edd0",
+  "forward": {
+    "linux/amd64": "sha256:bac4bf974fcb10faa7a022fe1f994e6a335fec9f24430229ac839c49619bd530",
+    "linux/arm64": "sha256:08d9a95664d491a568bfed83903fe9603a256624048ea0e6c11b1b6a21794444"
+  },
+  "rollback": null
+}

@@ -18,6 +18,8 @@ SPDX-License-Identifier = "MIT"
 path = [
   "config/capacity-probes-v1.json",
   "config/quadlet/fcos-lab-rollout/frontend-security/*.json",
+  "config/quadlet/fcos-lab-rollout/api-security/*.json",
+  "config/quadlet/fcos-lab-rollout/backend-compatibility.json",
   "config/production/state-contract.json",
   "config/ci-cloud/gcp-rocky-10-2-arm64.json",
   "config/ci-cloud/gcp-rocky-10-2-x86-64.json",
