@@ -4,13 +4,19 @@
 
 """Report candidates from the maintained FCOS lab publishers."""
 
+import argparse
+from datetime import datetime
+import hashlib
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
 
-from fcos_lab_rollout_adapter import Backend, RUNTIME_SOURCE
+from zipfile import BadZipFile
+
+from fcos_lab_rollout_adapter import Backend, DIGEST, RUNTIME_SOURCE
+from fcos_lab_rollout_adapter import qualified_backend_source, qualified_frontend_source
 from integration_runtime_contract import LAB_FRONTEND_SOURCE_COMMIT
 
 
@@ -122,10 +128,55 @@ def discover():
     return result
 
 
-def main():
+def qualified_candidate(product, gh):
+    """Report the exact protected-main candidate without conferring deployment authority."""
+    if product not in {"frontend", "api"}:
+        raise ValueError("unknown product")
+    repo = f"SecPal/{product}"
+    branch = get(f"repos/{repo}/branches/main", gh=gh)
+    source = branch["commit"]["sha"]
+    if branch["name"] != "main" or branch["protected"] is not True or re.fullmatch(r"[a-f0-9]{40}", source) is None:
+        raise ValueError("upstream main is not protected")
+    verify = qualified_frontend_source if product == "frontend" else qualified_backend_source
+    with verify(source, gh) as result:
+        _, run_id, attempt, children, *documents = result
+        detail = {"source_commit": source, "run_id": run_id, "run_attempt": attempt,
+                  "native": {f"{role}:{platform}": digest for (role, platform), digest in sorted(children.items())}}
+        if product == "frontend":
+            receipt, _, _, index = documents[0]
+            detail["index"] = "sha256:" + hashlib.sha256(index.read_bytes()).hexdigest()
+            detail["receipt"] = "sha256:" + hashlib.sha256(receipt.read_bytes()).hexdigest()
+        else:
+            directory = documents[0]
+            raw = (directory / "unpublished-runtime-pair.json").read_bytes()
+            pair = json.loads(raw)
+            indexes = {role: image["candidate_index_digest"] for role, image in pair["images"].items()}
+            if any(re.fullmatch(DIGEST, value) is None for value in indexes.values()):
+                raise ValueError("invalid API index")
+            deadline = json.loads((directory / "source-security.json").read_bytes())["database"]["next_update"]
+            detail.update({
+                "indexes": indexes,
+                "receipt": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                "source_security_expires": datetime.fromisoformat(deadline).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            })
+    # Recheck after verification so superseded inputs cannot be advertised as current.
+    latest = get(f"repos/{repo}/branches/main", gh=gh)
+    if latest["protected"] is not True or latest["commit"]["sha"] != source:
+        raise ValueError("upstream main changed during discovery")
+    return detail
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--qualified", choices=("frontend", "api"))
+    parser.add_argument("--gh", type=Path, help="verified GitHub CLI for archived candidate discovery")
+    args = parser.parse_args(argv)
+    if (args.qualified is None) != (args.gh is None):
+        parser.error("--qualified and --gh must be supplied together")
     try:
-        print(json.dumps(discover(), indent=2, sort_keys=True))
-    except (KeyError, OSError, TypeError, ValueError, subprocess.SubprocessError):
+        result = qualified_candidate(args.qualified, args.gh.absolute()) if args.qualified else discover()
+        print(json.dumps(result, indent=2, sort_keys=True))
+    except (BadZipFile, KeyError, OSError, TypeError, ValueError, subprocess.SubprocessError):
         print("FCOS release discovery failed to admit a complete upstream report", file=sys.stderr)
         return 1
     return 0

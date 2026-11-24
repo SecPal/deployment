@@ -71,6 +71,27 @@ remains on major 18 and its approved image layout. CRS also needs ruleset
 authenticity. Version proposals use immutable publisher identities. SecPal's
 product SemVer release decisions remain with the product publishers.
 
+For SecPal-owned Lab and reference targets, protected automation may
+select technically qualified, unpublished candidates from the exact current
+protected product main. The existing discovery command can verify the signed
+pre-registry records with its installed, pinned CLI and the repository's
+scoped Actions read credentials:
+
+```bash
+python3 scripts/fcos_lab_discovery.py --qualified frontend --gh /reviewed/tools/gh
+python3 scripts/fcos_lab_discovery.py --qualified api --gh /reviewed/tools/gh
+```
+
+The reported index, platform digests and signed receipt identify immutable
+inputs to the same deployment procedure. Discovery conveys neither target
+admission nor official release acceptance. Compare equivalent current
+scanner evidence against the installed predecessor under the existing
+deployment lock. Apply target-specific exposure and compatibility requirements,
+including the public reference's exposure. The controller still honors the
+current protected Lab pins and the migration-free API compatibility contract.
+See [deployment #93](https://github.com/SecPal/deployment/issues/93) for that
+scope and the separate Managed Hosting contract.
+
 ## Migration-free release lanes
 
 The adapter accepts the lab-only `LAB_FRONTEND_DIGEST` and
