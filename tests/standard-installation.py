@@ -252,6 +252,9 @@ class InstallationContract(unittest.TestCase):
         fcos_renderer = runpy.run_path(str(ROOT / "scripts/render-fcos-application-poc.py"))
         operations.update(fcos_renderer["database_diagnostic_ids"](
             (ROOT / "scripts/fcos-poc-db-roles.sh").read_text()))
+        operations.update(fcos_renderer["database_diagnostic_ids"](
+            (ROOT / "scripts/fcos-lab-compare-restored-schema.sh").read_text(),
+            "fcos-schema-rehearsal."))
         entries = document["external_operations"]
         self.assertEqual({row["id"] for row in entries}, operations)
         self.assertEqual(len(entries), len(operations))
