@@ -256,6 +256,10 @@ uses `ARCH-installed.json` and `ARCH-candidate.json`. Both files must
 refer to the exact native subjects with equivalent current scanner inputs.
 The controller calls the existing `component-update-v1` policy under the
 rollout lock after observing the guest and immediately before switching it.
+If the comparison evidence expires while a candidate is pending, the
+controller can use refreshed evaluations from a descendant on protected main
+with the identical release fingerprint. This does not change the pending
+candidate or admit different native subjects for the remaining guests.
 
 | Operation  | Guest and controller behavior                                                                                                                                                                                               |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
