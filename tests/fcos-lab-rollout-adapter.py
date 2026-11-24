@@ -27,6 +27,28 @@ SOURCE = "7" * 40
 
 
 class AdapterContract(unittest.TestCase):
+    def test_expired_installed_api_uses_exact_indexes_for_comparison_only(self):
+        from contextlib import nullcontext
+        from fcos_lab_rollout_adapter import Backend, installed_backend_children
+
+        backend = Backend(SOURCE, "sha256:" + "1" * 64, "sha256:" + "2" * 64,
+                          DIGEST, "2026-11-23T00:00:00Z", None)
+        calls = []
+
+        def fetch(role, index):
+            calls.append((role, index))
+            children = {"linux/amd64": "sha256:" + "3" * 64, "linux/arm64": "sha256:" + "4" * 64}
+            return json.dumps({"manifests": [
+                {"platform": {"os": "linux", "architecture": platform.split("/")[1]},
+                 "mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": digest}
+                for platform, digest in children.items()
+            ]}).encode(), b"verified-bundle"
+
+        with patch("fcos_lab_rollout_adapter.api_registry_subjects", return_value=nullcontext((None, fetch))):
+            subjects = installed_backend_children(backend)
+        self.assertEqual(calls, [("php-fpm", backend.fpm), ("nginx", backend.nginx)])
+        self.assertEqual(len(subjects), 4)
+
     def test_candidate_comparison_binds_both_roles_and_platforms(self):
         from fcos_lab_rollout_adapter import admit_component_update
 
