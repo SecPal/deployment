@@ -137,12 +137,22 @@ jobs:
       - name: Run real rootless Podman and Quadlet integration
         run: python3 scripts/quadlet-integration.py
 
+      - name: Checkout pinned evidence architecture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SecPal/.github
+          ref: a9a502fb8c07580074852fc0689a10cd732ab290
+          path: .fcos-schema-evidence
+          persist-credentials: false
+
       - name: Verify restored Lab schema equivalence on native PostgreSQL
         run: |
           set -euo pipefail
           image="$(PYTHONPATH=scripts python3 -c 'from integration_runtime_contract import POSTGRES_FIXTURE; print(POSTGRES_FIXTURE.image)')"
           podman pull "$image"
-          bash tests/fcos-lab-restored-schema.sh "$image"
+          npm --prefix .fcos-schema-evidence ci --ignore-scripts --no-audit --no-fund
+          bash tests/fcos-lab-restored-schema.sh "$image" \
+            "$PWD/.fcos-schema-evidence/scripts/secpal-evidence-architecture.py"
 
       - name: Prove disposable rootless runtime native lifecycle
         env:

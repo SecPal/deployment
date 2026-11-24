@@ -162,7 +162,8 @@ Use the same native PostgreSQL 18 version in the disposable restore. Capture
 both inputs while the enrolled schema and migration ledger are stable, then
 recheck their identities after the dump. Run
 `scripts/fcos-lab-compare-restored-schema.sh` as the rehearsal Podman user
-with those two files and the disposable database container name. Use the
+with the pinned evidence architecture validator, those two files and the
+disposable database container name. Use the
 `secpal-update-proof-<id>` name, `io.secpal.fcos.schema-rehearsal=true` label
 and `--network none` for this schema-only check.
 

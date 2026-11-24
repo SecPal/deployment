@@ -66,19 +66,19 @@ VALIDATOR_SOURCE = {
 }
 
 
-def database_diagnostic_ids(helper):
+def database_diagnostic_ids(helper, prefix=DATABASE_DIAGNOSTIC_PREFIX):
     stages = re.findall(r"^\s*stage=([a-z][a-z-]+)$", helper, flags=re.MULTILINE)
     if not stages or len(stages) != len(set(stages)):
         raise ValueError("database role diagnostic coverage is incomplete")
-    return {DATABASE_DIAGNOSTIC_PREFIX + stage for stage in stages}
+    return {prefix + stage for stage in stages}
 
 
-def validate_database_diagnostics(helper, declaration):
-    expected = database_diagnostic_ids(helper)
+def validate_database_diagnostics(helper, declaration, prefix=DATABASE_DIAGNOSTIC_PREFIX):
+    expected = database_diagnostic_ids(helper, prefix)
     operations = [
         entry
         for entry in declaration["external_operations"]
-        if entry["id"].startswith(DATABASE_DIAGNOSTIC_PREFIX)
+        if entry["id"].startswith(prefix)
     ]
     observed = {
         entry["id"]
@@ -92,13 +92,19 @@ def validate_database_diagnostics(helper, declaration):
         raise ValueError("database role diagnostic coverage is incomplete")
 
 
-def admit_database_dispatch(validator):
+def admit_database_dispatch(validator, *, schema_rehearsal=False):
     validate_database_diagnostics(
         (ROOT / "scripts/fcos-poc-db-roles.sh").read_text(encoding="utf-8"),
         json.loads(
             (ROOT / ".secpal/evidence-architecture.json").read_text(encoding="utf-8")
         ),
     )
+    if schema_rehearsal:
+        validate_database_diagnostics(
+            (ROOT / "scripts/fcos-lab-compare-restored-schema.sh").read_text(encoding="utf-8"),
+            json.loads((ROOT / ".secpal/evidence-architecture.json").read_text(encoding="utf-8")),
+            "fcos-schema-rehearsal.",
+        )
     if (
         validator is None
         or validator.name != "secpal-evidence-architecture.py"
