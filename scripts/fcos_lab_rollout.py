@@ -325,17 +325,39 @@ def fetch_release(directory):
     return repository, source_release(repository, revision.decode().strip())
 
 
+def propose_after_reconciliation(repository, desired, state, adapter, archives):
+    from fcos_lab_proposal import propose_archives
+    from fcos_lab_rollout_adapter import TOOLS, admit_proposal_dispatch
+
+    record = json.loads(state.read_bytes())
+    accepted = Release(**record["accepted"])
+    if record["pending"] is not None or accepted.fingerprint != desired.fingerprint:
+        return
+    try:
+        admit_proposal_dispatch(repository, desired)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise RolloutError("FCOS Lab proposal preflight failed") from None
+    for host in HOSTS:
+        if adapter("observe", host, desired, accepted) != accepted.fingerprint:
+            raise RolloutError(f"{host}: installed identity differs from the proposal baseline")
+    propose_archives(repository, desired, TOOLS / "gh", archives)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-directory", type=Path, required=True)
     parser.add_argument("--baseline", help="already qualified protected-main commit")
     parser.add_argument("--adapter", type=Path, help="installed lab-only adapter")
+    parser.add_argument("--archive-proposals", type=Path,
+                        help="protected scanner inputs and database storage for archived proposals")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--inspect", action="store_true", help="report the desired source without contacting guests")
     mode.add_argument("--recover", action="store_true", help="archive a blocked rollout after baseline reconciliation")
     mode.add_argument("--frontend-only", action="store_true", help="admit only publisher-accepted lab frontend updates")
     mode.add_argument("--component-updates", action="store_true", help="admit one qualified lab component at a time")
     args = parser.parse_args()
+    if args.archive_proposals and (not args.component_updates or not args.archive_proposals.is_absolute()):
+        parser.error("archive proposals require component updates and an absolute input directory")
     if args.inspect:
         if args.adapter is not None or args.baseline is not None:
             parser.error("inspection does not accept adapter or baseline arguments")
@@ -391,6 +413,8 @@ def main():
                 run_rollout(desired, state, adapter, baseline=initial,
                             admit=admit if args.frontend_only or args.component_updates else None,
                             component_evidence=component_evidence)
+                if args.archive_proposals:
+                    propose_after_reconciliation(repository, desired, state, adapter, args.archive_proposals)
     except (ImportError, KeyError, OSError, RolloutError, TypeError, ValueError) as error:
         detail = str(error) if isinstance(error, RolloutError) else "invalid rollout configuration or state"
         print(detail, file=sys.stderr)

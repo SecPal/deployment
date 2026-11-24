@@ -87,7 +87,7 @@ def source_relationship(document):
 
 
 def get(endpoint, *, raw=False, paginate=False, gh="gh"):
-    args = [gh, "api", "--method", "GET", endpoint]
+    args = [gh, "api", "--hostname", "github.com", "--method", "GET", endpoint]
     if raw:
         args += ["--header", "Accept: application/vnd.github.raw+json"]
     if paginate:
@@ -129,7 +129,7 @@ def discover():
     return result
 
 
-def qualified_candidate(product, gh):
+def qualified_candidate(product, gh, *, current=True):
     """Report the exact protected-main candidate without conferring deployment authority."""
     if product not in {"frontend", "api"}:
         raise ValueError("unknown product")
@@ -143,7 +143,7 @@ def qualified_candidate(product, gh):
     if branch["name"] != "main" or branch["protected"] is not True or re.fullmatch(r"[a-f0-9]{40}", source) is None:
         raise ValueError("upstream main is not protected")
     verify = qualified_frontend_source if product == "frontend" else qualified_backend_source
-    with verify(source, gh) as result:
+    with verify(source, gh, current=current) as result:
         _, run_id, attempt, children, *documents = result
         detail = {"source_commit": source, "run_id": run_id, "run_attempt": attempt,
                   "native": {f"{role}:{platform}": digest for (role, platform), digest in sorted(children.items())}}

@@ -71,6 +71,10 @@ class Frontend:
         return cls(index, source, FRONTEND_ARCHIVE if modes else "registry")
 
 
+class QualificationUnavailable(ValueError):
+    """Protected source has no completed archived qualification."""
+
+
 @dataclass(frozen=True)
 class Backend:
     source: str
@@ -244,10 +248,10 @@ def verify_dispatch_authority(validator, renderer):
             raise ValueError("canonical dispatch source differs from the accepted pin")
 
 
-def admit_backend_dispatch(repo, release):
+def admit_dispatch(repo, release, describe):
     validator = TOOLS / "evidence-architecture/scripts/secpal-evidence-architecture.py"
     if not validator.is_file() or validator.is_symlink():
-        raise ValueError("installed backend dispatch validator is unavailable")
+        raise ValueError("installed dispatch validator is unavailable")
     validator = validator.resolve(strict=True)
     verify_dispatch_authority(
         validator, git(repo, "show", f"{release.revision}:scripts/render-fcos-application-poc.py"),
@@ -256,16 +260,34 @@ def admit_backend_dispatch(repo, release):
         root = Path(directory)
         (root / "AGENTS.md").write_bytes(git(repo, "show", f"{release.revision}:AGENTS.md"))
         declaration_path = ".secpal/evidence-architecture.json"
-        declaration = backend_declaration(
-            json.loads(git(repo, "show", f"{release.revision}:{declaration_path}")),
-            git(repo, "show", f"{release.revision}:scripts/fcos-lab-rollout-guest.sh").decode(),
-        )
+        declaration = describe(json.loads(git(repo, "show", f"{release.revision}:{declaration_path}")))
         (root / ".secpal").mkdir()
         (root / declaration_path).write_text(json.dumps(declaration), encoding="utf-8")
         subprocess.run([sys.executable, "-I", "-S", validator, "--repository-root", root,
                         "--repository", "SecPal/deployment", "--dispatch"],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        check=True, timeout=60)
+
+
+def admit_backend_dispatch(repo, release):
+    def describe(declaration):
+        helper = git(repo, "show", f"{release.revision}:scripts/fcos-lab-rollout-guest.sh").decode()
+        return backend_declaration(declaration, helper)
+
+    admit_dispatch(repo, release, describe)
+
+
+def admit_proposal_dispatch(repo, release):
+    def describe(declaration):
+        for stage in ("guest-observation", "publisher-read", "scanner-refresh", "security-comparison", "proposal-write"):
+            identifier = f"fcos-lab-proposal.{stage}"
+            declaration["external_operations"].append({
+                "id": identifier, "reachable": True, "fallible": True, "trusted": True,
+                "diagnostic_identity": {"id": identifier, "kind": "semantic"},
+            })
+        return declaration
+
+    admit_dispatch(repo, release, describe)
 
 
 def backend_diagnostic(stage):
@@ -548,7 +570,7 @@ def qualified_frontend_source(source, gh, *, current=True):
             if required <= succeeded and (run["conclusion"] == "success" or registry_failure):
                 break
         else:
-            raise ValueError("no qualified frontend candidate for the protected source")
+            raise QualificationUnavailable("no qualified frontend candidate for protected main")
         qualification = root / "qualification"
         download_publisher_artifact(gh, "frontend", run_id, source,
                                     f"frontend-pre-registry-{run_id}-{attempt}", qualification, 8 * 1024**2)
@@ -573,8 +595,8 @@ def qualified_frontend_source(source, gh, *, current=True):
 
 
 @contextmanager
-def verified_frontend_archive(frontend, *, current=True):
-    with qualified_frontend_source(frontend.source, TOOLS / "gh", current=current) as result:
+def verified_frontend_archive(frontend, *, current=True, gh=None):
+    with qualified_frontend_source(frontend.source, gh or TOOLS / "gh", current=current) as result:
         if "sha256:" + hashlib.sha256(result[4][-1].read_bytes()).hexdigest() != frontend.index:
             raise ValueError("archived frontend differs from the protected OCI pin")
         yield result
@@ -671,6 +693,8 @@ def qualified_backend_source(source, gh, *, current=True):
                             "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1", "GH_TELEMETRY": "false"}
         verified_gh(gh, verification_env)
         listing = github_json(gh, f"{prefix}?branch=main&head_sha={source}&event=push&status=success&per_page=2")
+        if not listing["workflow_runs"]:
+            raise QualificationUnavailable("no qualified API candidate for protected main")
         run, = listing["workflow_runs"]
         run_id, attempt = run["id"], run["run_attempt"]
         if (run["head_sha"] != source or run["head_branch"] != "main"
@@ -688,21 +712,26 @@ def qualified_backend_source(source, gh, *, current=True):
 
 
 @contextmanager
-def verified_backend_archive(backend, *, current=True):
-    with qualified_backend_source(backend.source, TOOLS / "gh", current=current) as result:
+def verified_backend_archive(backend, *, current=True, gh=None):
+    with qualified_backend_source(backend.source, gh or TOOLS / "gh", current=current) as result:
         gh, run_id, attempt, children, qualification, root = result
         pair = api_archive_identity(backend, qualification)
         yield gh, run_id, attempt, children, pair, qualification, root
+
+def api_native_attempt(pair, platform, attempt):
+    attempts = {p["smoke"]["workflow_run_attempt"] for role in ("nginx", "php-fpm")
+                for p in pair["images"][role]["platforms"] if p["subject"]["platform"] == platform}
+    producing_attempt, = attempts
+    if re.fullmatch(r"[1-9][0-9]*", producing_attempt) is None or int(producing_attempt) > attempt:
+        raise ValueError("invalid native archive attempt")
+    return producing_attempt
+
 
 def prepare_archived_backend(ssh, host, platform, release, previous, backend):
     with verified_backend_archive(backend) as (gh, run_id, attempt, children, pair, qualification, root):
         arch = platform.removeprefix("linux/")
         roles = ("nginx", "php-fpm")
-        attempts = {p["smoke"]["workflow_run_attempt"] for role in roles
-                    for p in pair["images"][role]["platforms"] if p["subject"]["platform"] == platform}
-        producing_attempt, = attempts
-        if re.fullmatch(r"[1-9][0-9]*", producing_attempt) is None or int(producing_attempt) > attempt:
-            raise ValueError("invalid native archive attempt")
+        producing_attempt = api_native_attempt(pair, platform, attempt)
         native = root / "native"
         download_publisher_artifact(gh, "api", run_id, backend.source, f"api-native-{arch}-{run_id}-{producing_attempt}", native, ARCHIVE_MAX)
         archives = [root / (role + ".tar") for role in roles]
@@ -713,13 +742,18 @@ def prepare_archived_backend(ssh, host, platform, release, previous, backend):
             return subprocess.run(ssh, stdin=wire, timeout=810, check=False).returncode
 
 
-def compare_component_risk(previous, candidate, *, observed_at):
+def admission_governance():
     # This checkout is installed with the controller's trusted tools.
     governance = TOOLS / "governance"
     if git(governance, "rev-parse", "HEAD").strip() != b"56c9ccc92c206edfaaf64c4b7ba99d02e4a64189":
         raise ValueError("component-update policy is unavailable")
     if git(governance, "status", "--porcelain", "--untracked-files=all").strip():
         raise ValueError("component-update policy checkout differs")
+    return governance
+
+
+def compare_component_risk(previous, candidate, *, observed_at):
+    governance = admission_governance()
     spec = importlib.util.spec_from_file_location(
         "secpal_component_policy", governance / "scripts/secpal-vulnerability-policy.py",
     )

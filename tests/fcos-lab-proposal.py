@@ -38,6 +38,67 @@ SOURCE = (f'FRONTEND_DIGEST = "{OLD.index}"\n'
 
 
 class ProposalContract(unittest.TestCase):
+    def test_archived_selection_short_circuits_the_exact_installed_subject(self):
+        from fcos_lab_proposal import archived_selection
+        from fcos_lab_rollout_adapter import FRONTEND_ARCHIVE
+        installed = Frontend(OLD.index, OLD.source, FRONTEND_ARCHIVE)
+        report = {"index": installed.index, "source_commit": installed.source}
+        with patch("fcos_lab_proposal.qualified_candidate", return_value=report) as discovery, patch(
+            "fcos_lab_proposal.github_json"
+        ) as compare:
+            self.assertEqual(archived_selection("frontend", installed, Path("/trusted/gh")), None)
+            discovery.assert_called_once_with("frontend", Path("/trusted/gh"), current=False)
+            compare.assert_not_called()
+
+    def test_archived_selection_rejects_divergence_and_preserves_exact_plan(self):
+        from fcos_lab_proposal import archived_selection
+        from fcos_lab_rollout_adapter import FRONTEND_ARCHIVE
+        report = {"index": NEW.index, "source_commit": NEW.source}
+        with patch("fcos_lab_proposal.qualified_candidate", return_value=report), patch(
+            "fcos_lab_proposal.github_json", return_value={"status": "diverged"}
+        ), self.assertRaisesRegex(ValueError, "does not advance"):
+            archived_selection("frontend", OLD, Path("/trusted/gh"))
+        with patch("fcos_lab_proposal.qualified_candidate", return_value=report), patch(
+            "fcos_lab_proposal.github_json", return_value={"status": "ahead"}
+        ):
+            self.assertEqual(archived_selection("frontend", OLD, Path("/trusted/gh")),
+                             Frontend(NEW.index, NEW.source, FRONTEND_ARCHIVE))
+
+    def test_api_evidence_renewal_does_not_propose_an_identical_pair(self):
+        from fcos_lab_proposal import archived_selection
+        from fcos_lab_rollout_adapter import API_ARCHIVE
+        installed = Backend(OLD.source, OLD.index, NEW.index, "sha256:" + "5" * 64,
+                            "2026-11-24T12:00:00Z", "6" * 64, API_ARCHIVE)
+        report = {"source_commit": installed.source, "indexes": {"nginx": installed.nginx,
+                  "php-fpm": installed.fpm}, "receipt": installed.pair,
+                  "source_security_expires": "2026-11-25T12:00:00Z"}
+        with patch("fcos_lab_proposal.qualified_candidate", return_value=report), patch(
+            "fcos_lab_proposal.github_json"
+        ) as compare:
+            self.assertIsNone(archived_selection("api", installed, Path("/trusted/gh")))
+            compare.assert_not_called()
+
+    def test_matched_scanner_snapshot_is_required_for_protected_pins(self):
+        from fcos_lab_scan import compare_material
+        previous = {("frontend", "linux/amd64"): (OLD.index, None, None)}
+        candidate = {("frontend", "linux/amd64"): (NEW.index, None, None)}
+        calls = []
+
+        def scan(product, platform, artifact):
+            calls.append((product, platform, artifact[0]))
+            return {"subject": {"oci_digest": artifact[0], "platform": platform}}
+
+        scanner = SimpleNamespace(scan=scan, trivy_database="snapshot", trivy_snapshot=lambda: "snapshot")
+        with patch("fcos_lab_scan.admit_component_update") as admit:
+            evidence = compare_material("frontend", previous, candidate, scanner)
+            self.assertEqual(calls, [("frontend", "linux/amd64", digest) for digest in (OLD.index, NEW.index)])
+            self.assertEqual(admit.call_args.kwargs["installed"], {("frontend", "linux/amd64"): OLD.index})
+            self.assertEqual(admit.call_args.kwargs["candidate"], evidence["candidate"])
+            scanner.trivy_snapshot = lambda: "other snapshot"
+            with self.assertRaisesRegex(ValueError, "snapshot changed"):
+                compare_material("frontend", previous, candidate, scanner)
+            admit.assert_called_once()
+
     def test_backend_draft_cannot_change_live_release_inputs(self):
         expires = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         plan = BackendProposal(NEW.index, NEW.source, 12, 2, "sha256:" + "a" * 64, "sha256:" + "b" * 64,

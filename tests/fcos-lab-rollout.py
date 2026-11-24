@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from fcos_lab_rollout import (
     LAB_API_PINS,
     AcceptanceRejected, HOSTS, RELEASE_PATHS, Release, RolloutError,
-    admit_archived_api_only, admit_frontend_only, command_adapter, recover, run_rollout, source_release,
+    admit_archived_api_only, admit_frontend_only, command_adapter, propose_after_reconciliation, recover, run_rollout, source_release,
 )
 
 
@@ -72,6 +72,25 @@ class RolloutTest(unittest.TestCase):
         self.adapter.calls.clear()
         run_rollout(Release("7" * 40, NEXT.fingerprint), self.state, self.adapter, BASE)
         self.assertEqual(self.adapter.calls, [])
+
+    def test_discovery_uses_read_back_of_all_hosts_and_never_uses_a_pending_baseline(self):
+        repo, archives = Path("/protected/main"), Path("/protected/scanners")
+        with patch("fcos_lab_rollout_adapter.admit_proposal_dispatch") as preflight, patch(
+            "fcos_lab_proposal.propose_archives"
+        ) as propose:
+            self.adapter.calls.clear()
+            propose_after_reconciliation(repo, NEXT, self.state, self.adapter, archives)
+            preflight.assert_not_called()
+            propose.assert_not_called()
+            propose_after_reconciliation(repo, BASE, self.state, self.adapter, archives)
+            preflight.assert_called_once_with(repo, BASE)
+            propose.assert_called_once()
+            self.assertEqual(self.adapter.calls, [("observe", host, BASE.fingerprint) for host in HOSTS])
+            propose.reset_mock()
+            self.adapter.current["cx33"] = NEXT.fingerprint
+            with self.assertRaisesRegex(RolloutError, "cx33"):
+                propose_after_reconciliation(repo, BASE, self.state, self.adapter, archives)
+            propose.assert_not_called()
 
     def test_arm_preparation_failure_does_not_activate_any_host(self):
         self.adapter.fail = "prepare", "cax21"

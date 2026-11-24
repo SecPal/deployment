@@ -419,6 +419,29 @@ secpal-lab-rollout` to verify the exact no-argument rule and no other
    privilege. Verify the dedicated account cannot modify the key, policy,
    journal, helper or Quadlets. The existing recovery key remains independent.
 
+### Archived component proposals
+
+The existing controller can use `--archive-proposals /absolute/state/scanners`
+with `--component-updates`. Supply `grype.tar.gz` and `trivy.tar.gz`
+from the exact Linux AMD64 release assets in the pinned governance
+reevaluation workflow. The controller verifies the release hashes before
+running the scanners. The directory should be private to the existing
+controller and have room for the scanner databases.
+
+After reconciliation, the controller verifies all three installed fingerprints
+against the accepted journal. It discovers qualified archives from protected
+product main, excludes an identical or non-descendant identity and scans native
+predecessor and candidate subjects against the same current database snapshots.
+The candidate still needs independent source-security acceptance. An API
+proposal also needs the existing native compatibility record for the exact
+predecessor and candidate pair. Missing evidence leaves that component deferred.
+
+The existing GitHub-signed proposal transaction carries only the component pins
+and comparison documents. The controller requests normal protected auto-merge
+for the exact proposal head. The rollout path rechecks exact predecessors and
+the component decision under its lock before activation. An open proposal defers
+further proposals until its disposition.
+
 ## Controller setup and qualification
 
 From the exact reviewed source tree as the normal controller user, install
@@ -433,6 +456,7 @@ install -d -m 0700 "$rollout_lib" "$rollout_config" "$rollout_state"
 install -d "$HOME/.config/systemd/user"
 install -m 0700 scripts/fcos_lab_rollout_adapter.py "$rollout_lib/"
 install -m 0600 scripts/fcos_lab_rollout.py scripts/fcos-lab-release-paths.txt \
+  scripts/fcos_lab_discovery.py scripts/fcos_lab_proposal.py scripts/fcos_lab_scan.py \
   scripts/fetch-oci-attestation.py scripts/integration_runtime_contract.py \
   scripts/image_attestation_runtime.py scripts/fcos-lab-gh-binary-sha256.txt "$rollout_lib/"
 git clone --no-checkout https://github.com/SecPal/.github.git "$rollout_lib/governance"
