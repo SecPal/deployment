@@ -22,7 +22,9 @@ observed ZIP digest and existing signed publisher evidence before import.
 
 The operator enrolls the previously accepted deployment revision and
 the live exposure fingerprint in the root-owned
-`/etc/secpal/reference-update.json`. Before replacing pins, the service
+`/etc/secpal/reference-update.json`. The root-only
+`/etc/secpal/reference-update-witness` holds the enrolled synthetic account
+credential for the existing public API tests. Before replacing pins, the service
 rechecks the installed runtime, the actual public route and loopback
 listeners, both protected source heads, and the exact comparison report.
 The API also requires the enrolled PostgreSQL schema and migration

@@ -22,7 +22,7 @@ from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, ProxyHandle
 STATE = Path("/var/lib/secpal-reference-update")
 QUADLETS = Path("/etc/containers/systemd/users")
 EDGE = Path("/etc/haproxy/secpal.cfg")
-SYNTHETIC_PASSWORD = Path("/var/lib/secpal-reference/bootstrap/synthetic-password")
+SYNTHETIC_PASSWORD = Path("/etc/secpal/reference-update-witness")
 FRONT = "https://app.secpal.dev"
 API = "https://api.secpal.dev"
 NATIVE = "linux/amd64"
@@ -149,9 +149,11 @@ def observe(target):
     return observed
 
 
-def exposure():
+def exposure(target=None):
     configs = {}
-    for target in UNITS:
+    targets = tuple(UNITS) if target is None else (target,)
+    for reference in targets:
+        target = reference
         for name, path in lanepaths(target).items():
             text = protected(path).decode()
             ports = re.findall(r"(?m)^PublishPort=(.*)$", text)
@@ -168,7 +170,8 @@ def exposure():
                     raise ValueError("running reference port exposure differs")
     listeners = run(["/usr/sbin/ss", "-Hlnt"]).decode().splitlines()
     endpoints = [entry.split()[3] for entry in listeners]
-    for port in (5432, 18080, 18081):
+    ports = (5432, 18080, 18081) if len(targets) == 2 else (18080,) if targets == ("frontend",) else (5432, 18081)
+    for port in ports:
         if sorted(value for value in endpoints if value.endswith(f":{port}")) != [f"127.0.0.1:{port}"]:
             raise ValueError("reference backend listener is not exclusively on loopback")
     edge = protected(EDGE)
@@ -212,7 +215,10 @@ def public_accept(*, authenticated=False, target=None):
             if not re.fullmatch(rb"/assets/[A-Za-z0-9._/-]+\.js", asset) or b".." in asset or asset.startswith(b"//"):
                 raise ValueError("unexpected reference frontend asset path")
             request(FRONT, asset.decode(), 200)
-    if target == "frontend" and not authenticated:
+    if target == "frontend":
+        _, config = request(FRONT, "/runtime-config.js", 200)
+        if re.findall(rb'apiBaseUrl:\s*"([^"]+)"', config) != [API.encode()]:
+            raise ValueError("reference frontend API origin differs")
         return
     request(API, "/health/ready", 200)
     for origin in (FRONT, "https://other.example"):

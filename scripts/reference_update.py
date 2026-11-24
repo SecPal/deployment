@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fcos_lab_rollout_adapter as publisher
 from fcos_lab_rollout import RolloutError, fetch_release, git, source_release
 from reference_runtime import (
-    NATIVE, STATE, Container, NoRedirect, apply, as_user, exposure, observe, postgres_facts, protected,
+    NATIVE, STATE, UNITS, Container, NoRedirect, apply, as_user, exposure, observe, postgres_facts, protected,
     public_accept, run,
 )
 
@@ -168,7 +168,12 @@ def lane(repo, latest, target, baseline, posture, progress):
     serialized = {role: asdict(value) for role, value in active.items()}
     if previous["runtime"] is not None and previous["runtime"] != serialized:
         raise ValueError("reference differs from the last accepted transaction")
-    if exposure() != posture:
+    expected_posture = {name: posture[name] for name in (*UNITS[target], "edge")}
+
+    def exposure_matches():
+        return exposure(target) == expected_posture
+
+    if not exposure_matches():
         raise ValueError("root-enrolled public exposure differs")
     with ExitStack() as stack:
         old_children = None
@@ -208,7 +213,11 @@ def lane(repo, latest, target, baseline, posture, progress):
 
         progress[0] = "comparison"
         evidence = publisher.protected_comparison(repo, latest, target, old_children, children)
-        database = postgres_facts()
+        database = postgres_facts() if target == "api" else None
+
+        def database_matches():
+            return target != "api" or postgres_facts() == database
+
         if target == "api":
             compatible(repo, latest, before, desired, database)
 
@@ -218,11 +227,11 @@ def lane(repo, latest, target, baseline, posture, progress):
         def rollback_allowed():
             if target == "api" and now() >= datetime.fromisoformat(before.expires):
                 raise ValueError("predecessor API rollback qualification expired")
-            if postgres_facts() != database or exposure() != posture:
+            if not database_matches() or not exposure_matches():
                 raise ValueError("rollback database or exposure no longer agrees")
 
         def ready():
-            if observe(target) != active or exposure() != posture or postgres_facts() != database:
+            if observe(target) != active or not exposure_matches() or not database_matches():
                 raise ValueError("reference predecessor, isolation or database changed during staging")
             if protected_head("deployment") != latest.revision or protected_head(target) != desired.source:
                 raise ValueError("protected source advanced before reference activation")
@@ -233,7 +242,7 @@ def lane(repo, latest, target, baseline, posture, progress):
             progress[0] = "activation"
 
         def finish():
-            if exposure() != posture or postgres_facts() != database:
+            if not exposure_matches() or not database_matches():
                 raise ValueError("reference exposure or database changed during activation")
             public_accept(authenticated=True, target=target)
             record(saved, {"revision": latest.revision, "runtime": {role: asdict(value) for role, value in stages.items()}})
