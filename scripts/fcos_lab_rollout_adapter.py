@@ -515,40 +515,40 @@ def write_backend_archive_request(output, host, platform, release, previous, bac
 def qualified_frontend_source(source, gh, *, current=True):
     if re.fullmatch(r"[a-f0-9]{40}", source) is None:
         raise ValueError("invalid protected frontend source")
-    prefix = "repos/SecPal/frontend/actions"
-    workflow = ".github/workflows/publish-container.yml"
-    listing = github_json(gh, f"{prefix}/workflows/publish-container.yml/runs"
-                             f"?branch=main&head_sha={source}&status=completed&per_page=20")
-    for run in listing["workflow_runs"]:
-        run_id, attempt = run["id"], run["run_attempt"]
-        if (run["head_sha"] != source or run["head_branch"] != "main"
-                or run["head_repository"]["full_name"] != "SecPal/frontend"
-                or run["event"] not in {"push", "workflow_dispatch"} or run["path"] != workflow
-                or any(type(value) is not int or value < 1 for value in (run_id, attempt))):
-            raise ValueError("archived frontend producer is outside protected main")
-        invocation = f"{prefix}/runs/{run_id}"
-        jobs = github_json(gh, f"{invocation}/attempts/{attempt}/jobs?per_page=100")
-        required = {"Repository Security / Repository Security", "Validate Frontend Image",
-                    "Authenticate protected-main publication or qualification",
-                    "Qualify both exact unpublished OCI subjects",
-                    "Build native Frontend candidates / Native frontend (amd64)",
-                    "Build native Frontend candidates / Native frontend (arm64)",
-                    "Build native Frontend candidates / Container Contract"}
-        succeeded = {job["name"] for job in jobs["jobs"] if job["conclusion"] == "success"}
-        failed = {job["name"] for job in jobs["jobs"] if job["conclusion"] not in {"success", "skipped"}}
-        registry_jobs = {"Prepare exact digest subjects", "Attest candidate index platforms and Syft artifacts",
-                         "Accept verified Frontend publication", "Published native runtime (amd64)",
-                         "Published native runtime (arm64)", "Artifact security (amd64)", "Artifact security (arm64)"}
-        registry_failure = run["event"] == "push" and run["conclusion"] == "failure" and bool(failed) and failed <= registry_jobs
-        if required <= succeeded and (run["conclusion"] == "success" or registry_failure):
-            break
-    else:
-        raise ValueError("no qualified frontend candidate for the protected source")
     with tempfile.TemporaryDirectory(prefix="fcos-lab-archive-") as temporary:
         root = Path(temporary)
         environment = {"PATH": "/usr/bin:/bin", "HOME": temporary, "GH_CONFIG_DIR": temporary,
                        "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1"}
         verified_gh(gh, environment)
+        prefix = "repos/SecPal/frontend/actions"
+        workflow = ".github/workflows/publish-container.yml"
+        listing = github_json(gh, f"{prefix}/workflows/publish-container.yml/runs"
+                                 f"?branch=main&head_sha={source}&status=completed&per_page=20")
+        for run in listing["workflow_runs"]:
+            run_id, attempt = run["id"], run["run_attempt"]
+            if (run["head_sha"] != source or run["head_branch"] != "main"
+                    or run["head_repository"]["full_name"] != "SecPal/frontend"
+                    or run["event"] not in {"push", "workflow_dispatch"} or run["path"] != workflow
+                    or any(type(value) is not int or value < 1 for value in (run_id, attempt))):
+                raise ValueError("archived frontend producer is outside protected main")
+            invocation = f"{prefix}/runs/{run_id}"
+            jobs = github_json(gh, f"{invocation}/attempts/{attempt}/jobs?per_page=100")
+            required = {"Repository Security / Repository Security", "Validate Frontend Image",
+                        "Authenticate protected-main publication or qualification",
+                        "Qualify both exact unpublished OCI subjects",
+                        "Build native Frontend candidates / Native frontend (amd64)",
+                        "Build native Frontend candidates / Native frontend (arm64)",
+                        "Build native Frontend candidates / Container Contract"}
+            succeeded = {job["name"] for job in jobs["jobs"] if job["conclusion"] == "success"}
+            failed = {job["name"] for job in jobs["jobs"] if job["conclusion"] not in {"success", "skipped"}}
+            registry_jobs = {"Prepare exact digest subjects", "Attest candidate index platforms and Syft artifacts",
+                             "Accept verified Frontend publication", "Published native runtime (amd64)",
+                             "Published native runtime (arm64)", "Artifact security (amd64)", "Artifact security (arm64)"}
+            registry_failure = run["event"] == "push" and run["conclusion"] == "failure" and bool(failed) and failed <= registry_jobs
+            if required <= succeeded and (run["conclusion"] == "success" or registry_failure):
+                break
+        else:
+            raise ValueError("no qualified frontend candidate for the protected source")
         qualification = root / "qualification"
         download_publisher_artifact(gh, "frontend", run_id, source,
                                     f"frontend-pre-registry-{run_id}-{attempt}", qualification, 8 * 1024**2)

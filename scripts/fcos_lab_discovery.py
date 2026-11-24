@@ -5,18 +5,19 @@
 """Report candidates from the maintained FCOS lab publishers."""
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 from zipfile import BadZipFile
 
 from fcos_lab_rollout_adapter import Backend, DIGEST, RUNTIME_SOURCE
-from fcos_lab_rollout_adapter import qualified_backend_source, qualified_frontend_source
+from fcos_lab_rollout_adapter import github_json, qualified_backend_source, qualified_frontend_source, verified_gh
 from integration_runtime_contract import LAB_FRONTEND_SOURCE_COMMIT
 
 
@@ -133,7 +134,11 @@ def qualified_candidate(product, gh):
     if product not in {"frontend", "api"}:
         raise ValueError("unknown product")
     repo = f"SecPal/{product}"
-    branch = get(f"repos/{repo}/branches/main", gh=gh)
+    with tempfile.TemporaryDirectory(prefix="fcos-lab-discovery-") as directory:
+        environment = {"PATH": "/usr/bin:/bin", "HOME": directory, "GH_CONFIG_DIR": directory,
+                       "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1", "GH_TELEMETRY": "false"}
+        verified_gh(gh, environment)
+    branch = github_json(gh, f"repos/{repo}/branches/main")
     source = branch["commit"]["sha"]
     if branch["name"] != "main" or branch["protected"] is not True or re.fullmatch(r"[a-f0-9]{40}", source) is None:
         raise ValueError("upstream main is not protected")
@@ -153,14 +158,17 @@ def qualified_candidate(product, gh):
             indexes = {role: image["candidate_index_digest"] for role, image in pair["images"].items()}
             if any(re.fullmatch(DIGEST, value) is None for value in indexes.values()):
                 raise ValueError("invalid API index")
-            deadline = json.loads((directory / "source-security.json").read_bytes())["database"]["next_update"]
+            deadline = datetime.fromisoformat(
+                json.loads((directory / "source-security.json").read_bytes())["database"]["next_update"])
+            if deadline.utcoffset() is None:
+                raise ValueError("API source-security deadline has no timezone")
             detail.update({
                 "indexes": indexes,
                 "receipt": "sha256:" + hashlib.sha256(raw).hexdigest(),
-                "source_security_expires": datetime.fromisoformat(deadline).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "source_security_expires": deadline.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             })
     # Recheck after verification so superseded inputs cannot be advertised as current.
-    latest = get(f"repos/{repo}/branches/main", gh=gh)
+    latest = github_json(gh, f"repos/{repo}/branches/main")
     if latest["protected"] is not True or latest["commit"]["sha"] != source:
         raise ValueError("upstream main changed during discovery")
     return detail
