@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from fcos_lab_rollout import (
     AcceptanceRejected, HOSTS, RELEASE_PATHS, Release, RolloutError,
-    admit_frontend_only, command_adapter, recover, run_rollout, source_release,
+    admit_archived_api_only, admit_frontend_only, command_adapter, recover, run_rollout, source_release,
 )
 
 
@@ -246,6 +246,25 @@ class SourceAndProtocolTest(unittest.TestCase):
             pin.write_text(updated)
             frontend = record()
             admit_frontend_only(repo, frontend, base, frontend)
+            pin.write_text(updated + 'LAB_FRONTEND_TRANSPORT = "oci-archive-v1"\n')
+            archived = record()
+            admit_frontend_only(repo, archived, base, archived)
+            api = (
+                f'LAB_API_SOURCE_COMMIT = "{"a" * 40}"\n'
+                f'LAB_API_DIGEST = "sha256:{"b" * 64}"\n'
+                f'LAB_PHP_FPM_DIGEST = "sha256:{"c" * 64}"\n'
+                f'LAB_API_PAIR_DIGEST = "sha256:{"d" * 64}"\n'
+                'LAB_API_VEX_EXPIRES_AT = "2040-01-01T00:00:00Z"\n'
+                f'LAB_API_COMPATIBILITY_SHA256 = "{"e" * 64}"\n'
+                'LAB_API_TRANSPORT = "oci-archive-v1"\n'
+            )
+            pin.write_text(original + api)
+            archived_api = record()
+            admit_archived_api_only(repo, archived_api, base, archived_api)
+            pin.write_text(updated + api)
+            mixed = record()
+            with self.assertRaisesRegex(RolloutError, "unrelated runtime"):
+                admit_archived_api_only(repo, mixed, base, mixed)
             for label, changed, extra in (
                 ("mixed", updated.replace(lines["API_DIGEST"], f'"sha256:{"c" * 64}"'), None),
                 ("backend-only", original.replace(lines["API_DIGEST"], f'"sha256:{"c" * 64}"'), None),

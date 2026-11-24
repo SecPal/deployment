@@ -6,6 +6,7 @@
 
 import ast
 import base64
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -44,6 +45,7 @@ DIGEST = r"sha256:[0-9a-f]{64}"
 IMAGE = "ghcr.io/secpal/frontend"
 API_IMAGE = "ghcr.io/secpal/api"
 API_ARCHIVE = "oci-archive-v1"
+FRONTEND_ARCHIVE = "oci-archive-v1 frontend"
 ARCHIVE_MAX = 150_000_000
 OPERATIONS = {"observe", "prepare", "activate", "accept", "rollback"}
 PRIVATE = Path.home() / ".config/secpal-fcos-lab-rollout"
@@ -56,13 +58,17 @@ PRIVATE_IPV4 = tuple(map(ipaddress.IPv4Network, ("10.0.0.0/8", "172.16.0.0/12", 
 class Frontend:
     index: str
     source: str
+    transport: str = "registry"
 
     @classmethod
     def from_source(cls, text):
         prefix = "LAB_" if re.search(r"^LAB_FRONTEND_(DIGEST|SOURCE_COMMIT)[ \t]*=", text, re.MULTILINE) else ""
         index, = re.findall(rf'^{prefix}FRONTEND_DIGEST = "({DIGEST})"$', text, re.MULTILINE)
         source, = re.findall(rf'^{prefix}FRONTEND_SOURCE_COMMIT = "([a-f0-9]{{40}})"$', text, re.MULTILINE)
-        return cls(index, source)
+        modes = re.findall(r"^LAB_FRONTEND_TRANSPORT[ \t]*=.*$", text, re.MULTILINE)
+        if modes and (not prefix or modes != ['LAB_FRONTEND_TRANSPORT = "oci-archive-v1"']):
+            raise ValueError("invalid archived frontend transport pin")
+        return cls(index, source, FRONTEND_ARCHIVE if modes else "registry")
 
 
 @dataclass(frozen=True)
@@ -288,7 +294,7 @@ def require_source_security(report, product, source):
         raise ValueError(f"{product} candidate source security is unavailable or stale")
 
 
-def verify_frontend_candidate(directory, source, run, attempt, gh, environment):
+def verify_frontend_candidate(directory, source, run, attempt, gh, environment, *, current=True):
     publisher = directory / "publisher"
     receipt = publisher / "pre-registry.json"
     bundle = publisher / "pre-registry.bundle.json"
@@ -307,7 +313,8 @@ def verify_frontend_candidate(directory, source, run, attempt, gh, environment):
     binding = json.loads(receipt.read_bytes())
     prepared = verify_json(publisher / "prepared.json", binding["candidate_sha256"], "prepared manifest")
     index = verify_json(publisher / "index.json", prepared["index_digest"], "OCI index")
-    require_source_security(json.loads((publisher / "source-security.json").read_bytes()), "frontend", source)
+    if current:
+        require_source_security(json.loads((publisher / "source-security.json").read_bytes()), "frontend", source)
     records, inventories, results = prepared["records"], prepared["inventories"], binding["results"]
     if len(records) != len(set(HOSTS.values())) or index["schemaVersion"] != 2:
         raise ValueError("frontend candidate has an incomplete OCI index")
@@ -340,7 +347,7 @@ def verify_frontend_candidate(directory, source, run, attempt, gh, environment):
     return children, evidence
 
 
-def verify_api_candidate(directory, source, gh, environment):
+def verify_api_candidate(directory, source, gh, environment, *, current=True):
     """Verify the existing Actions qualification and evaluation subjects."""
     if re.fullmatch(r"[a-f0-9]{40}", source) is None:
         raise ValueError("invalid candidate source")
@@ -376,7 +383,8 @@ def verify_api_candidate(directory, source, gh, environment):
         return json.loads(path.read_bytes())
 
     source_security = read_signed("source-security.json")
-    require_source_security(source_security, "api", source)
+    if current:
+        require_source_security(source_security, "api", source)
     if set(pair["images"]) != {"php-fpm", "nginx"}:
         raise ValueError("incomplete qualified API runtime pair")
     children, evidence = {}, {}
@@ -436,9 +444,10 @@ def download_publisher_artifact(gh, product, run, source, name, output, limit):
         for entry in members:
             path = PurePosixPath(entry.filename)
             if (not path.parts or path.is_absolute() or ".." in path.parts
-                    or stat.S_ISLNK(entry.external_attr >> 16) or entry.filename in names):
+                    or str(path) != entry.filename.rstrip("/")
+                    or stat.S_ISLNK(entry.external_attr >> 16) or path in names):
                 raise ValueError("ambiguous candidate archive entry")
-            names.add(entry.filename)
+            names.add(path)
         output.mkdir(mode=0o700)
         contents.extractall(output)
     archive.unlink()
@@ -474,24 +483,161 @@ def make_oci_archive(layout, child, path):
         raise ValueError("native transport exceeds the guest limit")
 
 
-def write_backend_archive_request(output, host, platform, release, previous, backend, qualification, images):
-    paths = tuple(qualification / name for name in (
-        "unpublished-runtime-pair.json", "bundle.jsonl", "source-security.json"))
+def write_archive_request(output, transport, request, paths, images):
     proof = b"".join(base64.b64encode(path.read_bytes()) + b"\n" for path in paths)
     sizes = tuple(path.stat().st_size for path in images)
-    if len(proof) > 2097152 or len(sizes) != 2 or not all(0 < size <= ARCHIVE_MAX for size in sizes):
-        raise ValueError("archived backend input exceeds the guest limit")
-    output.write(API_ARCHIVE.encode() + b"\n")
-    output.write(request_line("prepare", host, platform, release, previous, backend.pair))
+    expected = {API_ARCHIVE: (3, 2), FRONTEND_ARCHIVE: (4, 1)}
+    if (expected.get(transport) != (len(paths), len(sizes)) or len(proof) > 2097152
+            or not all(0 < size <= ARCHIVE_MAX for size in sizes)):
+        raise ValueError("archived component input exceeds the guest limit")
+    output.write(transport.encode() + b"\n")
+    output.write(request)
     output.write(proof)
-    output.write(f"{sizes[0]} {sizes[1]}\n".encode())
+    output.write((" ".join(map(str, sizes)) + "\n").encode())
     for path in images:
         with path.open("rb") as image:
             shutil.copyfileobj(image, output)
     output.seek(0)
 
 
-def prepare_archived_backend(ssh, host, platform, release, previous, backend):
+def write_backend_archive_request(output, host, platform, release, previous, backend, qualification, images):
+    paths = tuple(qualification / name for name in (
+        "unpublished-runtime-pair.json", "bundle.jsonl", "source-security.json"))
+    request = request_line("prepare", host, platform, release, previous, backend.pair)
+    write_archive_request(output, API_ARCHIVE, request, paths, images)
+
+
+@contextmanager
+def verified_frontend_archive(frontend, *, current=True):
+    gh = TOOLS / "gh"
+    prefix = "repos/SecPal/frontend/actions"
+    workflow = ".github/workflows/publish-container.yml"
+    listing = github_json(gh, f"{prefix}/workflows/publish-container.yml/runs"
+                             f"?branch=main&head_sha={frontend.source}&status=completed&per_page=20")
+    for run in listing["workflow_runs"]:
+        run_id, attempt = run["id"], run["run_attempt"]
+        if (run["head_sha"] != frontend.source or run["head_branch"] != "main"
+                or run["head_repository"]["full_name"] != "SecPal/frontend"
+                or run["event"] not in {"push", "workflow_dispatch"} or run["path"] != workflow
+                or any(type(value) is not int or value < 1 for value in (run_id, attempt))):
+            raise ValueError("archived frontend producer is outside protected main")
+        invocation = f"{prefix}/runs/{run_id}"
+        jobs = github_json(gh, f"{invocation}/attempts/{attempt}/jobs?per_page=100")
+        required = {"Repository Security / Repository Security",
+                    "Authenticate protected-main publication or qualification",
+                    "Qualify both exact unpublished OCI subjects"}
+        if required <= {job["name"] for job in jobs["jobs"] if job["conclusion"] == "success"}:
+            break
+    else:
+        raise ValueError("no qualified frontend candidate for the protected source")
+    with tempfile.TemporaryDirectory(prefix="fcos-lab-archive-") as temporary:
+        root = Path(temporary)
+        environment = {"PATH": "/usr/bin:/bin", "HOME": temporary, "GH_CONFIG_DIR": temporary,
+                       "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1"}
+        verified_gh(gh, environment)
+        qualification = root / "qualification"
+        download_publisher_artifact(gh, "frontend", run_id, frontend.source,
+                                    f"frontend-pre-registry-{run_id}-{attempt}", qualification, 8 * 1024**2)
+        children, _ = verify_frontend_candidate(
+            qualification, frontend.source, run_id, attempt, gh, environment, current=current,
+        )
+        publisher = qualification / "publisher"
+        artifacts = github_json(gh, f"{invocation}/artifacts?per_page=100")["artifacts"]
+        evidence_name, = (artifact["name"] for artifact in artifacts
+                          if artifact["name"].startswith(f"trivy-repository-evidence-{run_id}-{attempt}-")
+                          and artifact["expired"] is False)
+        security = root / "repository-security"
+        download_publisher_artifact(gh, "frontend", run_id, frontend.source,
+                                    evidence_name, security, 8 * 1024**2)
+        source_report = json.loads((security / "result.json").read_bytes())
+        if source_report != json.loads((publisher / "source-security.json").read_bytes()):
+            raise ValueError("frontend candidate source security differs from the independent job")
+        proof = tuple(publisher / name for name in (
+            "pre-registry.json", "pre-registry.bundle.json", "prepared.json", "index.json"))
+        if "sha256:" + hashlib.sha256(proof[-1].read_bytes()).hexdigest() != frontend.index:
+            raise ValueError("archived frontend differs from the protected OCI pin")
+        yield gh, run_id, attempt, children, proof, root
+
+
+def prepare_archived_frontend(ssh, host, platform, release, previous, frontend):
+    with verified_frontend_archive(frontend) as (gh, run_id, attempt, children, proof, root):
+        native = root / "native"
+        arch = platform.removeprefix("linux/")
+        download_publisher_artifact(gh, "frontend", run_id, frontend.source,
+                                    f"frontend-native-{arch}-{run_id}-{attempt}", native, ARCHIVE_MAX)
+        archive = root / "frontend.tar"
+        child = children["frontend", platform]
+        make_oci_archive(native / "image", child, archive)
+        with tempfile.TemporaryFile() as wire:
+            request = request_line("prepare", host, platform, release, previous, child)
+            write_archive_request(wire, FRONTEND_ARCHIVE, request, proof, [archive])
+            return subprocess.run(ssh, stdin=wire, timeout=810, check=False).returncode
+
+
+def archived_frontend_evidence(repo, release, previous):
+    candidate = Frontend.from_source(admit_source_text(repo, release))
+    installed = Frontend.from_source(admit_source_text(repo, previous))
+    if candidate.transport != FRONTEND_ARCHIVE:
+        raise ValueError("frontend candidate transport was not selected by protected main")
+    with verified_frontend_archive(candidate) as (_, _, _, proposed, _, _):
+        pass
+    if installed.transport == "registry":
+        previous_children, _, _ = publisher_children(installed)
+        active = {("frontend", platform): digest for platform, digest in previous_children.items()}
+    else:
+        with verified_frontend_archive(installed, current=False) as (_, _, _, active, _, _):
+            pass
+
+    return protected_comparison(repo, release, "frontend", active, proposed)
+
+
+def protected_comparison(repo, release, component, active, proposed):
+    def evaluations(side):
+        evidence = {}
+        for role, platform in sorted(proposed):
+            arch = platform.removeprefix("linux/")
+            leaf = f"{arch}-{side}.json" if component == "frontend" else f"{role}-{arch}-{side}.json"
+            path = f"config/quadlet/fcos-lab-rollout/{component}-security/{leaf}"
+            entry = git(repo, "ls-tree", release.revision, "--", path)
+            if not entry.startswith(b"100644 blob "):
+                raise ValueError(f"missing protected {component} comparison evidence")
+            size = int(git(repo, "cat-file", "-s", f"{release.revision}:{path}"))
+            if not 0 < size <= 1024**2:
+                raise ValueError(f"{component} comparison evidence exceeds the supported limit")
+            evidence[role, platform] = json.loads(git(repo, "show", f"{release.revision}:{path}"))
+        return evidence
+
+    return {"installed": active, "proposed": proposed, "previous": evaluations("installed"),
+            "candidate": evaluations("candidate"), "exposure_unchanged": True}
+
+
+def archived_component_evidence(repo, release, previous):
+    source = admit_source_text(repo, release)
+    earlier = admit_source_text(repo, previous)
+    candidate, installed = Backend.from_source(source), Backend.from_source(earlier)
+    frontend, old_frontend = Frontend.from_source(source), Frontend.from_source(earlier)
+    if candidate != installed and candidate.transport == API_ARCHIVE:
+        if frontend != old_frontend or not candidate.compatibility:
+            raise ValueError("archived API must preserve frontend and provide compatibility evidence")
+        with verified_backend_archive(candidate) as (_, _, _, proposed, _, _, _):
+            pass
+        if installed.transport == "registry":
+            _, _, _, fpm, _, nginx, _ = backend_proof(installed)
+            active = {(role, platform): digest for role, index in (("php-fpm", fpm), ("nginx", nginx))
+                      for platform, digest in native_children(index).items()}
+        else:
+            with verified_backend_archive(installed, current=False) as (_, _, _, active, _, _, _):
+                pass
+        return protected_comparison(repo, release, "api", active, proposed)
+    if frontend != old_frontend and frontend.transport == FRONTEND_ARCHIVE:
+        if candidate != installed:
+            raise ValueError("archived frontend cannot switch the API")
+        return archived_frontend_evidence(repo, release, previous)
+    return None
+
+
+@contextmanager
+def verified_backend_archive(backend, *, current=True):
     gh = TOOLS / "gh"
     prefix = "repos/SecPal/api/actions/workflows/publish-container.yml/runs"
     with tempfile.TemporaryDirectory(prefix="fcos-lab-archive-") as temporary:
@@ -510,8 +656,13 @@ def prepare_archived_backend(ssh, host, platform, release, previous, backend):
             raise ValueError("archived API producer is outside protected main")
         qualification = root / "qualification"
         download_publisher_artifact(gh, "api", run_id, backend.source, f"api-candidate-{run_id}-{attempt}", qualification, 8 * 1024**2)
-        children, _ = verify_api_candidate(qualification, backend.source, gh, verification_env)
+        children, _ = verify_api_candidate(qualification, backend.source, gh, verification_env, current=current)
         pair = api_archive_identity(backend, qualification)
+        yield gh, run_id, attempt, children, pair, qualification, root
+
+
+def prepare_archived_backend(ssh, host, platform, release, previous, backend):
+    with verified_backend_archive(backend) as (gh, run_id, attempt, children, pair, qualification, root):
         arch = platform.removeprefix("linux/")
         roles = ("nginx", "php-fpm")
         attempts = {p["smoke"]["workflow_run_attempt"] for role in roles
@@ -835,6 +986,8 @@ def main():
                     backend_diagnostic("publisher-read")
                     return 1
             elif backend == old_backend and frontend.index != old_frontend.index:
+                if frontend.transport == FRONTEND_ARCHIVE:
+                    return prepare_archived_frontend(ssh, host, platform, release, previous, frontend)
                 message = prepare_request(host, platform, release, previous, publisher_children(frontend))
             else:
                 return 1
@@ -868,7 +1021,7 @@ def main():
         if backend_change and result.returncode:
             backend_diagnostic("guest-transport")
         return result.returncode
-    except (OSError, ValueError, KeyError, TypeError, StopIteration, RolloutError,
+    except (BadZipFile, OSError, ValueError, KeyError, TypeError, StopIteration, RolloutError,
             http.client.HTTPException, subprocess.SubprocessError):
         print("FCOS lab adapter failed closed", file=sys.stderr)
         return 1

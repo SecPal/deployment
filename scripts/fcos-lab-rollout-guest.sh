@@ -87,7 +87,7 @@ without_lab_pins() {
                 /^LAB_(FRONTEND|API)_SOURCE_COMMIT = "[a-f0-9]{40}"$/d;
                 /^LAB_API_VEX_EXPIRES_AT = "[0-9T:Z-]+"$/d;
                 /^LAB_API_COMPATIBILITY_SHA256 = "[a-f0-9]{64}"$/d;
-                /^LAB_API_TRANSPORT = "oci-archive-v1"$/d'
+                /^LAB_(API|FRONTEND)_TRANSPORT = "oci-archive-v1"$/d'
 }
 
 lab_pins_only() {
@@ -389,6 +389,16 @@ verify_publisher() {
     verify_signature "$scratch/index.json" "$scratch/bundle.json" "$publisher" frontend
 }
 
+verify_archived_frontend() {
+    local index=$1 publisher=$2 prepared_digest observed_index
+    decode_backend_evidence receipt bundle.json prepared.json index.json &&
+        verify_signature "$scratch/receipt" "$scratch/bundle.json" "$publisher" frontend || return 1
+    prepared_digest=$(jq -er '.candidate_sha256' "$scratch/receipt") &&
+        [[ $prepared_digest =~ ^$digest$ && $(sha256sum < "$scratch/prepared.json") == "${prepared_digest#sha256:}  -" ]] &&
+        observed_index=$(jq -er '.index_digest' "$scratch/prepared.json") &&
+        [[ $observed_index == "$index" && $(sha256sum < "$scratch/index.json") == "${index#sha256:}  -" ]]
+}
+
 verify_signature() {
     local subject=$1 bundle=$2 publisher=$3 product=$4 version expected_hash
     expected_hash=$(awk -v platform="$platform" '$1 == platform { print $2 }' "$peer/gh-binary-sha256.txt") || return 1
@@ -488,24 +498,32 @@ verify_archived_backend() {
     done
 }
 
-receive_archived_backend() {
-    local role size
-    for role in nginx fpm; do
-        size=$archive_nginx_size
-        if [[ $role == fpm ]]; then size=$archive_fpm_size; fi
-        timeout 340 head -c "$size" > "$scratch/$role.tar" &&
-            [[ $(stat -c %s -- "$scratch/$role.tar") == "$size" ]] || return 1
-    done
+receive_archived_image() {
+    local role=$1 size=$2
+    timeout 340 head -c "$size" > "$scratch/$role.tar" &&
+        [[ $(stat -c %s -- "$scratch/$role.tar") == "$size" ]]
+}
+
+finish_archive_request() {
     timeout 10 head -c 1 > "$scratch/remainder" && [[ ! -s $scratch/remainder ]]
 }
 
+receive_archived_backend() {
+    receive_archived_image nginx "$archive_nginx_size" &&
+        receive_archived_image fpm "$archive_fpm_size" && finish_archive_request
+}
+
+pull_archived_child() {
+    local role=$1 repository=$2 loaded
+    chown root:20000 "$scratch/$role.tar" && chmod 0440 "$scratch/$role.tar" &&
+        loaded=$(runtime podman pull --quiet "oci-archive:$scratch/$role.tar") &&
+        runtime podman tag "$loaded" "$repository:candidate-${revision:0:12}-$role"
+}
+
 pull_backend_child() {
-    local role=$1 ref=$2 loaded
+    local role=$1 ref=$2
     if [[ $request_transport == oci-archive-v1 ]]; then
-        chown root:20000 "$scratch/$role.tar" && chmod 0440 "$scratch/$role.tar" &&
-            chmod 0711 "$scratch" &&
-            loaded=$(runtime podman pull --quiet "oci-archive:$scratch/$role.tar") &&
-            runtime podman tag "$loaded" "$api_image:candidate-${revision:0:12}-$role"
+        pull_archived_child "$role" "$api_image"
     else
         runtime env DOCKER_CONFIG="$scratch" podman pull --quiet \
             --authfile "$scratch/auth.json" --platform "$platform" "$ref" >/dev/null
@@ -807,17 +825,31 @@ prepare() {
         prepare_backend "$installed" "$new_backend" "$old_backend"
         return
     fi
-    [[ $request_transport == registry ]] || return 1
     pin_ref=$(frontend_field "$revision" FRONTEND_DIGEST "$digest") || return 1
     publisher=$(frontend_field "$revision" FRONTEND_SOURCE_COMMIT "$sha") || return 1
     [[ $pin_ref != "$(frontend_field "$previous" FRONTEND_DIGEST "$digest")" ]] || return 1
-    verify_publisher "$pin_ref" "$publisher" || return 1
+    local selected_transport=registry
+    if frontend_field "$revision" FRONTEND_TRANSPORT 'oci-archive-v1' >/dev/null; then
+        selected_transport='oci-archive-v1 frontend'
+    fi
+    [[ $request_transport == "$selected_transport" ]] || return 1
+    if [[ $request_transport == registry ]]; then
+        verify_publisher "$pin_ref" "$publisher" || return 1
+    else
+        verify_archived_frontend "$pin_ref" "$publisher" || return 1
+    fi
     native=$(jq -er --arg arch "${platform#linux/}" \
         '.manifests | map(select(.platform.os == "linux" and .platform.architecture == $arch))
          | select(length == 1) | .[0].digest' "$scratch/index.json") || return 1
     [[ $native =~ ^$digest$ && $native == "$child" ]] || return 1
     ref="$image@$child"
-    runtime env DOCKER_CONFIG="$scratch" podman pull --quiet --authfile "$scratch/auth.json" --platform "$platform" "$ref" >/dev/null || return 1
+    if [[ $request_transport == registry ]]; then
+        runtime env DOCKER_CONFIG="$scratch" podman pull --quiet \
+            --authfile "$scratch/auth.json" --platform "$platform" "$ref" >/dev/null || return 1
+    else
+        receive_archived_image frontend "$archive_nginx_size" &&
+            finish_archive_request && pull_archived_child frontend "$image" || return 1
+    fi
     config=$(runtime podman image inspect --format '{{.Id}} {{.Digest}} {{.Architecture}} {{.Config.User}}' "$ref") || return 1
     [[ $config =~ ^([^[:space:]]+)\ "$child"\ "${platform#linux/}"\ 101:101$ ]] || return 1
     config=$(normalize_image "${BASH_REMATCH[1]}") || return 1
@@ -831,23 +863,29 @@ prepare() {
 read_request() {
     local first line
     IFS= read -r -n 1025 -t 8 first && ((${#first} <= 1024)) || return 1
-    if [[ $first == oci-archive-v1 ]]; then
+    if [[ $first == oci-archive-v1 || $first == "oci-archive-v1 frontend" ]]; then
         request_transport=$first
         IFS= read -r -n 1025 -t 8 first && ((${#first} <= 1024)) || return 1
     fi
     printf '%s\n' "$first" > "$scratch/request" && parse_request "$scratch/request" || return 1
-    if [[ $request_transport == oci-archive-v1 ]]; then
+    if [[ $request_transport != registry ]]; then
         [[ $operation == prepare ]] || return 1
-        local consumed=0
-        for _ in 1 2 3; do
+        local i consumed=0 row_count=3
+        if [[ $request_transport == "oci-archive-v1 frontend" ]]; then row_count=4; fi
+        for ((i=0; i<row_count; i++)); do
             IFS= read -r -n 2097153 -t 8 line || return 1
             consumed=$((consumed + ${#line} + 1))
             ((consumed <= 2097152)) || return 1
             printf '%s\n' "$line" >> "$scratch/proof" || return 1
         done
         IFS=' ' read -r -n 64 -t 8 archive_nginx_size archive_fpm_size || return 1
-        [[ $archive_nginx_size =~ ^[1-9][0-9]{0,8}$ && $archive_fpm_size =~ ^[1-9][0-9]{0,8}$ ]] &&
-            ((archive_nginx_size <= archive_max && archive_fpm_size <= archive_max))
+        [[ $archive_nginx_size =~ ^[1-9][0-9]{0,8}$ ]] &&
+            ((archive_nginx_size <= archive_max)) || return 1
+        if [[ $request_transport == oci-archive-v1 ]]; then
+            [[ $archive_fpm_size =~ ^[1-9][0-9]{0,8}$ ]] && ((archive_fpm_size <= archive_max))
+        else
+            [[ -z $archive_fpm_size ]]
+        fi
     else
         timeout 8 head -c 2097153 > "$scratch/proof" &&
             ((${#first} + 1 + $(stat -c %s -- "$scratch/proof") <= 2097152)) &&

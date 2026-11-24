@@ -438,6 +438,31 @@ class GuestContract(unittest.TestCase):
                                         capture_output=True, check=False)
                 self.assertEqual(result.returncode == 0, scenario == "accepted", result.stderr)
 
+    def test_archived_frontend_binds_index_to_signed_qualification(self):
+        def encoded(value):
+            return json.dumps(value, sort_keys=True).encode()
+
+        def sha(data):
+            return "sha256:" + hashlib.sha256(data).hexdigest()
+
+        index = encoded({"manifests": [{"digest": DIGEST}]})
+        prepared = encoded({"index_digest": sha(index)})
+        binding = encoded({"candidate_sha256": sha(prepared)})
+        command = ('source "$1"; scratch=$2; '
+                   'verify_signature() { [[ "$4" == frontend && $(cat "$2") == verified ]]; }; '
+                   'verify_archived_frontend "$3" "$4"')
+        for example, digest, images in (
+            ("admitted", sha(index), index), ("wrong-index-pin", DIGEST, index),
+            ("changed-index", sha(index), encoded({"manifests": []})),
+        ):
+            with self.subTest(example=example), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "proof").write_bytes(b"".join(
+                    base64.b64encode(value) + b"\n"
+                    for value in (binding, b"verified", prepared, images)))
+                result = subprocess.run(["bash", "-c", command, "test", self.guest,
+                                         directory, digest, SOURCE], capture_output=True, check=False)
+                self.assertEqual(result.returncode == 0, example == "admitted", result.stderr)
+
     def test_archived_backend_matches_signed_receipt_and_deadline(self):
         source_end = "2040-01-01T00:00:00Z"
         expiry = "2039-12-31T00:00:00Z"

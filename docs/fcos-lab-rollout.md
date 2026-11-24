@@ -241,6 +241,22 @@ verifies the supplied publisher bundle and immutable index with the same pinned
 verifier, checks the native child, pulls it as the rootless runtime user,
 and validates the affected Quadlets and image drop-ins in isolation.
 
+An unpublished Frontend candidate can be staged with the same native archive
+transport when the protected Lab contract selects
+`LAB_FRONTEND_TRANSPORT = "oci-archive-v1"`. Its signed qualification
+binds the verified index and native descriptors. The controller checks the
+independent repository security job and both platform records before preparing
+the guest. The guest verifies the signed qualification, the exact index and
+the native import before accepting the prepared record.
+
+The existing frontend-only controller requires the unchanged normalized
+Grype and Trivy evaluations in `config/quadlet/fcos-lab-rollout/frontend-security/`
+from the protected candidate revision. For each native architecture it
+uses `ARCH-installed.json` and `ARCH-candidate.json`. Both files must
+refer to the exact native subjects with equivalent current scanner inputs.
+The controller calls the existing `component-update-v1` policy under the
+rollout lock after observing the guest and immediately before switching it.
+
 | Operation  | Guest and controller behavior                                                                                                                                                                                               |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `observe`  | Read the installed Quadlet and running container identities. Return exactly the observed 64-character fingerprint and newline for an admitted state. Reject drift and mixed state.                                          |

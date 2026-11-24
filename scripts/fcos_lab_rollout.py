@@ -29,6 +29,12 @@ LAB_FRONTEND_PINS = re.compile(
     rb'^LAB_FRONTEND_(DIGEST|SOURCE_COMMIT) = "(sha256:[0-9a-f]{64}|[0-9a-f]{40})"$',
     re.MULTILINE,
 )
+LAB_FRONTEND_TRANSPORT = b'LAB_FRONTEND_TRANSPORT = "oci-archive-v1"'
+LAB_API_PINS = re.compile(
+    rb'^LAB_(?:API_(?:DIGEST|PAIR_DIGEST|SOURCE_COMMIT|VEX_EXPIRES_AT|COMPATIBILITY_SHA256|TRANSPORT)|PHP_FPM_DIGEST)'
+    rb' = "[^"\n]+"\n',
+    re.MULTILINE,
+)
 
 
 class RolloutError(Exception):
@@ -145,9 +151,11 @@ def run_rollout(desired, path, adapter, baseline, *, admit=None, component_evide
         if not state["in_flight"] and component_evidence is not None:
             from fcos_lab_rollout_adapter import admit_component_update
 
-            observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             try:
-                admit_component_update(**component_evidence(host, release, previous), observed_at=observed_at)
+                evidence = component_evidence(host, release, previous)
+                if evidence is not None:
+                    observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    admit_component_update(**evidence, observed_at=observed_at)
             except ValueError as error:
                 # No switch has started. Fresh evidence may resume this host.
                 raise RolloutError(f"{host}: {error}") from None
@@ -239,7 +247,12 @@ def admit_frontend_only(repo, release, previous, protected_main):
                 or not pins[b"DIGEST"].startswith(b"sha256:")
                 or len(pins[b"SOURCE_COMMIT"]) != 40):
             raise RolloutError("frontend-only: invalid lab frontend pins")
-        return pins[b"DIGEST"].decode(), pins[b"SOURCE_COMMIT"].decode(), LAB_FRONTEND_PINS.sub(rb"\1", source)
+        normalized = LAB_FRONTEND_PINS.sub(rb"\1", source)
+        normalized = b"".join(
+            line for line in normalized.splitlines(keepends=True)
+            if line.rstrip(b"\n") != LAB_FRONTEND_TRANSPORT
+        )
+        return pins[b"DIGEST"].decode(), pins[b"SOURCE_COMMIT"].decode(), normalized
 
     index, source, contract = read(release)
     old_index, old_source, old_contract = read(previous)
@@ -281,6 +294,27 @@ def command_adapter(executable, state_directory=None):
     return call
 
 
+def admit_archived_api_only(repo, release, previous, protected_main):
+    from fcos_lab_rollout_adapter import API_ARCHIVE, Backend
+
+    git(repo, "merge-base", "--is-ancestor", previous.revision, release.revision)
+    git(repo, "merge-base", "--is-ancestor", release.revision, protected_main.revision)
+    for identity in (previous, release):
+        if source_release(repo, identity.revision) != identity:
+            raise RolloutError("API candidate journal identity differs from protected source")
+    changed = git(repo, "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z",
+                  previous.revision, release.revision, "--", *RELEASE_PATHS)
+    if changed != RUNTIME_SOURCE.encode() + b"\0":
+        raise RolloutError("API candidate changes inputs outside the lab API pins")
+    before, after = (git(repo, "show", f"{identity.revision}:{RUNTIME_SOURCE}") for identity in (previous, release))
+    if LAB_API_PINS.sub(b"", before) != LAB_API_PINS.sub(b"", after):
+        raise RolloutError("API candidate changes unrelated runtime configuration")
+    baseline, candidate = (Backend.from_source(source.decode()) for source in (before, after))
+    if (candidate.transport != API_ARCHIVE or not candidate.compatibility or candidate.source == baseline.source
+            or candidate.pair == baseline.pair or candidate.fpm == baseline.fpm or candidate.nginx == baseline.nginx):
+        raise RolloutError("API candidate lacks an exact archived pair and native compatibility")
+
+
 def fetch_release(directory):
     repository = directory / "release.git"
     if not repository.exists():
@@ -300,6 +334,7 @@ def main():
     mode.add_argument("--inspect", action="store_true", help="report the desired source without contacting guests")
     mode.add_argument("--recover", action="store_true", help="archive a blocked rollout after baseline reconciliation")
     mode.add_argument("--frontend-only", action="store_true", help="admit only publisher-accepted lab frontend updates")
+    mode.add_argument("--component-updates", action="store_true", help="admit one qualified lab component at a time")
     args = parser.parse_args()
     if args.inspect:
         if args.adapter is not None or args.baseline is not None:
@@ -324,21 +359,39 @@ def main():
             if args.recover:
                 recover(state, initial, adapter)
             else:
-                def admit(release, previous):
-                    index, source = admit_frontend_only(repository, release, previous, desired)
-                    sys.path.insert(0, str(Path(__file__).resolve().parent))
-                    try:
-                        from fcos_lab_rollout_adapter import Frontend, publisher_children
+                sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-                        publisher_children(Frontend(index, source), require_acceptance=True)
+                def admit(release, previous):
+                    try:
+                        from fcos_lab_rollout_adapter import Backend, Frontend, archived_component_evidence, publisher_children
+
+                        source = git(repository, "show", f"{release.revision}:{RUNTIME_SOURCE}").decode()
+                        before = git(repository, "show", f"{previous.revision}:{RUNTIME_SOURCE}").decode()
+                        if args.component_updates and Backend.from_source(source) != Backend.from_source(before):
+                            admit_archived_api_only(repository, release, previous, desired)
+                            archived_component_evidence(repository, release, previous)
+                            return
+                        admit_frontend_only(repository, release, previous, desired)
+                        pins = Frontend.from_source(source)
+                        if pins.transport == "registry":
+                            publisher_children(pins, require_acceptance=True)
+                        else:
+                            archived_component_evidence(repository, release, previous)
                     except (ImportError, KeyError, OSError, subprocess.SubprocessError, TypeError, ValueError):
-                        raise RolloutError("frontend-only: exact signed publisher acceptance unavailable") from None
-                    finally:
-                        sys.path.pop(0)
+                        raise RolloutError("exact signed publisher acceptance unavailable") from None
+
+                def component_evidence(_host, release, previous):
+                    from fcos_lab_rollout_adapter import archived_component_evidence
+
+                    try:
+                        return archived_component_evidence(repository, release, previous)
+                    except (KeyError, OSError, subprocess.SubprocessError, TypeError, ValueError):
+                        raise RolloutError("exact comparison inputs unavailable for the observed release") from None
 
                 run_rollout(desired, state, adapter, baseline=initial,
-                            admit=admit if args.frontend_only else None)
-    except (KeyError, OSError, RolloutError, TypeError, ValueError) as error:
+                            admit=admit if args.frontend_only or args.component_updates else None,
+                            component_evidence=component_evidence)
+    except (ImportError, KeyError, OSError, RolloutError, TypeError, ValueError) as error:
         detail = str(error) if isinstance(error, RolloutError) else "invalid rollout configuration or state"
         print(detail, file=sys.stderr)
         return 1
