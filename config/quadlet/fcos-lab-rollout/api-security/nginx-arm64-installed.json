@@ -1,0 +1,1340 @@
+{
+  "evaluated_at": "2026-11-24T13:53:36Z",
+  "observations": [
+    {
+      "component": {
+        "name": "busybox",
+        "purl": "pkg:apk/alpine/busybox@1.37.0-r31?arch=aarch64&distro=alpine-3.24.3",
+        "version": "1.37.0-r31"
+      },
+      "fix": { "state": "not_fixed", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2025-60876" }
+    },
+    {
+      "component": {
+        "name": "busybox-binsh",
+        "purl": "pkg:apk/alpine/busybox-binsh@1.37.0-r31?arch=aarch64&distro=alpine-3.24.3&upstream=busybox",
+        "version": "1.37.0-r31"
+      },
+      "fix": { "state": "not_fixed", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2025-60876" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=3.24.3",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "LOW",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-88822" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=3.24.3",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "LOW",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-88823" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=3.24.3",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-107496" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=3.24.3",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-95691" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=3.24.3",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-95692" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-indirect-match"],
+        "type": "exact-indirect-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-107496" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-indirect-match"],
+        "type": "exact-indirect-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-88823" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-indirect-match"],
+        "type": "exact-indirect-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-95691" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-indirect-match"],
+        "type": "exact-indirect-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-95692" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-indirect-match"],
+        "type": "exact-indirect-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-88822" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-107493" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-107494" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-121482" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-124709" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-84786" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-35190" }
+    },
+    {
+      "component": {
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-95690" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=3.24.3",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "LOW",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-88822" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=3.24.3",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "LOW",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-88823" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=3.24.3",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-107496" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=3.24.3",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-95691" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=3.24.3",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-95692" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-indirect-match"],
+        "type": "exact-indirect-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-107496" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-indirect-match"],
+        "type": "exact-indirect-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-88823" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-indirect-match"],
+        "type": "exact-indirect-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-95691" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-indirect-match"],
+        "type": "exact-indirect-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-95692" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "fixed", "versions": ["3.5.9-r1"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-indirect-match"],
+        "type": "exact-indirect-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-88822" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-107493" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-107494" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-121482" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-124709" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-84786" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-35190" }
+    },
+    {
+      "component": {
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=aarch64&distro=alpine-3.24.3&upstream=openssl",
+        "version": "3.5.9-r0"
+      },
+      "fix": { "state": "unknown", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-95690" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "CRITICAL",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-113425" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "CRITICAL",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-121810" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "CRITICAL",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-123007" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "CRITICAL",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-123633" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-118899" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-123634" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-120967" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-123640" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["class:os-pkgs", "status:fixed", "type:alpine"],
+        "location": "ghcr.io/secpal/api@sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6 (alpine 3.24.3)",
+        "type": "os-pkgs"
+      },
+      "observed_at": "2026-11-24T13:53:36Z",
+      "scanner": "trivy",
+      "scanner_run_id": "trivy-2dbffa863b45611096a25575",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-125283" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=alpine-3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-direct-match"],
+        "type": "exact-direct-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "CRITICAL",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-113425" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=alpine-3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-direct-match"],
+        "type": "exact-direct-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "CRITICAL",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-121810" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=alpine-3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-direct-match"],
+        "type": "exact-direct-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "CRITICAL",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-123007" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=alpine-3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-direct-match"],
+        "type": "exact-direct-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "CRITICAL",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-123633" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=alpine-3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-direct-match"],
+        "type": "exact-direct-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "CRITICAL",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-123634" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=alpine-3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-direct-match"],
+        "type": "exact-direct-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "HIGH",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-118899" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=alpine-3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-direct-match"],
+        "type": "exact-direct-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-120967" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=alpine-3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-direct-match"],
+        "type": "exact-direct-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-123640" }
+    },
+    {
+      "component": {
+        "name": "nginx",
+        "purl": "pkg:apk/alpine/nginx@1.30.6-r1?arch=aarch64&distro=alpine-3.24.3",
+        "version": "1.30.6-r1"
+      },
+      "fix": { "state": "fixed", "versions": ["1.30.7-r0"] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:exact-direct-match"],
+        "type": "exact-direct-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2026-125283" }
+    },
+    {
+      "component": {
+        "name": "ssl_client",
+        "purl": "pkg:apk/alpine/ssl_client@1.37.0-r31?arch=aarch64&distro=alpine-3.24.3&upstream=busybox",
+        "version": "1.37.0-r31"
+      },
+      "fix": { "state": "not_fixed", "versions": [] },
+      "known_exploited": [],
+      "match": {
+        "confidence": "scanner-native",
+        "details": ["apk-matcher:cpe-match"],
+        "type": "cpe-match"
+      },
+      "observed_at": "2026-11-24T14:53:36.506268+01:00",
+      "scanner": "grype",
+      "scanner_run_id": "grype-7d44ae9441410d10946eb171",
+      "severity": "MEDIUM",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      },
+      "vulnerability": { "aliases": [], "id": "CVE-2025-60876" }
+    }
+  ],
+  "scanner_runs": [
+    {
+      "completed_at": "2026-11-24T13:53:36Z",
+      "database": {
+        "generated_at": "2026-11-24T00:59:05.222121793Z",
+        "identity": "composite:sha256:d86dc380db60c004f551c002131b949ab8b40ad675ac5560bcbbaddd13bb211f"
+      },
+      "run_id": "trivy-2dbffa863b45611096a25575",
+      "scanner": "trivy",
+      "scanner_identity": {
+        "immutable_id": "sha256:2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
+        "version": "0.74.0"
+      },
+      "status": "SUCCEEDED",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      }
+    },
+    {
+      "completed_at": "2026-11-24T14:53:36.506268+01:00",
+      "database": {
+        "generated_at": "2026-11-24T06:22:05Z",
+        "identity": "grype-db:v6.1.10:sha256:f6cebfc39a3e55220486f9d963933b9b06cf247a46d546212cf13e101dd82303"
+      },
+      "run_id": "grype-7d44ae9441410d10946eb171",
+      "scanner": "grype",
+      "scanner_identity": {
+        "immutable_id": "sha256:e9da18cc1429e786722e32161288103600efffd8e483c90761f90485bd1bec85",
+        "version": "0.121.3"
+      },
+      "status": "SUCCEEDED",
+      "subject": {
+        "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+        "platform": "linux/arm64"
+      }
+    }
+  ],
+  "schema_version": "1.0.0",
+  "subject": {
+    "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+    "platform": "linux/arm64"
+  },
+  "syft": {
+    "format": "SPDX",
+    "spdx_digest": "sha256:c56bade03141cc315a01009e35bb46fd70e8a153fc4e3699b54bd0bbb677297c",
+    "subject": {
+      "oci_digest": "sha256:3f8c99815b132bbacd1665c0bc8e0645275b9913f173da3c2560eb1a23e840b6",
+      "platform": "linux/arm64"
+    }
+  }
+}

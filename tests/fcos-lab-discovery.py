@@ -14,10 +14,13 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from fcos_lab_rollout_adapter import Backend
 from fcos_lab_discovery import (
     discover, main, official_tag, product_candidate, source_relationship, stable_release,
 )
-from integration_runtime_contract import API_SOURCE_COMMIT, LAB_FRONTEND_SOURCE_COMMIT
+from integration_runtime_contract import LAB_FRONTEND_SOURCE_COMMIT
+
+LAB_API_SOURCE = Backend.from_source((Path(__file__).resolve().parents[1] / "scripts/integration_runtime_contract.py").read_text()).source
 
 
 class CandidateSelectors(unittest.TestCase):
@@ -79,9 +82,9 @@ class DiscoveryContract(unittest.TestCase):
         frontend_revision = "a" * 40
         workflow = "/actions/workflows/publish-container.yml/runs?branch=main&status=success&per_page=1"
         responses = {
-            f"repos/SecPal/api{workflow}&event=workflow_dispatch": publication("SecPal/api", API_SOURCE_COMMIT, 42),
+            f"repos/SecPal/api{workflow}&event=workflow_dispatch": publication("SecPal/api", LAB_API_SOURCE, 42),
             f"repos/SecPal/frontend{workflow}&event=push": publication("SecPal/frontend", frontend_revision, 43),
-            f"repos/SecPal/api/compare/{API_SOURCE_COMMIT}...{API_SOURCE_COMMIT}": '{"status":"identical"}',
+            f"repos/SecPal/api/compare/{LAB_API_SOURCE}...{LAB_API_SOURCE}": '{"status":"identical"}',
             f"repos/SecPal/frontend/compare/{LAB_FRONTEND_SOURCE_COMMIT}...{frontend_revision}": '{"status":"ahead"}',
             "repos/docker-library/official-images/contents/library/postgres": "Tags: 18.7-bookworm",
             "repos/docker-library/official-images/contents/library/haproxy": "Tags: 3.2.27-trixie",
@@ -105,7 +108,7 @@ class DiscoveryContract(unittest.TestCase):
 
         with patch("fcos_lab_discovery.subprocess.run", side_effect=get):
             self.assertEqual(discover(), {
-                "api": {"source_commit": API_SOURCE_COMMIT, "run_id": 42, "run_attempt": 1, "source_relationship": "identical"},
+                "api": {"source_commit": LAB_API_SOURCE, "run_id": 42, "run_attempt": 1, "source_relationship": "identical"},
                 "frontend": {"source_commit": frontend_revision, "run_id": 43, "run_attempt": 1, "source_relationship": "ahead"},
                 "postgres": "18.7-bookworm", "haproxy": "3.2.27-trixie",
                 "crowdsec": "v1.8.2", "spoa": "v0.4.0", "crs": "v4.30.0",
