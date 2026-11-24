@@ -471,6 +471,12 @@ def github_json(gh, endpoint):
     ))
 
 
+def fetch_publisher_zip(gh, product, artifact_id, target, _limit):
+    subprocess.run([gh, "api", "--hostname", "github.com", "--method", "GET",
+                    f"repos/SecPal/{product}/actions/artifacts/{artifact_id}/zip"],
+                   stdin=subprocess.DEVNULL, stdout=target, check=True, timeout=220)
+
+
 def download_publisher_artifact(gh, product, run, source, name, output, limit):
     if product not in {"api", "frontend"}:
         raise ValueError("unknown OCI publisher")
@@ -487,9 +493,7 @@ def download_publisher_artifact(gh, product, run, source, name, output, limit):
         raise ValueError("candidate archive metadata differs")
     archive = output.with_suffix(".zip")
     with archive.open("xb") as target:
-        subprocess.run([gh, "api", "--hostname", "github.com", "--method", "GET",
-                        f"{prefix}/artifacts/{artifact_id}/zip"], stdin=subprocess.DEVNULL,
-                       stdout=target, check=True, timeout=220)
+        fetch_publisher_zip(gh, product, artifact_id, target, limit)
     with archive.open("rb") as sealed:
         observed = "sha256:" + hashlib.file_digest(sealed, "sha256").hexdigest()
     if archive.stat().st_size > limit or observed != artifact["digest"]:
