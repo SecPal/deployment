@@ -277,9 +277,41 @@ def admit_backend_dispatch(repo, release):
     admit_dispatch(repo, release, describe)
 
 
+PROPOSAL_STAGES = frozenset({
+    "guest-observation", "publisher-read", "scanner-refresh", "security-comparison", "proposal-write",
+})
+
+
+class ProposalFailure(ValueError):
+    """An archived proposal failed at a declared external operation."""
+
+
+@contextmanager
+def proposal_stage(stage):
+    if stage not in PROPOSAL_STAGES:
+        raise ValueError("unknown proposal diagnostic")
+    try:
+        yield
+    except QualificationUnavailable:
+        raise
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError, BadZipFile) as error:
+        raise ProposalFailure(f"fcos-lab-proposal.{stage}: {type(error).__name__}") from None
+
+
 def admit_proposal_dispatch(repo, release):
     def describe(declaration):
-        for stage in ("guest-observation", "publisher-read", "scanner-refresh", "security-comparison", "proposal-write"):
+        coverage = set()
+        for filename in ("fcos_lab_rollout.py", "fcos_lab_proposal.py", "fcos_lab_scan.py"):
+            source = Path(__file__).with_name(filename).read_text(encoding="utf-8")
+            for node in ast.walk(ast.parse(source)):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "proposal_stage":
+                    stage, = node.args
+                    if not isinstance(stage, ast.Constant) or stage.value not in PROPOSAL_STAGES:
+                        raise ValueError("proposal operation lacks a bounded diagnostic")
+                    coverage.add(stage.value)
+        if coverage != PROPOSAL_STAGES:
+            raise ValueError("proposal diagnostic coverage differs from the closed operation set")
+        for stage in sorted(coverage):
             identifier = f"fcos-lab-proposal.{stage}"
             declaration["external_operations"].append({
                 "id": identifier, "reachable": True, "fallible": True, "trusted": True,

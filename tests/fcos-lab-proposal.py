@@ -99,6 +99,27 @@ class ProposalContract(unittest.TestCase):
                 compare_material("frontend", previous, candidate, scanner)
             admit.assert_called_once()
 
+    def test_fresh_comparison_can_retry_an_interrupted_signed_proposal(self):
+        from fcos_lab_proposal import publish_archive
+        gh = Path("/trusted/gh")
+        replies = [{"object": {"sha": BASE}}, {"protected": True, "commit": {"sha": NEW.source}}] * 3
+        with patch("fcos_lab_proposal.github_json", side_effect=replies), patch(
+            "fcos_lab_proposal.get", return_value=[]
+        ), patch("fcos_lab_proposal.open_proposal", return_value=("opened", None, None)) as create:
+            for content in ("first", "first", "fresh"):
+                publish_archive("frontend", BASE, NEW, {FILE: content}, gh)
+        original, retry, refreshed = (call.args[0] for call in create.call_args_list)
+        self.assertEqual(original, retry)
+        self.assertNotEqual(original, refreshed)
+
+    def test_proposal_diagnostics_do_not_emit_external_payloads(self):
+        from fcos_lab_rollout_adapter import PROPOSAL_STAGES, ProposalFailure, proposal_stage
+        for stage in PROPOSAL_STAGES:
+            with self.subTest(stage=stage), self.assertRaisesRegex(
+                ProposalFailure, rf"^fcos-lab-proposal\.{stage}: OSError$"
+            ), proposal_stage(stage):
+                raise OSError("external stderr that must not be logged")
+
     def test_backend_draft_cannot_change_live_release_inputs(self):
         expires = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         plan = BackendProposal(NEW.index, NEW.source, 12, 2, "sha256:" + "a" * 64, "sha256:" + "b" * 64,

@@ -19,7 +19,7 @@ from tempfile import TemporaryDirectory
 
 from fcos_lab_rollout_adapter import (
     ARCHIVE_MAX, DIGEST, admission_governance, admit_component_update,
-    api_native_attempt, download_publisher_artifact, verified_backend_archive, verified_frontend_archive,
+    api_native_attempt, download_publisher_artifact, proposal_stage, verified_backend_archive, verified_frontend_archive,
 )
 
 
@@ -179,10 +179,14 @@ class ScanSnapshot:
 def compare_archives(product, installed, selected, gh, archives):
     """Generate both sides from the same snapshots and apply the existing policy."""
     with ExitStack() as stack:
-        previous = stack.enter_context(archived_material(product, installed, gh, current=False))
-        candidate = stack.enter_context(archived_material(product, selected, gh, current=True))
-        temporary = Path(stack.enter_context(TemporaryDirectory(prefix="fcos-lab-scans-")))
-        return compare_material(product, previous, candidate, ScanSnapshot(temporary, archives))
+        with proposal_stage("publisher-read"):
+            previous = stack.enter_context(archived_material(product, installed, gh, current=False))
+            candidate = stack.enter_context(archived_material(product, selected, gh, current=True))
+        with proposal_stage("scanner-refresh"):
+            temporary = Path(stack.enter_context(TemporaryDirectory(prefix="fcos-lab-scans-")))
+            scanner = ScanSnapshot(temporary, archives)
+        with proposal_stage("security-comparison"):
+            return compare_material(product, previous, candidate, scanner)
 
 
 def compare_material(product, previous, candidate, scanner):

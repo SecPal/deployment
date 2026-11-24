@@ -16,7 +16,7 @@ import tempfile
 
 from zipfile import BadZipFile
 
-from fcos_lab_rollout_adapter import Backend, DIGEST, RUNTIME_SOURCE
+from fcos_lab_rollout_adapter import Backend, DIGEST, QualificationUnavailable, RUNTIME_SOURCE
 from fcos_lab_rollout_adapter import github_json, qualified_backend_source, qualified_frontend_source, verified_gh
 from integration_runtime_contract import LAB_FRONTEND_SOURCE_COMMIT
 
@@ -170,7 +170,7 @@ def qualified_candidate(product, gh, *, current=True):
     # Recheck after verification so superseded inputs cannot be advertised as current.
     latest = github_json(gh, f"repos/{repo}/branches/main")
     if latest["protected"] is not True or latest["commit"]["sha"] != source:
-        raise ValueError("upstream main changed during discovery")
+        raise QualificationUnavailable("upstream main changed during discovery")
     return detail
 
 

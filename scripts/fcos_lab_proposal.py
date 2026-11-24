@@ -23,7 +23,7 @@ from zipfile import BadZipFile, ZipFile
 from fcos_lab_discovery import get, product_candidate, qualified_candidate, registry_publications, source_relationship
 from fcos_lab_rollout_adapter import API_ARCHIVE, API_IMAGE, DIGEST, FRONTEND_ARCHIVE, IMAGE, RUNTIME_SOURCE as FILE, Backend, Frontend
 from fcos_lab_rollout import LAB_API_PINS, git
-from fcos_lab_rollout_adapter import QualificationUnavailable, admit_source_text, github_json
+from fcos_lab_rollout_adapter import ProposalFailure, QualificationUnavailable, admit_source_text, github_json, proposal_stage
 from fcos_lab_rollout_adapter import backend_proof, publisher_children, verify_frontend_attestation
 from image_attestation_runtime import CLOUD_GH_RELEASES, stage_gh_cli
 
@@ -462,7 +462,10 @@ def publish_archive(product, base, selected, files, gh):
     lane = "frontend" if product == "frontend" else "backend"
     index = selected.index if product == "frontend" else selected.pair
     prefix = BRANCH if product == "frontend" else BACKEND_BRANCH
-    branch = prefix + index.removeprefix("sha256:") + "-" + base
+    # Interrupted writes can retry the same bytes. A fresh comparison can use
+    # a different branch without rewriting an existing signed commit.
+    fingerprint = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+    branch = prefix + index.removeprefix("sha256:") + "-" + base + "-" + fingerprint
     endpoint = f"repos/{REPO}"
     if github_json(gh, f"{endpoint}/git/ref/heads/main")["object"]["sha"] != base:
         return "deployment base changed"
@@ -493,27 +496,29 @@ def propose_archives(repo, release, gh, archives):
     for product, installed in (("frontend", Frontend.from_source(text)), ("api", Backend.from_source(text))):
         print(f"FCOS Lab {product}: selecting archived candidate", flush=True)
         try:
-            selected = archived_selection(product, installed, gh)
+            with proposal_stage("publisher-read"):
+                selected = archived_selection(product, installed, gh)
             if selected is None:
                 print(f"FCOS Lab {product}: already current")
                 continue
             compatibility = None
             if product == "api":
                 path = "config/quadlet/fcos-lab-rollout/backend-compatibility.json"
-                compatibility = git(repo, "show", f"{release.revision}:{path}")
-                record = json.loads(compatibility)
-                if (record["previous_pair"], record["candidate_pair"]) != (installed.pair, selected.pair):
-                    print("FCOS Lab API deferred: native compatibility evidence for this pair is outstanding")
-                    continue
+                with proposal_stage("security-comparison"):
+                    compatibility = git(repo, "show", f"{release.revision}:{path}")
+                    record = json.loads(compatibility)
+                    if (record["previous_pair"], record["candidate_pair"]) != (installed.pair, selected.pair):
+                        print("FCOS Lab API deferred: native compatibility evidence for this pair is outstanding")
+                        continue
             evidence = compare_archives(product, installed, selected, gh, archives)
-            files = archived_files(product, text, selected, evidence, compatibility=compatibility)
-            print(publish_archive(product, release.revision, selected, files, gh))
+            with proposal_stage("proposal-write"):
+                files = archived_files(product, text, selected, evidence, compatibility=compatibility)
+                print(publish_archive(product, release.revision, selected, files, gh))
             return
         except QualificationUnavailable as error:
             print(f"FCOS Lab {product} deferred: {error}")
-        except (BadZipFile, KeyError, OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError):
-            print(f"FCOS Lab {product} deferred: signed inputs, current comparison or proposal admission failed",
-                  file=sys.stderr)
+        except ProposalFailure as error:
+            print(f"FCOS Lab {product} deferred: {error}", file=sys.stderr)
 
 
 def main():

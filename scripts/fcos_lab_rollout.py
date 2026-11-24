@@ -327,7 +327,7 @@ def fetch_release(directory):
 
 def propose_after_reconciliation(repository, desired, state, adapter, archives):
     from fcos_lab_proposal import propose_archives
-    from fcos_lab_rollout_adapter import TOOLS, admit_proposal_dispatch
+    from fcos_lab_rollout_adapter import TOOLS, ProposalFailure, admit_proposal_dispatch, proposal_stage
 
     record = json.loads(state.read_bytes())
     accepted = Release(**record["accepted"])
@@ -337,9 +337,17 @@ def propose_after_reconciliation(repository, desired, state, adapter, archives):
         admit_proposal_dispatch(repository, desired)
     except (OSError, ValueError, subprocess.SubprocessError):
         raise RolloutError("FCOS Lab proposal preflight failed") from None
-    for host in HOSTS:
-        if adapter("observe", host, desired, accepted) != accepted.fingerprint:
-            raise RolloutError(f"{host}: installed identity differs from the proposal baseline")
+    try:
+        for host in HOSTS:
+            with proposal_stage("guest-observation"):
+                try:
+                    actual = adapter("observe", host, desired, accepted)
+                except RolloutError as error:
+                    raise ValueError(f"{host}: guest observation failed") from error
+                if actual != accepted.fingerprint:
+                    raise ValueError(f"{host}: installed identity differs from the proposal baseline")
+    except ProposalFailure as error:
+        raise RolloutError(f"{host}: {error}") from None
     propose_archives(repository, desired, TOOLS / "gh", archives)
 
 
