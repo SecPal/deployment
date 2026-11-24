@@ -32,14 +32,13 @@ from uuid import UUID
 
 # The coordinator invokes the installed script in Python isolated mode.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fcos_lab_rollout import HOSTS, Release, RolloutError, git, source_release
+from fcos_lab_rollout import HOSTS, RUNTIME_SOURCE, Release, RolloutError, git, source_release
 from image_attestation_runtime import EXPECTED_GH_VERSION
 
 DIGEST = r"sha256:[0-9a-f]{64}"
 IMAGE = "ghcr.io/secpal/frontend"
 API_IMAGE = "ghcr.io/secpal/api"
 OPERATIONS = {"observe", "prepare", "activate", "accept", "rollback"}
-RUNTIME_SOURCE = "scripts/integration_runtime_contract.py"
 PRIVATE = Path.home() / ".config/secpal-fcos-lab-rollout"
 TOOLS = Path(__file__).resolve().parent
 ED25519_WIRE_PREFIX = b"\0\0\0\x0bssh-ed25519\0\0\0\x20"
@@ -255,17 +254,65 @@ def backend_diagnostic(stage):
     print(f"FCOS lab backend operation failed: fcos-lab-backend.{stage}", file=sys.stderr)
 
 
-def verify_attestation(gh, subject, bundle, source, environment, product):
-    subprocess.run(
+def verify_attestation(gh, subject, bundle, source, environment, product, *, report=False):
+    output = ["--format", "json"] if report else []
+    result = subprocess.run(
         [gh, "attestation", "verify", subject, "--bundle", bundle, "--repo", f"SecPal/{product}",
          "--signer-workflow", f"SecPal/{product}/.github/workflows/publish-container.yml",
          "--source-ref", "refs/heads/main", "--source-digest", source,
-         "--signer-digest", source, "--deny-self-hosted-runners", "--hostname", "github.com"],
-        env=environment, check=True, timeout=120, stdout=subprocess.DEVNULL,
+         "--signer-digest", source, "--deny-self-hosted-runners", "--hostname", "github.com", *output],
+        env=environment, check=True, timeout=120, stdout=subprocess.PIPE if report else subprocess.DEVNULL,
     )
+    if report:
+        return json.loads(result.stdout)
+
 
 def verify_frontend_attestation(gh, subject, bundle, source, environment):
     verify_attestation(gh, subject, bundle, source, environment, "frontend")
+
+
+def frontend_actions_json(path):
+    opener = build_opener(ProxyHandler({}), NoRedirect())
+    request = Request("https://api.github.com/repos/SecPal/frontend/actions/runs/" + path,
+                      headers={"Accept": "application/vnd.github+json",
+                               "User-Agent": "SecPal-FCOS-lab-rollout"})
+    limit = 2 * 1024 * 1024
+    with opener.open(request, timeout=20) as response:
+        payload = response.read(limit + 1)
+    if len(payload) > limit:
+        raise ValueError("oversized publisher response")
+    return json.loads(payload)
+
+
+def frontend_acceptance(verified, source):
+    # The existing publisher owns the clean scanner, SBOM, smoke and signature
+    # admission. Bind its final result to the index's verified signer invocation.
+    result, = verified
+    certificate = result["verificationResult"]["signature"]["certificate"]
+    invocation = re.fullmatch(r"https://github\.com/SecPal/frontend/actions/runs/([1-9][0-9]{0,19})"
+                              r"/attempts/([1-9][0-9]{0,9})", certificate["runInvocationURI"])
+    if invocation is None:
+        raise ValueError("missing exact publisher invocation")
+    run_id, attempt = map(int, invocation.groups())
+    path = f"{run_id}/attempts/{attempt}"
+    run = frontend_actions_json(path)
+    if (run["id"] != run_id or run["run_attempt"] != attempt
+            or run["head_sha"] != source or run["head_branch"] != "main"
+            or run["head_repository"]["full_name"] != "SecPal/frontend"
+            or run["path"] != ".github/workflows/publish-container.yml"
+            or run["event"] not in {"push", "workflow_dispatch"}
+            or run["status"] != "completed" or run["conclusion"] != "success"):
+        raise ValueError("publisher attempt did not pass")
+
+    listing = frontend_actions_json(path + "/jobs?per_page=100")
+    if listing["total_count"] != len(listing["jobs"]):
+        raise ValueError("incomplete publisher jobs")
+    job, = [job for job in listing["jobs"] if job["name"] == "Accept verified Frontend publication"]
+    step, = [step for step in job["steps"]
+             if step["name"] == "Verify all subjects and publish only unique discovery tag"]
+    if (job["run_id"] != run_id or job["run_attempt"] != attempt
+            or job["conclusion"] != "success" or step["conclusion"] != "success"):
+        raise ValueError("publisher acceptance did not pass")
 
 
 def verified_gh(gh, environment):
@@ -283,7 +330,7 @@ def verified_gh(gh, environment):
         raise ValueError("wrong GitHub CLI version")
 
 
-def publisher_children(frontend, *, gh=None):
+def publisher_children(frontend, *, gh=None, require_acceptance=False):
     environment = {"PATH": "/usr/bin:/bin"}
     with tempfile.TemporaryDirectory(prefix="fcos-lab-image-") as temporary:
         path = Path(temporary)
@@ -299,7 +346,11 @@ def publisher_children(frontend, *, gh=None):
              IMAGE, frontend.index, "secpal/frontend"],
             env=environment, check=True, timeout=150, stdout=subprocess.DEVNULL,
         )
-        verify_frontend_attestation(gh, index, bundle, frontend.source, environment)
+        if require_acceptance:
+            verified = verify_attestation(gh, index, bundle, frontend.source, environment, "frontend", report=True)
+            frontend_acceptance(verified, frontend.source)
+        else:
+            verify_frontend_attestation(gh, index, bundle, frontend.source, environment)
         subject = index.read_bytes()
         return native_children(subject), subject, bundle.read_bytes()
 
