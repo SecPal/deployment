@@ -153,6 +153,16 @@ def compatible(repo, release, before, after, database):
         raise ValueError("invalid native API qualification identities")
 
 
+class RecoveryUnavailable(ValueError):
+    """The canonical reference recovery authority is not available."""
+
+
+def require_recovery():
+    # #109 owns Recovery Set publication and verification. An image-only
+    # rollback rehearsal is not a substitute for that authority.
+    raise RecoveryUnavailable("missing current verified Recovery Set under deployment #109")
+
+
 def lane(repo, latest, target, baseline, posture, progress):
     print(f"reference-update.{target}.observation: check installed reference", flush=True)
     if (STATE / (target + ".blocked")).exists():
@@ -170,8 +180,8 @@ def lane(repo, latest, target, baseline, posture, progress):
         raise ValueError("reference differs from the last accepted transaction")
     expected_posture = {name: posture[name] for name in (*UNITS[target], "edge")}
 
-    def exposure_matches():
-        return exposure(target) == expected_posture
+    def exposure_matches(*, live=True):
+        return exposure(target, live=live) == expected_posture
 
     if not exposure_matches():
         raise ValueError("root-enrolled public exposure differs")
@@ -227,7 +237,7 @@ def lane(repo, latest, target, baseline, posture, progress):
         def rollback_allowed():
             if target == "api" and now() >= datetime.fromisoformat(before.expires):
                 raise ValueError("predecessor API rollback qualification expired")
-            if not database_matches() or not exposure_matches():
+            if not database_matches() or not exposure_matches(live=False):
                 raise ValueError("rollback database or exposure no longer agrees")
 
         def ready():
@@ -247,6 +257,9 @@ def lane(repo, latest, target, baseline, posture, progress):
             public_accept(authenticated=True, target=target)
             record(saved, {"revision": latest.revision, "runtime": {role: asdict(value) for role, value in stages.items()}})
 
+        ready()
+        progress[0] = "comparison"
+        require_recovery()
         progress[0] = "activation"
         apply(target, active, stages, archives, ready, finish, rollback_allowed)
         print(f"reference-update.{target}: activated {desired.source[:12]}", flush=True)
@@ -288,6 +301,9 @@ def main():
                 progress = ["observation"]
                 try:
                     lane(repo, latest, product, config["baseline"], config["exposure"], progress)
+                except RecoveryUnavailable as error:
+                    print(f"reference-update.comparison: {product}: {error}", file=sys.stderr, flush=True)
+                    result = 1
                 except ERRORS as error:
                     print(f"reference-update.{progress[0]}: {product}: {type(error).__name__}: "
                           "reference admission or operation failed", file=sys.stderr, flush=True)

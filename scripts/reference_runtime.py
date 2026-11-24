@@ -124,6 +124,14 @@ def image_data(target, image):
     return source, digest
 
 
+def migration_state():
+    data = unit("api", "show", "-p", "ActiveState", "-p", "SubState", "-p", "InvocationID", "secpal-migrate.service")
+    state = dict(line.split("=", 1) for line in data.decode().splitlines())
+    if (state["ActiveState"], state["SubState"]) not in {("inactive", "dead"), ("active", "exited")}:
+        raise ValueError("reference migration unit is not idle")
+    return state
+
+
 def observe(target):
     observed = {}
     for name, path in lanepaths(target).items():
@@ -133,8 +141,9 @@ def observe(target):
         if not re.fullmatch(re.escape(repository) + r"@sha256:[a-f0-9]{64}", ref):
             raise ValueError("unexpected reference pin")
         if name != "secpal-migrate":
-            running, config = podman(target, "inspect", "--format", "{{.ImageName}} {{.Image}}", name).decode().split()
-            if running != ref:
+            running, config, started = podman(target, "inspect", "--format",
+                                              "{{.ImageName}} {{.Image}} {{.State.Running}}", name).decode().split()
+            if running != ref or started != "true":
                 raise ValueError("running container differs from its Quadlet pin")
             source, digest = image_data(target, config)
             if ref != f"{repository}@{digest}":
@@ -144,12 +153,12 @@ def observe(target):
             if role in observed and item != observed[role]:
                 raise ValueError("reference runtime roles disagree")
             observed[role] = item
-        elif unit(target, "show", "-p", "ActiveState", "--value", name + ".service").strip() != b"inactive":
-            raise ValueError("reference migration unit is not idle")
+        else:
+            migration_state()
     return observed
 
 
-def exposure(target=None):
+def exposure(target=None, *, live=True):
     configs = {}
     targets = tuple(UNITS) if target is None else (target,)
     for reference in targets:
@@ -162,18 +171,19 @@ def exposure(target=None):
             if ports != expected or "NoNewPrivileges=true" not in text.splitlines():
                 raise ValueError("reference direct exposure differs")
             configs[name] = hashlib.sha256(re.sub(r"(?m)^Image=.*$", "Image=", text).encode()).hexdigest()
-            if name != "secpal-migrate":
+            if live and name != "secpal-migrate":
                 port_output = podman(target, "port", name).decode().strip().splitlines()
                 expected_runtime = [port.split(":8080/", 1)[0] for port in expected]
                 actual_runtime = [item.split(" -> ", 1)[1] for item in port_output]
                 if actual_runtime != expected_runtime:
                     raise ValueError("running reference port exposure differs")
-    listeners = run(["/usr/sbin/ss", "-Hlnt"]).decode().splitlines()
-    endpoints = [entry.split()[3] for entry in listeners]
-    ports = (5432, 18080, 18081) if len(targets) == 2 else (18080,) if targets == ("frontend",) else (5432, 18081)
-    for port in ports:
-        if sorted(value for value in endpoints if value.endswith(f":{port}")) != [f"127.0.0.1:{port}"]:
-            raise ValueError("reference backend listener is not exclusively on loopback")
+    if live:
+        listeners = run(["/usr/sbin/ss", "-Hlnt"]).decode().splitlines()
+        endpoints = [entry.split()[3] for entry in listeners]
+        ports = (5432, 18080, 18081) if len(targets) == 2 else (18080,) if targets == ("frontend",) else (5432, 18081)
+        for port in ports:
+            if sorted(value for value in endpoints if value.endswith(f":{port}")) != [f"127.0.0.1:{port}"]:
+                raise ValueError("reference backend listener is not exclusively on loopback")
     edge = protected(EDGE)
     pid = int(run(["/usr/bin/systemctl", "show", "-p", "MainPID", "--value", "haproxy.service"]))
     if pid < 2 or bytes(EDGE) not in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0"):
@@ -269,9 +279,8 @@ def postgres_facts():
     database = read("SELECT current_setting('server_version_num'), system_identifier FROM pg_control_system()")
     if not re.fullmatch(rb"18[0-9]{4}\|[0-9]+\n", database):
         raise ValueError("reference PostgreSQL identity differs")
-    data = read("SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM organizational_units)")
     return {"identity": (container + database).decode(), "schema": schema_hash,
-            "ledger": hashlib.sha256(ledger).hexdigest(), "data": data.decode()}
+            "ledger": hashlib.sha256(ledger).hexdigest()}
 
 
 def apply(target, before, desired, tarfiles, ready, after, rollback_allowed):
@@ -313,6 +322,7 @@ def apply(target, before, desired, tarfiles, ready, after, rollback_allowed):
     for path, content in previous.items():
         (backup / path.name).write_bytes(content)
     names = [name + ".service" for name in paths if name != "secpal-migrate"]
+    migration = migration_state() if target == "api" else None
     ready()
 
     def activate(config):
@@ -322,8 +332,12 @@ def apply(target, before, desired, tarfiles, ready, after, rollback_allowed):
             replace_quadlet(path, content)
         unit(target, "daemon-reload")
         if target == "api":
-            unit(target, "start", "secpal-php-fpm.service", timeout=90)
-        unit(target, "start" if target == "api" else "restart", *names, timeout=90)
+            unit(target, "--job-mode=ignore-dependencies", "start", "secpal-php-fpm.service", timeout=90)
+            unit(target, "--job-mode=ignore-dependencies", "start", *names, timeout=90)
+            if migration_state() != migration:
+                raise ValueError("reference migration unit invocation changed")
+        else:
+            unit(target, "restart", *names, timeout=90)
 
     def verify(expected):
         for attempt in range(45):

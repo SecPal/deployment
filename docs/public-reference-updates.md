@@ -5,6 +5,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Public reference updates
 
+Activation remains a draft until the existing Deployment #93 requirement for
+a current, verified Recovery Set under #109 can be checked for this target.
+
 `secpal-reference-update.timer` runs the root-owned reference transaction
 every ten minutes. The service takes its candidate pins and their
 comparison evidence from the existing protected deployment source. It
