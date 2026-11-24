@@ -26,13 +26,46 @@ done
 script_dir=$(dirname -- "${BASH_SOURCE[0]}")
 stage=admission
 python3 -I -S -c '
+import json
 from pathlib import Path
-import runpy
+import re
+import subprocess
 import sys
+import tempfile
 
-renderer = runpy.run_path(sys.argv[1])
-renderer["admit_database_dispatch"](Path(sys.argv[2]), schema_rehearsal=True)
-' "$script_dir/render-fcos-application-poc.py" "$validator"
+root = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(root / "scripts"))
+from fcos_lab_rollout_adapter import verify_dispatch_authority
+
+validator = Path(sys.argv[2]).absolute()
+if validator.is_symlink():
+    raise ValueError("schema rehearsal validator must be a regular file")
+verify_dispatch_authority(validator, (root / "scripts/render-fcos-application-poc.py").read_bytes())
+declaration = json.loads((root / ".secpal/evidence-architecture.json").read_bytes())
+helper = Path(sys.argv[3]).read_text()
+stages = re.findall(r"^\s*stage=([a-z][a-z-]+)$", helper, flags=re.MULTILINE)
+required = {"input", "admission", "isolated-container", "cleanup", "restored-catalog",
+            "native-replay", "restored-schema", "enrolled-fingerprint"}
+prefix = "fcos-schema-rehearsal."
+operations = declaration["external_operations"]
+if len(stages) != len(required) or set(stages) != required or any(
+    operation["id"].startswith(prefix) for operation in operations
+):
+    raise ValueError("schema rehearsal diagnostics differ from the closed operation set")
+for stage in sorted(required):
+    identity = prefix + stage
+    operations.append({"id": identity, "reachable": True, "fallible": True, "trusted": True,
+                       "diagnostic_identity": {"id": identity, "kind": "semantic"}})
+with tempfile.TemporaryDirectory(prefix="fcos-schema-admission-") as directory:
+    snapshot = Path(directory)
+    (snapshot / "AGENTS.md").write_bytes((root / "AGENTS.md").read_bytes())
+    (snapshot / ".secpal").mkdir()
+    (snapshot / ".secpal/evidence-architecture.json").write_text(json.dumps(declaration))
+    subprocess.run([sys.executable, "-I", "-S", validator, "--repository-root", snapshot,
+                    "--repository", "SecPal/deployment", "--dispatch"],
+                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   check=True, timeout=60)
+' "$script_dir/.." "$validator" "${BASH_SOURCE[0]}"
 
 stage=isolated-container
 [[ $(podman inspect --format '{{index .Config.Labels "io.secpal.fcos.schema-rehearsal"}} {{.HostConfig.NetworkMode}}' \

@@ -3,9 +3,7 @@
   "repository": "SecPal/deployment",
   "runtime_baseline": {
     "delegation": "direct",
-    "generic_authorities": [
-      "docs/evidence-architecture-contract.md"
-    ]
+    "generic_authorities": ["docs/evidence-architecture-contract.md"]
   },
   "external_operations": [
     {
@@ -1895,86 +1893,6 @@
       "trusted": true,
       "diagnostic_identity": {
         "id": "verify-storage-label-policy",
-        "kind": "semantic"
-      }
-    },
-    {
-      "id": "fcos-schema-rehearsal.input",
-      "reachable": true,
-      "fallible": true,
-      "trusted": true,
-      "diagnostic_identity": {
-        "id": "fcos-schema-rehearsal.input",
-        "kind": "semantic"
-      }
-    },
-    {
-      "id": "fcos-schema-rehearsal.admission",
-      "reachable": true,
-      "fallible": true,
-      "trusted": true,
-      "diagnostic_identity": {
-        "id": "fcos-schema-rehearsal.admission",
-        "kind": "semantic"
-      }
-    },
-    {
-      "id": "fcos-schema-rehearsal.isolated-container",
-      "reachable": true,
-      "fallible": true,
-      "trusted": true,
-      "diagnostic_identity": {
-        "id": "fcos-schema-rehearsal.isolated-container",
-        "kind": "semantic"
-      }
-    },
-    {
-      "id": "fcos-schema-rehearsal.cleanup",
-      "reachable": true,
-      "fallible": true,
-      "trusted": true,
-      "diagnostic_identity": {
-        "id": "fcos-schema-rehearsal.cleanup",
-        "kind": "semantic"
-      }
-    },
-    {
-      "id": "fcos-schema-rehearsal.restored-catalog",
-      "reachable": true,
-      "fallible": true,
-      "trusted": true,
-      "diagnostic_identity": {
-        "id": "fcos-schema-rehearsal.restored-catalog",
-        "kind": "semantic"
-      }
-    },
-    {
-      "id": "fcos-schema-rehearsal.native-replay",
-      "reachable": true,
-      "fallible": true,
-      "trusted": true,
-      "diagnostic_identity": {
-        "id": "fcos-schema-rehearsal.native-replay",
-        "kind": "semantic"
-      }
-    },
-    {
-      "id": "fcos-schema-rehearsal.restored-schema",
-      "reachable": true,
-      "fallible": true,
-      "trusted": true,
-      "diagnostic_identity": {
-        "id": "fcos-schema-rehearsal.restored-schema",
-        "kind": "semantic"
-      }
-    },
-    {
-      "id": "fcos-schema-rehearsal.enrolled-fingerprint",
-      "reachable": true,
-      "fallible": true,
-      "trusted": true,
-      "diagnostic_identity": {
-        "id": "fcos-schema-rehearsal.enrolled-fingerprint",
         "kind": "semantic"
       }
     }
