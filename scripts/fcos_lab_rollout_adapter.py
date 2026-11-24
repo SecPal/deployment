@@ -191,7 +191,8 @@ def private_file(directory, name):
 
 def admit_source_text(repo, release):
     git(repo, "merge-base", "--is-ancestor", release.revision, "refs/remotes/release/main")
-    if source_release(repo, release.revision) != release:
+    protected = source_release(repo, release.revision)
+    if (protected.revision, protected.fingerprint) != (release.revision, release.fingerprint):
         raise ValueError("release fingerprint differs from protected source")
     return git(repo, "show", f"{release.revision}:{RUNTIME_SOURCE}").decode()
 

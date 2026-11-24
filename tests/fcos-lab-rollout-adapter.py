@@ -27,6 +27,19 @@ SOURCE = "7" * 40
 
 
 class AdapterContract(unittest.TestCase):
+    def test_protected_release_verification_accepts_the_direct_launch_identity(self):
+        from types import SimpleNamespace
+        from fcos_lab_rollout_adapter import admit_source_text
+
+        # A script and its imported module have distinct Release classes.
+        direct = SimpleNamespace(revision=NEW.revision, fingerprint=NEW.fingerprint)
+        with (patch("fcos_lab_rollout_adapter.git", return_value=b"contract"),
+              patch("fcos_lab_rollout_adapter.source_release", return_value=NEW)):
+            self.assertEqual(admit_source_text(Path("/repo"), direct), "contract")
+            direct.fingerprint = OLD.fingerprint
+            with self.assertRaisesRegex(ValueError, "fingerprint differs"):
+                admit_source_text(Path("/repo"), direct)
+
     def test_pending_candidate_can_use_refreshed_evaluations_for_the_same_fingerprint(self):
         from fcos_lab_rollout_adapter import FRONTEND_ARCHIVE, Frontend, archived_component_evidence
 
