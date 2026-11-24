@@ -129,19 +129,23 @@ def discover():
     return result
 
 
+def protected_source(product, gh):
+    branch = github_json(gh, f"repos/SecPal/{product}/branches/main")
+    source = branch["commit"]["sha"]
+    if branch["name"] != "main" or branch["protected"] is not True or re.fullmatch(r"[0-9a-f]{40}", source) is None:
+        raise ValueError("upstream main is not protected")
+    return source
+
+
 def qualified_candidate(product, gh, *, current=True):
     """Report the exact protected-main candidate without conferring deployment authority."""
     if product not in {"frontend", "api"}:
         raise ValueError("unknown product")
-    repo = f"SecPal/{product}"
     with tempfile.TemporaryDirectory(prefix="fcos-lab-discovery-") as directory:
         environment = {"PATH": "/usr/bin:/bin", "HOME": directory, "GH_CONFIG_DIR": directory,
                        "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1", "GH_TELEMETRY": "false"}
         verified_gh(gh, environment)
-    branch = github_json(gh, f"repos/{repo}/branches/main")
-    source = branch["commit"]["sha"]
-    if branch["name"] != "main" or branch["protected"] is not True or re.fullmatch(r"[a-f0-9]{40}", source) is None:
-        raise ValueError("upstream main is not protected")
+    source = protected_source(product, gh)
     verify = qualified_frontend_source if product == "frontend" else qualified_backend_source
     with verify(source, gh, current=current) as result:
         _, run_id, attempt, children, *documents = result
@@ -168,8 +172,7 @@ def qualified_candidate(product, gh, *, current=True):
                 "source_security_expires": deadline.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             })
     # Recheck after verification so superseded inputs cannot be advertised as current.
-    latest = github_json(gh, f"repos/{repo}/branches/main")
-    if latest["protected"] is not True or latest["commit"]["sha"] != source:
+    if protected_source(product, gh) != source:
         raise QualificationUnavailable("upstream main changed during discovery")
     return detail
 

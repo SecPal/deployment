@@ -92,7 +92,7 @@ def recover(path, initial, adapter):
     write_state(path, reconciled)
 
 
-def run_rollout(desired, path, adapter, baseline, *, admit=None, component_evidence=None):
+def run_rollout(desired, path, adapter, baseline, *, admit=None, component_evidence=None, begin=None):
     """Reconcile while main holds the deployment lock through per-host admission and activation."""
     if not path.exists():
         write_state(path, baseline_state(baseline, adapter))
@@ -159,6 +159,11 @@ def run_rollout(desired, path, adapter, baseline, *, admit=None, component_evide
             except ValueError as error:
                 # No switch has started. Fresh evidence may resume this host.
                 raise RolloutError(f"{host}: {error}") from None
+
+        # A resumed fleet remains on its already selected component after the
+        # first host has switched. Starting a new fleet requires a current source.
+        if index == 0 and not state["in_flight"] and begin is not None:
+            begin(release, previous)
 
         try:
             if not state["in_flight"]:
@@ -418,9 +423,26 @@ def main():
                     except (KeyError, OSError, subprocess.SubprocessError, TypeError, ValueError):
                         raise RolloutError("exact comparison inputs unavailable for the observed release") from None
 
+                def begin(release, previous):
+                    from fcos_lab_discovery import protected_source
+                    from fcos_lab_rollout_adapter import API_ARCHIVE, FRONTEND_ARCHIVE, TOOLS, Backend, Frontend
+
+                    try:
+                        before = git(repository, "show", f"{previous.revision}:{RUNTIME_SOURCE}").decode()
+                        after = git(repository, "show", f"{release.revision}:{RUNTIME_SOURCE}").decode()
+                        for product, parse, archive in (("frontend", Frontend, FRONTEND_ARCHIVE),
+                                                        ("api", Backend, API_ARCHIVE)):
+                            candidate = parse.from_source(after)
+                            if (candidate != parse.from_source(before) and candidate.transport == archive
+                                    and protected_source(product, TOOLS / "gh") != candidate.source):
+                                raise RolloutError(f"FCOS Lab {product}: protected main superseded the pending release")
+                    except (KeyError, OSError, TypeError, ValueError, subprocess.SubprocessError):
+                        raise RolloutError("FCOS Lab protected candidate source could not be rechecked") from None
+
                 run_rollout(desired, state, adapter, baseline=initial,
                             admit=admit if args.frontend_only or args.component_updates else None,
-                            component_evidence=component_evidence)
+                            component_evidence=component_evidence,
+                            begin=begin if args.archive_proposals else None)
                 if args.archive_proposals:
                     propose_after_reconciliation(repository, desired, state, adapter, args.archive_proposals)
     except (ImportError, KeyError, OSError, RolloutError, TypeError, ValueError) as error:

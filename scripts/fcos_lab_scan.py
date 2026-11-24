@@ -164,6 +164,8 @@ class ScanSnapshot:
             staged.parent.mkdir(parents=True)
             shutil.copytree(image, staged)
             native_report = root / "trivy.json"
+            # Trivy's local OCI layout syntax is <directory>@<digest>. Keep
+            # the canonical relative directory so its report can bind the OCI subject.
             self.trivy_command([
                 "image", "--scanners", "vuln", "--format", "json", "--show-suppressed",
                 "--skip-db-update", "--skip-java-db-update", "--skip-check-update", "--offline-scan",

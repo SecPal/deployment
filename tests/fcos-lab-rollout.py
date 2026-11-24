@@ -92,6 +92,16 @@ class RolloutTest(unittest.TestCase):
                 propose_after_reconciliation(repo, BASE, self.state, self.adapter, archives)
             propose.assert_not_called()
 
+    def test_supersession_prevents_the_first_activation(self):
+        def verify(candidate, previous):
+            self.assertEqual((candidate, previous), (NEXT, BASE))
+            raise RolloutError("protected main advanced")
+
+        with self.assertRaisesRegex(RolloutError, "advanced"):
+            run_rollout(NEXT, self.state, self.adapter, BASE, begin=verify)
+        self.assertFalse(any(call[0] == "activate" for call in self.adapter.calls))
+        self.assertFalse(json.loads(self.state.read_text())["in_flight"])
+
     def test_arm_preparation_failure_does_not_activate_any_host(self):
         self.adapter.fail = "prepare", "cax21"
         with self.assertRaises(RolloutError):

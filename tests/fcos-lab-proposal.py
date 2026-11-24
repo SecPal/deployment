@@ -102,15 +102,29 @@ class ProposalContract(unittest.TestCase):
     def test_fresh_comparison_can_retry_an_interrupted_signed_proposal(self):
         from fcos_lab_proposal import publish_archive
         gh = Path("/trusted/gh")
-        replies = [{"object": {"sha": BASE}}, {"protected": True, "commit": {"sha": NEW.source}}] * 3
-        with patch("fcos_lab_proposal.github_json", side_effect=replies), patch(
-            "fcos_lab_proposal.get", return_value=[]
-        ), patch("fcos_lab_proposal.open_proposal", return_value=("opened", None, None)) as create:
+        with patch("fcos_lab_proposal.github_json", return_value={"object": {"sha": BASE}}), patch(
+            "fcos_lab_proposal.protected_source", return_value=NEW.source
+        ), patch("fcos_lab_proposal.get", return_value=[]), patch(
+            "fcos_lab_proposal.open_proposal", return_value=("opened", None, None)
+        ) as create:
             for content in ("first", "first", "fresh"):
                 publish_archive("frontend", BASE, NEW, {FILE: content}, gh)
         original, retry, refreshed = (call.args[0] for call in create.call_args_list)
         self.assertEqual(original, retry)
         self.assertNotEqual(original, refreshed)
+
+    def test_superseded_source_never_schedules_published_proposal(self):
+        from fcos_lab_proposal import publish_archive
+        with patch("fcos_lab_proposal.github_json", return_value={"object": {"sha": BASE}}), patch(
+            "fcos_lab_proposal.protected_source", side_effect=[NEW.source, "a" * 40]
+        ), patch("fcos_lab_proposal.get", return_value=[]), patch(
+            "fcos_lab_proposal.open_proposal", return_value=("opened", 42, NEW.source)
+        ), patch("fcos_lab_proposal.write") as close, patch("fcos_lab_proposal.subprocess.run") as merge:
+            message = publish_archive("frontend", BASE, NEW, {FILE: "qualified"}, Path("/trusted/gh"))
+        self.assertIn("advanced", message)
+        close.assert_called_once_with("PATCH", "repos/SecPal/deployment/pulls/42", {"state": "closed"},
+                                      token=None, gh=Path("/trusted/gh"))
+        merge.assert_not_called()
 
     def test_proposal_diagnostics_do_not_emit_external_payloads(self):
         from fcos_lab_rollout_adapter import PROPOSAL_STAGES, ProposalFailure, proposal_stage

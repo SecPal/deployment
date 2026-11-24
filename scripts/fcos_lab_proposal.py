@@ -20,7 +20,7 @@ import sys
 import tempfile
 from zipfile import BadZipFile, ZipFile
 
-from fcos_lab_discovery import get, product_candidate, qualified_candidate, registry_publications, source_relationship
+from fcos_lab_discovery import get, product_candidate, protected_source, qualified_candidate, registry_publications, source_relationship
 from fcos_lab_rollout_adapter import API_ARCHIVE, API_IMAGE, DIGEST, FRONTEND_ARCHIVE, IMAGE, RUNTIME_SOURCE as FILE, Backend, Frontend
 from fcos_lab_rollout import LAB_API_PINS, git
 from fcos_lab_rollout_adapter import ProposalFailure, QualificationUnavailable, admit_source_text, github_json, proposal_stage
@@ -469,8 +469,7 @@ def publish_archive(product, base, selected, files, gh):
     endpoint = f"repos/{REPO}"
     if github_json(gh, f"{endpoint}/git/ref/heads/main")["object"]["sha"] != base:
         return "deployment base changed"
-    latest = github_json(gh, f"repos/SecPal/{product}/branches/main")
-    if latest["protected"] is not True or latest["commit"]["sha"] != selected.source:
+    if protected_source(product, gh) != selected.source:
         return "protected product main changed during qualification"
     proposals = get(f"{endpoint}/pulls?state=open&base=main&per_page=100", paginate=True, gh=gh)
     for pr in proposals:
@@ -482,6 +481,9 @@ def publish_archive(product, base, selected, files, gh):
             "The existing controller rechecks the protected candidate and evaluates this evidence before activation.")
     message, number, tip = open_proposal(branch, base, lane, selected.source, files, body, token=None, draft=False, gh=gh)
     if tip is not None:
+        if protected_source(product, gh) != selected.source:
+            write("PATCH", f"{endpoint}/pulls/{number}", {"state": "closed"}, token=None, gh=gh)
+            return f"proposal #{number} closed because protected product main advanced"
         subprocess.run([gh, "pr", "merge", str(number), "--repo", REPO, "--auto", "--squash",
                         "--match-head-commit", tip], check=True, timeout=60,
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
