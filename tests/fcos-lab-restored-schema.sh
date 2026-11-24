@@ -15,7 +15,7 @@ cleanup() {
     if [[ -n $restore_id ]]; then podman rm -f -v "$restore_id" >/dev/null; fi
     if [[ -n $source_id ]]; then podman rm -f -v "$source_id" >/dev/null; fi
     local file
-    for file in "$work/schema" "$work/counters" "$work/pg_hba.conf"; do
+    for file in "$work/schema" "$work/counters" "$work/other-version" "$work/pg_hba.conf"; do
         if [[ -e $file ]]; then unlink "$file"; fi
     done
     rmdir -- "$work"
@@ -84,6 +84,13 @@ psql_for "$clone" < "$work/schema"
 actual=$(scripts/fcos-lab-compare-restored-schema.sh "$validator" "$work/schema" "$work/counters" "$clone")
 expected=$(sed -E '/^\\(un)?restrict /d' -- "$work/schema" | sha256sum | cut -d ' ' -f 1)
 [[ $actual == "$expected" ]]
+
+jq '.server_version_num += 1' "$work/counters" > "$work/other-version"
+if report=$(scripts/fcos-lab-compare-restored-schema.sh "$validator" "$work/schema" "$work/other-version" "$clone" 2>&1); then
+    printf '%s\n' 'A PostgreSQL version mismatch was admitted' >&2
+    exit 1
+fi
+[[ $report == *'fcos-schema-rehearsal.restored-catalog: PostgreSQL versions differ'* ]]
 
 rejected() {
     local sql=$1 wanted=$2 report

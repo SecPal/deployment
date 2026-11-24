@@ -78,6 +78,10 @@ pg psql -X -w -qAt -v ON_ERROR_STOP=1 -U secpal_fixture_admin -d secpal < "$cata
 enrolled_cluster=$(cluster "$source_catalog")
 restored_cluster=$(cluster "$scratch/restored-catalog")
 [[ $enrolled_cluster != "$restored_cluster" ]]
+if [[ $(jq -er '.server_version_num' "$source_catalog") != "$(jq -er '.server_version_num' "$scratch/restored-catalog")" ]]; then
+    printf '%s\n' 'fcos-schema-rehearsal.restored-catalog: PostgreSQL versions differ' >&3
+    exit 1
+fi
 jq -cS 'del(.cluster)' "$source_catalog" > "$scratch/source-checks"
 jq -cS 'del(.cluster)' "$scratch/restored-catalog" > "$scratch/restored-checks"
 if ! cmp -s "$scratch/source-checks" "$scratch/restored-checks"; then
