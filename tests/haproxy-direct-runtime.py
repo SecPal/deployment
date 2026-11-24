@@ -129,7 +129,8 @@ class DirectTlsRuntimeTest(base.RuntimeTest):
             result = subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
                 '-keyout', str(key), '-out', str(certificate), '-days', '1',
                 '-subj', '/CN=app.example.test', '-addext',
-                'subjectAltName=DNS:app.example.test,DNS:api.example.test,DNS:new-app.example.test'],
+                'subjectAltName=DNS:app.example.test,DNS:api.example.test,DNS:new-app.example.test,'
+                'DNS:app.secpal.dev,DNS:api.secpal.dev'],
                 capture_output=True, timeout=15, umask=0o077)
             if result.returncode:
                 raise AssertionError('local synthetic certificate generation failed')
@@ -209,6 +210,62 @@ class DirectTlsRuntimeTest(base.RuntimeTest):
         headers = {k.lower(): v for k, v in self.backends['api'].seen[-1].items()}
         self.assertEqual(headers['x-forwarded-for'], '::1')
         self.assertEqual(headers['x-forwarded-proto'], 'https')
+
+    def test_reference_cookie_migration_is_limited_to_successful_session_paths(self):
+        app, api = 'app.secpal.dev', 'api.secpal.dev'
+        with socket.socket() as http_listener, socket.socket() as https_listener:
+            http_listener.bind(('127.0.0.1', 0))
+            https_listener.bind(('127.0.0.1', 0))
+            http_port, https_port = (sock.getsockname()[1] for sock in (http_listener, https_listener))
+        spec = direct.from_document({
+            'topology': 'single', 'frontend_host': app, 'api_host': api,
+            'tls_lifecycle': 'http01', 'listeners': [
+                {'address': '127.0.0.1', 'port': http_port, 'transport': 'http'},
+                {'address': '127.0.0.1', 'port': https_port, 'transport': 'https'},
+            ],
+        })
+        fixture = self.directory / 'reference-cookie.cfg'
+        fixture.write_text(direct.render(spec).replace(direct.VIEWER_PEM, str(self.pem)).replace(
+            '    user haproxy\n    group haproxy\n', ''))
+        self.validate(fixture)
+        backend = self.backends['api']
+        backend.response_status['/sanctum/csrf-cookie'] = 204
+        self.addCleanup(backend.response_status.pop, '/sanctum/csrf-cookie')
+        proxy = subprocess.Popen([self.binary, '-W', '-db', '-f', str(fixture)],
+                                 stdout=self.output, stderr=self.output)
+        self.addCleanup(proxy.wait, 5)
+        self.addCleanup(proxy.terminate)
+        context = ssl.create_default_context(cafile=str(self.pem))
+
+        def headers(host, path):
+            connection = http.client.HTTPSConnection('127.0.0.1', https_port, timeout=5, context=context)
+            with socket.create_connection(('127.0.0.1', https_port), timeout=5) as transport:
+                connection.sock = context.wrap_socket(transport, server_hostname=host)
+                try:
+                    connection.request('GET', path, headers={'Host': host})
+                    response = connection.getresponse()
+                    cookies = [value for name, value in response.getheaders() if name.lower() == 'set-cookie']
+                    return response.status, response.read(), cookies
+                finally:
+                    connection.close()
+
+        for _ in range(70):
+            try:
+                if headers(app, '/v1/me')[0] == 200:
+                    break
+            except (OSError, http.client.HTTPException):
+                pass
+            time.sleep(.1)
+        for path, status, body in (('/v1/me', 200, b'api'), ('/sanctum/csrf-cookie', 204, b'')):
+            actual_status, actual_body, cookies = headers(app, path)
+            self.assertEqual((actual_status, actual_body), (status, body))
+            self.assertEqual({cookie.split('=', 1)[0] for cookie in cookies}, {'XSRF-TOKEN', 'secpal-session'})
+            self.assertTrue(all('Max-Age=0; Path=/; Domain=secpal.dev; Secure' in cookie for cookie in cookies))
+        self.assertEqual(headers(app, '/organization'), (200, b'frontend', []))
+        self.assertEqual(headers(api, '/v1/me'), (200, b'api', []))
+        backend.response_status['/v1/me'] = 401
+        self.addCleanup(backend.response_status.pop, '/v1/me')
+        self.assertEqual(headers(app, '/v1/me'), (401, b'api', []))
 
     # These base transport probes use bare TCP or intentional foreign TLS SNI.
     # Their HTTP parsing coverage already runs on the DIRECT HTTP listener.
@@ -385,6 +442,8 @@ class DirectHaRuntimeTest(base.RuntimeTest):
 
 
 class DirectHaTlsRuntimeTest(DirectTlsRuntimeTest):
+    test_reference_cookie_migration_is_limited_to_successful_session_paths = None
+
     @classmethod
     def configuration(cls, routing=None):
         # Reuse the single TLS fixture only; render the reviewed private seam.
