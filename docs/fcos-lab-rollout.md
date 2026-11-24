@@ -83,11 +83,13 @@ services on every host. This keeps those services running during frontend
 activation and makes the previous frontend a compatible rollback target.
 Qualification of other components can extend these same five operations.
 
-The timer's service runs the coordinator with `--frontend-only`. Before
+The timer's service runs the coordinator with `--component-updates`. Before
 staging or resuming a journaled release, the coordinator requires the
-accepted and candidate fingerprints to match protected source. It allows
-only value changes to the two lab frontend pins. Backend, migration,
-fixture and infrastructure inputs must stay byte-for-byte unchanged.
+accepted and candidate fingerprints to match protected source. Each activation
+may change one component. The frontend lane keeps the backend pins intact.
+The API lane requires an exact archived pair and native compatibility record
+while keeping the frontend pins intact. Neither lane permits fixture,
+migration or infrastructure changes.
 The index attestation identifies the exact Frontend publisher run and
 attempt. The service requires successful completion of that attempt and
 its final publication gate before contacting any guest. That publisher
@@ -249,7 +251,7 @@ independent repository security job and both platform records before preparing
 the guest. The guest verifies the signed qualification, the exact index and
 the native import before accepting the prepared record.
 
-The existing frontend-only controller requires the unchanged normalized
+The frontend lane requires the unchanged normalized
 Grype and Trivy evaluations in `config/quadlet/fcos-lab-rollout/frontend-security/`
 from the protected candidate revision. For each native architecture it
 uses `ARCH-installed.json` and `ARCH-candidate.json`. Both files must

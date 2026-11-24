@@ -16,6 +16,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from fcos_lab_rollout import (
+    LAB_API_PINS,
     AcceptanceRejected, HOSTS, RELEASE_PATHS, Release, RolloutError,
     admit_archived_api_only, admit_frontend_only, command_adapter, recover, run_rollout, source_release,
 )
@@ -231,9 +232,10 @@ class SourceAndProtocolTest(unittest.TestCase):
                         path = repo / source.relative_to(root)
                         path.parent.mkdir(parents=True, exist_ok=True)
                         path.write_bytes(source.read_bytes())
-            base = record()
             pin = repo / "scripts/integration_runtime_contract.py"
-            original = pin.read_text()
+            original = LAB_API_PINS.sub(b"", pin.read_bytes()).decode()
+            pin.write_text(original)
+            base = record()
             lines = dict(line.split(" = ", 1) for line in original.splitlines()
                          if line.startswith(("LAB_FRONTEND_", "API_DIGEST = ")))
             updated = original.replace(
@@ -306,11 +308,11 @@ class SourceAndProtocolTest(unittest.TestCase):
             self.assertEqual(adapter.calls, [])
             self.assertEqual(path.read_bytes(), before)
 
-    def test_timer_service_selects_frontend_only(self):
+    def test_timer_service_selects_independent_component_updates(self):
         root = Path(__file__).resolve().parents[1]
         service = root / "config/quadlet/fcos-lab-rollout/secpal-fcos-lab-rollout.service"
         start, = [line for line in service.read_text().splitlines() if line.startswith("ExecStart=")]
-        self.assertIn("--frontend-only", start.split())
+        self.assertIn("--component-updates", start.split())
 
     def test_only_release_input_changes_change_the_fingerprint(self):
         with tempfile.TemporaryDirectory() as directory:
