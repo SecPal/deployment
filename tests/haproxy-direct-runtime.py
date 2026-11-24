@@ -236,6 +236,7 @@ class DirectTlsRuntimeTest(base.RuntimeTest):
         self.addCleanup(proxy.wait, 5)
         self.addCleanup(proxy.terminate)
         context = ssl.create_default_context(cafile=str(self.pem))
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
 
         def headers(host, path):
             connection = http.client.HTTPSConnection('127.0.0.1', https_port, timeout=5, context=context)
