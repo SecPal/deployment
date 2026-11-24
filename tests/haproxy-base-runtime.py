@@ -36,6 +36,7 @@ class Backend(ThreadingHTTPServer):
         self.role = role
         self.ready = True
         self.reason = None
+        self.response_status = {}
         self.seen = []
         self.slow_started = threading.Event()
         self.slow_release = threading.Event()
@@ -58,12 +59,13 @@ class Handler(BaseHTTPRequestHandler):
         server = self.server
         is_check = self.path in ('/health/live', '/health/ready')
         status = 200 if (self.path == '/health/live' and server.role == 'api') or server.ready else 503
+        status = server.response_status.get(self.path, status)
         if not is_check:
             server.seen.append(dict(self.headers))
         if self.path.startswith('/slow'):
             server.slow_started.set()
             server.slow_release.wait(15)
-        body = server.role.encode()
+        body = b'' if status == 204 else server.role.encode()
         self.send_response(status, server.reason)
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()

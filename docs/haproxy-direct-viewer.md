@@ -13,6 +13,20 @@ actual private reference-host and bounded public-ingress observations, with a
 [closed observation schema](evidence/haproxy-direct-viewer.schema.json). The
 immutable #219 reference record remains historical provenance.
 
+## Public reference browser sessions
+
+The `app.secpal.dev` frontend sends browser requests to its own HTTPS origin.
+HAProxy selects the existing API backend for `/v1/*`,
+`/sanctum/csrf-cookie`, and `/health/ready`. The direct API origin stays
+available at `api.secpal.dev`. Laravel issues host-only reference cookies.
+A successful browser session check or CSRF bootstrap expires the two old
+parent-domain cookies without purging unrelated browser state.
+
+For browser acceptance, sign in to the reference and then all three Lab
+frontends in one profile. Verify an authenticated request and a CSRF-protected
+operation for each, then sign out of one instance and verify the other
+sessions. Repeat with a tab that already held a session before the update.
+
 ## Closed single input
 
 `render-haproxy-direct.py` accepts a bounded JSON document with exactly
