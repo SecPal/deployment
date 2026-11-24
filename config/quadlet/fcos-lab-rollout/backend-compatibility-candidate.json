@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "previous_pair": "sha256:b71e01932eb4c41c23ee797c2d4af018d395a51637776a6ebbc91cf3a1bd65c0",
+  "candidate_pair": "sha256:33806dc63a4285dc2f6c107d24e966c02a54e6491a7ea248908eddd13fd1257c",
+  "schema": "3bd93c5d75f3d401354cfab7195392eb97b4b3141b1645d41fba77ad64836acd",
+  "ledger": "ae7f74127f0918ac00fa040edb45b3a4b0bcb35df15e370dec0b4107b2d5edd0",
+  "forward": {
+    "linux/amd64": "sha256:d069d97cbeeeae102f1dddf90b46c1af28cf33b45d4dd576f0688c60877378c3",
+    "linux/arm64": "sha256:138779b0355ec40d9ec3bea352e5c32ce96d8ed83bda780a9f69664156720990"
+  },
+  "rollback": {
+    "linux/amd64": "sha256:a20fe71304d3cc44516e6ef1ea5046783769df21bc2c192538af0d4da2b044f9",
+    "linux/arm64": "sha256:01c161db44efd98d4157450451835e92864492fff8efe7beda4208598765b0f0"
+  }
+}

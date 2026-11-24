@@ -434,10 +434,13 @@ product main, excludes an identical or non-descendant identity and scans native
 predecessor and candidate subjects against the same current database snapshots.
 The candidate still needs independent source-security acceptance. An API
 proposal also needs the existing native compatibility record for the exact
-predecessor and candidate pair. Missing evidence leaves that component deferred.
+predecessor and candidate pair. Keep the candidate record in
+`backend-compatibility-candidate.json` beside the current record. Missing
+evidence leaves that component deferred.
 
-The existing GitHub-signed proposal transaction carries only the component pins
-and comparison documents. The controller requests normal protected auto-merge
+The existing GitHub-signed proposal transaction changes the component pins and
+comparison documents. An API proposal copies the exact candidate record into the
+active path in the same commit as its hash and runtime pins. The controller requests normal protected auto-merge
 for the exact proposal head. The rollout path rechecks exact predecessors and
 the component decision under its lock before activation. An open proposal defers
 further proposals until its disposition.

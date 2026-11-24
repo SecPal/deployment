@@ -20,6 +20,7 @@ path = [
   "config/quadlet/fcos-lab-rollout/frontend-security/*.json",
   "config/quadlet/fcos-lab-rollout/api-security/*.json",
   "config/quadlet/fcos-lab-rollout/backend-compatibility.json",
+  "config/quadlet/fcos-lab-rollout/backend-compatibility-candidate.json",
   "config/production/state-contract.json",
   "config/ci-cloud/gcp-rocky-10-2-arm64.json",
   "config/ci-cloud/gcp-rocky-10-2-x86-64.json",
