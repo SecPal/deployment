@@ -155,6 +155,26 @@ schema and ledger. Use separate storage, slot-local credentials and queues,
 and the same restricted runtime grants, including read-only access to the
 migration ledger. Test the exact signed predecessor and candidate pairs.
 
+Capture the enrolled schema with `pg_dump --schema-only --no-owner
+--no-privileges` and the CHECK catalog with
+`psql -XqAt -v ON_ERROR_STOP=1 -f scripts/fcos-lab-check-catalog.sql`.
+Use the same native PostgreSQL 18 version in the disposable restore. Capture
+both inputs while the enrolled schema and migration ledger are stable, then
+recheck their identities after the dump. Run
+`scripts/fcos-lab-compare-restored-schema.sh` as the rehearsal Podman user
+with those two files and the disposable database container name. Use the
+`secpal-update-proof-<id>` name, `io.secpal.fcos.schema-rehearsal=true` label
+and `--network none` for this schema-only check.
+
+The comparison uses PostgreSQL's CHECK catalog for constraint properties,
+column types and collations, and named dependency identities. PostgreSQL
+replays the complete enrolled DDL in a second database in the disposable
+cluster. The complete dumps of the replay and the restore must then agree.
+This covers SQL spellings, casts, operators, functions and non-CHECK schema
+objects without excluding CHECK clauses from the comparison. Record the
+enrolled schema hash returned by the tool in the compatibility record.
+Preserve the independent application, role and migration-ledger checks.
+
 On the disposable database, run the role helper's `prepare` operation
 before starting PostgreSQL. Apply its reviewed `grant-role-contract` SQL to
 the empty database, restore using `pg_restore --role=secpal_owner --no-owner
@@ -192,14 +212,14 @@ the exact test coverage and the restored schema and ledger. Do not publish
 test data or credentials. Add the following keys to
 `config/quadlet/fcos-lab-rollout/backend-compatibility.json`:
 
-| Key                               | Required value                                                                                                                                                                                     |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema_version`                  | `1`                                                                                                                                                                                                |
-| `previous_pair`, `candidate_pair` | Exact signed OCI pair digests                                                                                                                                                                      |
-| `schema`                          | SHA-256 of `pg_dump --schema-only --no-owner --no-privileges` against the rehearsal database, dropping lines beginning with PostgreSQL's `\restrict` and `\unrestrict` markers followed by a space |
-| `ledger`                          | SHA-256 of the unaligned single SQL result plus its terminating newline from `SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY id), '[]'::jsonb) FROM public.migrations AS m`                        |
-| `forward`                         | Object with exactly `linux/amd64` and `linux/arm64`, each referencing the distinct private successful rehearsal record as a `sha256:…` digest                                                      |
-| `rollback`                        | `null` or the same two-platform map referencing separate successful predecessor rehearsal records                                                                                                  |
+| Key                               | Required value                                                                                                                                                                                                          |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema_version`                  | `1`                                                                                                                                                                                                                     |
+| `previous_pair`, `candidate_pair` | Exact signed OCI pair digests                                                                                                                                                                                           |
+| `schema`                          | SHA-256 of the enrolled database's exact `pg_dump --schema-only --no-owner --no-privileges` output, with PostgreSQL's `\restrict` and `\unrestrict` lines removed, after verified equivalence with the isolated restore |
+| `ledger`                          | SHA-256 of the unaligned single SQL result plus its terminating newline from `SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY id), '[]'::jsonb) FROM public.migrations AS m`                                             |
+| `forward`                         | Object with exactly `linux/amd64` and `linux/arm64`, each referencing the distinct private successful rehearsal record as a `sha256:…` digest                                                                           |
+| `rollback`                        | `null` or the same two-platform map referencing separate successful predecessor rehearsal records                                                                                                                       |
 
 Set `LAB_API_COMPATIBILITY_SHA256` to the lowercase SHA-256 of the exact JSON
 file bytes. This binds the reviewed record to the existing release fingerprint.

@@ -137,6 +137,13 @@ jobs:
       - name: Run real rootless Podman and Quadlet integration
         run: python3 scripts/quadlet-integration.py
 
+      - name: Verify restored Lab schema equivalence on native PostgreSQL
+        run: |
+          set -euo pipefail
+          image="$(PYTHONPATH=scripts python3 -c 'from integration_runtime_contract import POSTGRES_FIXTURE; print(POSTGRES_FIXTURE.image)')"
+          podman pull "$image"
+          bash tests/fcos-lab-restored-schema.sh "$image"
+
       - name: Prove disposable rootless runtime native lifecycle
         env:
           SECPAL_REQUIRE_NATIVE_LIFECYCLE: "1"
