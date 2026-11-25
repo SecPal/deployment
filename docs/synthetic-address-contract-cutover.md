@@ -24,12 +24,12 @@ Use the publisher-verified OCI candidates for [API #3114][api] at
 at `0a5bcc9f218703c5a602556f7cbfad82a254f722`. Verify the signed receipt and
 the OCI bytes before staging.
 
-| Input | SHA-256 |
-| --- | --- |
-| API pair receipt | `9b765d3ae13eff11108c7083ae1e30dfbd6efa8b23371aeaa5f8580824509604` |
-| API PHP-FPM OCI index | `5fe917e5087d3568e7fbe071b1f25a548f489b15f778321e9de86074364def9d` |
-| API Nginx OCI index | `1d31a36df99f0a6b1c5004fc4477a839fc1a573f5c9a8a85ac863a629f97031c` |
-| Frontend OCI index | `3c859855647284cbeee9ddf26dee547265d992e86f8e6630b8fd8a727205cb15` |
+| Input                                  | SHA-256                                                            |
+| -------------------------------------- | ------------------------------------------------------------------ |
+| API pair receipt                       | `9b765d3ae13eff11108c7083ae1e30dfbd6efa8b23371aeaa5f8580824509604` |
+| API PHP-FPM OCI index                  | `5fe917e5087d3568e7fbe071b1f25a548f489b15f778321e9de86074364def9d` |
+| API Nginx OCI index                    | `1d31a36df99f0a6b1c5004fc4477a839fc1a573f5c9a8a85ac863a629f97031c` |
+| Frontend OCI index                     | `3c859855647284cbeee9ddf26dee547265d992e86f8e6630b8fd8a727205cb15` |
 | OpenPLZ/DE input authorized by the API | `1066a96a6b3a16629a94c834fca49fe58a2bb01558e17242c53a12d68b290088` |
 
 Bind the actual installed predecessor for each target. Require the applicable
