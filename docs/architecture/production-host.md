@@ -7,17 +7,15 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Purpose and status
 
-This document defines the provider-neutral admission contract for the first
-SecPal production reference host. The active reference platform is Rocky Linux
-10.2 with SELinux Enforcing and rootless Podman managed by systemd-user and
-native Quadlet. Multi-host and high availability are deferred.
+The Managed reference is Fedora CoreOS Stable under
+[ADR-018](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-host-container-runtime-adr018.md).
+The [deployment roadmap](../roadmap.md) tracks Managed implementation and
+qualification.
 
-Issue #80 changes the host contract and its reviewable validation harness. It
-does not provision a host or implement PostgreSQL, an edge proxy, nftables,
-cloud infrastructure, provider inventory, application state, secrets, backup,
-or recovery. The completed D.1 and D.1a work remains historical evidence for
-distribution-independent rootless lifecycle concepts only. It is not current
-Rocky Linux, package-provenance, x86-64-v3, or SELinux evidence.
+This document defines the repository's Rocky Linux 10.2 host-facts and
+qualification contract for the retained native profile. It uses SELinux
+Enforcing, rootless Podman, systemd-user and native Quadlet. Its evidence is
+specific to that platform.
 
 Host-facts schema version 2 supersedes the historical version 1 Debian fact
 shape without rewriting old evidence. The checked-in positive host documents
@@ -50,7 +48,7 @@ runtime facts from the effective rootless Podman and systemd-user contexts.
 
 ## Rocky Linux version and architecture
 
-The only currently qualified OS identity is:
+This validator admits the following OS identity:
 
 - `/etc/os-release` `ID=rocky`;
 - exact `VERSION_ID=10.2`; and
@@ -61,7 +59,7 @@ uses the reviewed allowlist `{10.2}`. A later minor is rejected until a contract
 change adds that exact minor after package, runtime, application-platform, and
 native evidence review. Rocky 10.0, Rocky 10.1, Rocky 9, other distributions,
 derivatives, and malformed identities are rejected. In particular, Debian and
-an AppArmor-only result cannot satisfy current production admission.
+an AppArmor-only result cannot satisfy this Rocky profile.
 
 Rocky Linux 10 on x86_64 requires the x86-64-v3 microarchitecture baseline.
 Admission uses Rocky's platform-supported glibc-loader check:

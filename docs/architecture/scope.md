@@ -11,28 +11,26 @@ progress state.
 
 ## Current architecture navigation
 
-The accepted production direction uses Rocky Linux 10.2+ with SELinux
-enforcing, rootless Podman/Quadlet application workloads, and host-native
-PostgreSQL 18. PostgreSQL initially supplies sessions, durable queues, and shared
-cache as well as relational persistence; the current baseline has no Valkey.
+[ADR-017](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-postgresql-18-canonical-baseline-adr017.md)
+owns the PostgreSQL 18 baseline.
+[ADR-018](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-host-container-runtime-adr018.md)
+owns Fedora CoreOS Stable, rootless Podman, Quadlet and SELinux Enforcing for
+Managed. It admits independently qualified infrastructure containers. The
+[Self-Hosted boundary](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-public-self-hosting-private-managed-operations-adr023.md)
+keeps public deployment contracts portable and separate from the Managed control
+plane.
 
 [ADR-019](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md)
-owns the normative DIRECT/PROTECTED Edge architecture.
+owns two Edge modes. DIRECT uses HAProxy as Viewer Edge. PROTECTED uses
+CloudFront Multi-Tenant as Viewer Edge and HAProxy as Origin. Each mode has
+its own implementation graph and qualification.
+[DIRECT](https://github.com/SecPal/deployment/issues/90) ·
+[PROTECTED](https://github.com/SecPal/deployment/issues/209)
 
-- In **DIRECT**, host-native HAProxy is the Viewer Edge. The
-  [accepted DIRECT decision](decisions/direct-viewer-edge.md) records
-  [#89](https://github.com/SecPal/deployment/issues/89) under ADR-019;
-  [#90](https://github.com/SecPal/deployment/issues/90) descendants own
-  implementation.
-- In **PROTECTED**, CloudFront Multi-Tenant is the Viewer Edge and HAProxy is the
-  Origin/backend boundary. [#209](https://github.com/SecPal/deployment/issues/209)
-  descendants own portable implementation.
-
-The general PROTECTED Sandbox PoC is complete and retired. PROTECTED architecture
-is accepted; #209 descendants own portable implementation, and their native
-graph is authoritative for delivery state. The old [Debian/NGINX
-decision](decisions/production-edge.md) is retained only as a historical,
-superseded record.
+[ADR-020](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-state-recovery-authority-separation-adr020.md)
+owns state and recovery authority. Its failure-class-specific recovery evidence
+and [ADR-022 topology rules](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-deployment-topology-high-availability-adr022.md)
+apply independently of the platform adapter.
 
 ## Repository responsibilities
 
@@ -59,8 +57,9 @@ outside this repository.
 - **Product workloads:** API, frontend, workers, and scheduler remain separate
   rootless workloads. They do not own public TLS, public routing, runtime
   sockets, or production database authority.
-- **Production database:** PostgreSQL 18 is host-native and is the persistent
-  source of truth. Its implementation and backup contracts have separate owners.
+- **Production database:** PostgreSQL 18 is the persistent source of truth. The
+  Managed reference uses a separately qualified container. Backup and recovery
+  retain their independent authorities.
 - **Production Edge:** Viewer identity, Viewer TLS, Origin TLS, Origin
   authentication, WAF/AMR, caching, and the PROTECTED evidence boundary belong
   to ADR-019. This navigation does not restate them.
@@ -90,21 +89,3 @@ frontend `nginx-unprivileged` userspace are not production Viewer-Edge choices.
 
 The full service, security, lifecycle, and evidence contract is in
 [`docs/quadlet-integration.md`](../quadlet-integration.md).
-
-## Historical evidence
-
-### Step A bootstrap contract
-
-Step A established governance, documentation, local validation, and quality CI.
-
-### Phase B/C and former D.1/D.2/D.3
-
-Git and GitHub retain accurate historical evidence for the former Compose,
-Valkey, Caddy, Debian, AppArmor, production-state, and Debian NGINX contracts.
-Those terms remain valid when describing what the historical work actually
-proved. They are not current production authority and no executable Compose
-compatibility runtime is maintained.
-
-The former D.1a label described the transition of disposable integration to
-rootless Podman/Quadlet. Current documentation names the implemented integration
-directly rather than treating D.1a or D.3 as present architecture ownership.

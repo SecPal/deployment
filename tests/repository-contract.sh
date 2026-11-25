@@ -51,7 +51,7 @@ required_files=(
   docs/architecture/production-host.md
   docs/architecture/production-inventory.md
   docs/architecture/production-state.md
-  docs/architecture/decisions/production-edge.md
+  docs/architecture/decisions/direct-viewer-edge.md
   docs/architecture/production-secrets.md
   docs/api-image-consumption.md
   docs/frontend-image-consumption.md
@@ -154,7 +154,6 @@ required_files=(
   tests/production-inventory-contract.py
   tests/production-state-contract.py
   tests/production-postgres-retirement.py
-  tests/production-edge-decision-contract.py
   tests/production-state-native-lifecycle-gate.sh
   tests/production-state-native-lifecycle.sh
   tests/runtime-secret-contract.sh
@@ -186,24 +185,12 @@ if [ -e LICENSES/LicenseRef-SecPal-Attribution.txt ] \
   fail "obsolete SecPal attribution license must not be restored after the AI-instruction rollout"
 fi
 
-require_text README.md "It is not a production-ready deployment."
+require_text README.md "Fedora CoreOS Stable is the Managed reference host."
+require_text README.md "Lab qualification and Managed Production Acceptance"
 require_text README.md "./scripts/preflight.sh"
-require_text README.md "Phase B completed in the required check context"
-require_text README.md "Phase C is complete."
 require_text docs/architecture/scope.md "activity-hash-chain worker: exactly one"
 require_text docs/architecture/scope.md "scheduler: exactly one"
-require_text docs/architecture/scope.md "Step A bootstrap contract"
-require_text docs/architecture/scope.md \
-  "The reviewed immutable API and frontend images are already consumed here."
-if grep -Fq 'Later phases will add immutable publication' docs/architecture/scope.md; then
-  fail "architecture scope must not defer immutable publication that is already consumed"
-fi
-require_text docs/roadmap.md "Local container integration stack"
-require_text docs/roadmap.md "Phase B — Local container integration stack (complete)"
-require_text docs/roadmap.md "Phase C — Immutable image publishing (complete)"
-# The Markdown backticks must remain literal.
-# shellcheck disable=SC2016
-require_text docs/roadmap.md 'was enforced for `main` at that time'
+require_text docs/architecture/scope.md "The reviewed immutable API and frontend images are already consumed here."
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04"
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04-arm"
 require_text .github/workflows/local-integration.yml \
@@ -271,11 +258,6 @@ done
 
 if ! scripts/validate-compose-prohibition.sh; then
   fail "current scripts and workflows must not invoke Docker Compose"
-fi
-
-if grep -Eiq 'Phase B (remains|stays|is) in progress|Phase B.*pending|Local API/frontend integration: in progress' \
-  README.md docs/roadmap.md; then
-  fail "README.md and docs/roadmap.md must consistently mark Phase B complete"
 fi
 
 for path in terraform ansible kubernetes helm certificates secrets; do
