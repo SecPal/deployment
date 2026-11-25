@@ -426,6 +426,21 @@ class GuestContract(unittest.TestCase):
     def setUp(self):
         self.guest = Path(__file__).resolve().parents[1] / "scripts/fcos-lab-rollout-guest.sh"
 
+    def test_guest_metadata_readback_rejects_a_stale_backend_source(self):
+        command = ('source "$1"; fpm_pool=$2; current_source=$3; '
+                   'release_asset() { [[ -f "$1" ]]; }; '
+                   'backend_image_source() { printf "%s\\n" "$current_source"; }; '
+                   'backend_release_matches test-image')
+        source = "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            pool = Path(directory) / "pool.conf"
+            pool.write_text("[secpal]\n"
+                            f"env[BOOTSTRAP_API_RELEASE_VERSION]=git.{source}\n"
+                            f"env[BOOTSTRAP_API_RELEASE_SOURCE_URL]=https://codeload.github.com/SecPal/api/tar.gz/{source}\n")
+            arguments = ["bash", "-c", command, "test", self.guest, pool]
+            subprocess.run(arguments + [source], check=True)
+            self.assertNotEqual(subprocess.run(arguments + ["b" * 40]).returncode, 0)
+
     def test_guest_metadata_label_failure_keeps_the_native_image_diagnostic(self):
         command = ('source "$1"; status=$2; '
                    'runtime() { '

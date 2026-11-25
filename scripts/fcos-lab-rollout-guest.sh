@@ -257,6 +257,13 @@ write_release_asset() {
     sync -f "${path%/*}"
 }
 
+backend_release_matches() {
+    local source
+    release_asset "$fpm_pool" &&
+        source=$(backend_step native-image backend_image_source "$1") &&
+        cmp -s "$fpm_pool" <(render_api_release "$fpm_pool" "$source")
+}
+
 backend_matches() {
     local record=$1 role override component ref config expected actual
     for role in "${backend_roles[@]}"; do
@@ -268,6 +275,9 @@ backend_matches() {
                 config=$(jq -er --arg role "$component" '.backend[$role].config' <<< "$record") || return 1
             [[ $ref =~ ^"$api_image@"$digest$ && $config =~ ^$hash$ &&
                 -f $override && ! -L $override ]] && cmp -s "$override" <(render_dropin "$ref") || return 1
+            if [[ $role == php-fpm ]]; then
+                backend_release_matches "$ref" || return 1
+            fi
             expected="$ref ${ref##*@} $config true false true"
         else
             [[ ! -e $override && ! -L $override ]] || return 1
