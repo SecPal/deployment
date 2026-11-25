@@ -4191,6 +4191,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_quadlet_normalization_uses_only_the_fixed_user_manager_contract(self) -> None:
         calls = []
+        unit_path = Path(self.enterContext(tempfile.TemporaryDirectory()))
         original_environment = "PATH=/target/bin\nATTACKER_VALUE=present\n"
         trusted_environment = (
             "CONTAINERS_CONF=/dev/null\n"
@@ -4242,8 +4243,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "systemctl", "--user", "show", "--property=UnitPath",
             ]:
                 return 0, (
-                    "UnitPath=/run/user/20000/systemd/user.control "
-                    "/etc/systemd/user"
+                    f"UnitPath={unit_path / 'user.control'} "
+                    f"{unit_path / 'etc-systemd-user'}"
                 ), True
             if (
                 arguments[:3] == ["systemctl", "--user", "show"]
