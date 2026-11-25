@@ -57,20 +57,26 @@ official registry release approval to its existing contract.
    `2026_11_25_210000_include_customer_house_number_in_duplicate_guard`.
    Verify the new index and existing organization, user and witness data.
 3. Stage both components by digest. In the maintenance window, hold the
-   existing deployment locks and pause the affected activations. Stop API HTTP
-   and verify it is no longer accepting requests. Drain and stop the scheduler,
-   both workers and PHP-FPM, then verify that all five roles are inactive.
+   existing deployment locks and pause the affected activations. Fence viewer
+   traffic to the frontend and API, including cached clients with existing
+   sessions, while retaining the private acceptance route. Stop both HTTP
+   services. Drain and stop the scheduler, both workers and PHP-FPM, and verify
+   that all six roles are inactive.
    Capture the final encrypted logical dump under this write fence. Record its
    hash, PostgreSQL system identity, WAL position, timestamp and exact
    migration ledger, then independently verify the fenced restore before
    mutating the database.
-   Use the existing separate migration unit and database role to apply the
-   Laravel migration exactly once. Seed the test fixtures in place and explicitly
+   Use the existing separate migration unit and database role. Stop any
+   exited oneshot left by the predecessor, reload the candidate unit, verify
+   the staged PHP-FPM digest and confirm the unit is inactive. Start it once
+   and verify a new successful invocation and the exact new migration ledger.
+   Seed the test fixtures in place and explicitly
    run the API's checksum-bound OpenPLZ import if the approved data are absent or
    stale. Reuse an active import with the exact authorized checksum. Preserve
    database, volume, test account, organization, witness and key identities.
-4. Activate the API and qualify readiness and address lookups before enabling
-   the corresponding frontend. Check login, organization access, exact and
+4. Activate the API and qualify readiness and address lookups through the
+   private acceptance route. Activate the corresponding frontend before
+   removing the viewer fence. Check login, organization access, exact and
    prefix postal-code lookup, separate house-number handling, and worker and
    scheduler cardinality. Repeat on each target before reopening writes.
 5. If a check fails, maintain the write fence and use the verified pre-cutover
