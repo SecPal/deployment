@@ -9,19 +9,14 @@ The local integration contract consumes the public SecPal frontend image by
 its reviewed OCI index digest. This is a test-only, loopback-only, disposable
 integration stack, not a production deployment.
 
-The Docker/Compose wording below is the retained Phase C completion record.
-The active disposable runner repeats the same token-free OCI and attestation gates,
-stages the reviewed digest through a new empty Podman authentication file, and
-uses the canonical digest from native Quadlet with `Pull=never`. It does not
-reinterpret the historical Compose run as Podman evidence.
+The [disposable integration runner](quadlet-integration.md) verifies and stages
+the reviewed OCI digest in rootless Podman before it starts native Quadlets
+with `Pull=never`.
 
 ## Current API companion
 
-The current Quadlet HTTP companion is Nginx at
-`ghcr.io/secpal/api@sha256:4bfeca7ead5436c5c4b9d51823d2438be91e5f88c25d07b8695a0a5c614a8b90`,
-paired with the accepted PHP-FPM index as documented in
-[API image consumption](api-image-consumption.md). The older Phase C identities
-below remain historical evidence and do not qualify this new deployment pair.
+The current Quadlet fixture uses the Nginx and PHP-FPM pair recorded in
+[API image consumption](api-image-consumption.md).
 
 ## Current accepted frontend release
 
@@ -40,76 +35,10 @@ publisher's authoritative Syft SPDX with Grype and each exact native subject wit
 Trivy through SecPal/.github#636. Scanner failures or stale databases cannot
 qualify deployment.
 
-This is source-contract acceptance, not activation. The operator confirmed that
-the demo frontend remained at
-`ghcr.io/secpal/frontend@sha256:1c737d692e633d355f2ee92e82f0d78929c4dcf43f959e3e17d1cdc6c41fb0c9`
-during the API cutover on 2026-11-10. Its independent monitoring is retained.
-The [retirement decision][recovery] removed these exact frontend indexes
-from SecPal-owned deployment, rollback and recovery:
-
-- `sha256:43daf20f17ad76049377f7bf16b52a74464a42394b49e91934bbc6dcf7327859`
-- `sha256:5abf611911e59c7a14cc369b39ceed19f33d3b7cd50d9124ab1171dd1fad45aa`
-
-Current consumer pins and their security evidence remain subject to the
-existing admission rules.
-
-## First qualified FCOS lab rollout
-
-The first live frontend-only rollout on the existing FCOS test guests used
-the following identities. The active lab pin remains in
-`scripts/integration_runtime_contract.py` and subsequent proposal PRs record
-their own publisher evidence.
-
-- Image: `ghcr.io/secpal/frontend@sha256:d99c6d39cdbac1d63fbd72f2a25f4c29ea87bc6693dae65e2d4453d841fbb48f`.
-- Source: `5ca50b7f39e29f91092b649730730cb27e5f271c`.
-- Publisher run: `44535422585` (attempt `1`), workflow
-  `SecPal/frontend/.github/workflows/publish-container.yml` on protected main,
-  GitHub-hosted runners only.
-- Accepted build evidence: `ghcr.io/secpal/frontend@sha256:9790f753327b56d674259eaad3f13269004b04c526d03afc9d2376daefe2ac48`.
-
-The [FCOS lab rollout procedure](fcos-lab-rollout.md) governs activation.
-Production rendering, trusted cloud evidence and the base integration
-fixtures continue to consume the current accepted release above.
-
-## Historical Phase C.3 identity and evidence
-
-The completed Phase C.3 integration used:
-
-```text
-ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077
-```
-
-The completed Phase C.3 publication recorded:
-
-- Source repository: `SecPal/frontend`
-- Source commit: `b755ca0d0ee5a85eca5ad5688d457241f070b1b4`
-- Publisher workflow:
-  `SecPal/frontend/.github/workflows/publish-container.yml`
-- Publisher run: `31247196734` (attempt `1`)
-- Source ref: `refs/heads/main`
-- Canonical OCI index digest:
-  `sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`
-- Artifact Attestation ID: `39567451`
-- Rekor index: `2381180038`
-- Runner policy: GitHub-hosted only
-
-Phase C.3 publisher run: `31247196734`. Phase C.3 canonical digest:
-`sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`.
-Phase C.3 status: COMPLETE.
-
-The recorded platform manifests are
-`sha256:9448c394cb43f4885b269c91d8df15db21d6bc33459800392136b7dcb917dfd1`
-for `linux/amd64` and
-`sha256:17b828013eeebd3f83b82b993a10f30b8c8957688fcf480bdd46d899e8cfe1`
-for `linux/arm64`. They are publication evidence only. The registry-hosted
-attestation artifact digest
-`sha256:45f5e0c76e38c63efd483f2f8571c910a93aa528c31968a11b1960b330534b78`
-is also evidence only. None of these three digests is an image, deployment,
-trust, update, or rollback reference.
-
-The historical discovery tag is evidence only and is never used by Compose.
-Tags, child manifests, and attestation artifacts cannot replace the canonical
-OCI index digest.
+These pins describe source acceptance. The
+[public reference publisher](public-reference-updates.md) and
+[FCOS Lab rollout procedure](fcos-lab-rollout.md) each record target activation
+independently.
 
 ## Pre-execution verification
 
@@ -137,23 +66,15 @@ For the frontend, the anonymous OCI Distribution verifier:
 6. writes private mode-`0600` local index and bundle files for offline
    cryptographic verification.
 
-At Phase C completion, the hosted workflow installed GitHub CLI `2.97.0` and
-verified the official Linux AMD64 archive checksum
-`a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112`.
-The active matrix additionally verifies the official Linux ARM64 archive
-checksum
-`73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5`.
-The runner requires that exact version. GitHub CLI verifies the local raw index
-and bundle with exact bindings to `SecPal/frontend`, the publisher workflow,
-`refs/heads/main`, the current source digest and signer digest
-`d1c5b82f9f07ce4fb6bdac2054eeaa70149e2e38`, and GitHub-hosted runners only.
-It does not reopen the registry during cryptographic verification.
+The [hosted fixture workflow](../.github/workflows/local-integration.yml)
+pins the GitHub CLI binaries. Verification checks the raw local index and bundle against
+`SecPal/frontend`, its publisher workflow and protected main, the exact source
+commit, and the GitHub-hosted runner policy.
 
 Only after both published SecPal images pass these gates does the runner build
 the local test gateway, initialize disposable secrets, start the disposable
 PostgreSQL 18 fixture, run the migration once, start the database-backed API
-roles and frontend, expose the
-loopback gateway, and run the browser contract. The published frontend retains
+roles and frontend, expose the loopback gateway, and run the browser contract. The published frontend retains
 UID/GID `101:101`, a read-only root filesystem, all capabilities dropped,
 `no-new-privileges`, only `/tmp` writable, and only the private edge network.
 `SECPAL_API_URL` remains runtime configuration; no deployment-time frontend
@@ -163,14 +84,14 @@ build exists.
 
 A frontend update requires a new successful publisher run and separate
 evidence for a new OCI index digest.
-A new digest requires a new reviewed deployment pull request. There is no
-automatic selection of a newer publication.
+Changing the fixture pin requires a reviewed deployment pull request.
+Public reference and Lab updates use their linked target-specific contracts.
 
 Rollback requires a new reviewed pull request and fresh verification of a
 still-supported OCI index. Verify API compatibility and target admission
 under [deployment #93][recovery]. Use the reviewed registry, repository and
 immutable digest for every update or rollback. Tags, environment overrides,
-manual Docker tags, configurable registry or repository values, and registry
+configurable registry or repository values, and registry
 fallbacks are never update or rollback inputs.
 
 [recovery]: https://github.com/SecPal/deployment/issues/93#issuecomment-7126107302
@@ -178,29 +99,3 @@ fallbacks are never update or rollback inputs.
 The deployment repository performs registry reads only. It does not push an
 image or manifest, generate an attestation, mutate a tag, or request registry
 write permission.
-
-## Phase C completion evidence
-
-- Phase C.4 deployment PR: `SecPal/deployment#6`
-- Deployment merge commit:
-  `4fc2796409b7c37a541f515ccf29236f143fc132`
-- Post-merge Repository Quality run: `31264563173`
-- Post-merge Local Integration run: `31264562902`
-- Compose Contract job: `93120504279`
-- Canonical frontend OCI index digest:
-  `sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`
-- Canonical API OCI index digest:
-  `sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
-
-Both push-triggered runs completed successfully on `main` for the merge
-commit. The Local Integration run verified both published images before the
-gateway build or SecPal product runtime, then passed secrets initialization,
-PostgreSQL and Valkey health, migrations, the API, workers, scheduler,
-frontend, gateway, Playwright browser contract, and complete project cleanup.
-
-Phase C is complete. This status covers immutable publication, post-merge
-verification, digest-only deployment consumption, pre-execution attestation
-verification, and hosted integration evidence. It does not claim production
-deployment or public infrastructure. At that completion point, Phase D had
-not started; D.1a adds disposable runtime parity rather than production
-deployment.
