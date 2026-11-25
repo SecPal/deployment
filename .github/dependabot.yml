@@ -10,6 +10,17 @@ updates:
       interval: daily
       time: "04:00"
       timezone: Europe/Berlin
+    # CodeQL init and analyze must use the same release.
+    groups:
+      github-actions-patch:
+        patterns: ["github/codeql-action/*"]
+        update-types: ["patch"]
+      github-actions-minor:
+        patterns: ["github/codeql-action/*"]
+        update-types: ["minor"]
+      github-actions-major:
+        patterns: ["github/codeql-action/*"]
+        update-types: ["major"]
   - package-ecosystem: npm
     directory: /
     schedule:
