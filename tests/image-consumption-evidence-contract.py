@@ -2,7 +2,10 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Compose-independent API/frontend image evidence contract."""
+"""Check source and documentation evidence references.
+
+Runtime admission and expiry are exercised by oci-attestation-bundle-contract.py.
+"""
 
 from __future__ import annotations
 
@@ -56,11 +59,11 @@ def validate_evidence(root: Path) -> None:
             api_doc,
             (
                 runtime["API_IMAGE"],
-                runtime["API_DIGEST"],
+                runtime["PHP_FPM_IMAGE"],
+                runtime["API_PAIR_IMAGE"],
                 runtime["API_SOURCE_COMMIT"],
-                "Publisher run: `30833321334` (attempt `1`)",
-                "4fc2796409b7c37a541f515ccf29236f143fc132",
-                "31264562902",
+                runtime["API_VEX_EXPIRES_AT"],
+                "https://github.com/SecPal/api/actions/runs/42987289933/attempts/2",
                 "python3 scripts/quadlet-integration.py",
             ),
         ),
@@ -68,15 +71,9 @@ def validate_evidence(root: Path) -> None:
             frontend_doc,
             (
                 runtime["FRONTEND_IMAGE"],
-                runtime["FRONTEND_DIGEST"],
                 runtime["FRONTEND_SOURCE_COMMIT"],
-                runtime["API_DIGEST"],
                 "Publisher run: `42809674397` (attempt `1`)",
-                "Artifact Attestation ID: `39567451`",
-                "4fc2796409b7c37a541f515ccf29236f143fc132",
-                "31264563173",
-                "31264562902",
-                "Compose Contract job: `93120504279`",
+                "](api-image-consumption.md)",
             ),
         ),
     ):
@@ -129,6 +126,15 @@ class ImageConsumptionEvidenceContract(unittest.TestCase):
             self.runtime["API_DIGEST"],
             "sha256:" + "a" * 64,
         )
+
+    def test_api_companion_digest_drift_is_rejected(self) -> None:
+        for identity in ("PHP_FPM_IMAGE", "API_PAIR_IMAGE"):
+            with self.subTest(identity=identity):
+                self.assert_drift_rejected(
+                    "docs/api-image-consumption.md",
+                    self.runtime[identity],
+                    "ghcr.io/secpal/api@sha256:" + "a" * 64,
+                )
 
     def test_api_source_commit_drift_is_rejected(self) -> None:
         self.assert_drift_rejected(
