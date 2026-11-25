@@ -75,23 +75,22 @@ def component_archive(product, pin, gh, *, current, preserve=False):
             if product == "frontend":
                 evaluation = json.loads((root / "qualification" / "scan" / arch / "evaluation.json").read_bytes())
                 spdx = evaluation["syft"]["spdx_digest"]
-                producer = attempt
             else:
                 pair = result[4]
                 entries = pair["images"][role]["platforms"]
                 item, = (entry for entry in entries if entry["subject"]["platform"] == platform)
                 spdx = item["sbom_sha256"]
-                producer = api_native_attempt(pair, platform, attempt)
             if current and native_root == root and not native.exists():
+                producer = api_native_attempt(pair, platform, attempt) if product == "api" else attempt
                 download_publisher_artifact(gh, product, run, pin.source,
                                             f"{product}-native-{arch}-{run}-{producer}", native, ARCHIVE_MAX)
             material[role, platform] = (subject, native / role if product == "api" else native, spdx)
-        if preserve:
+        if preserve or not current:
             engine = reevaluation_engine(admission_governance())
             for (_, platform), artifact in material.items():
                 verify_native_inventory(platform, artifact, engine)
-            if native_root == root:
-                preserve_archive(root, stored)
+        if preserve and native_root == root:
+            preserve_archive(root, stored)
         yield root, material
 
 

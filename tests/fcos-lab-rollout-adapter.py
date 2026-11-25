@@ -72,6 +72,114 @@ class AdapterContract(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "blob differs"):
                 make_oci_archive(layout, manifest["digest"], root / "wrong.tar")
 
+    def test_capture_and_restore_use_verified_exact_native_material(self):
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+        import fcos_lab_rollout_adapter as adapter
+        import fcos_lab_scan as scan
+
+        platform = "linux/amd64"
+        gh = Path("/trusted/gh")
+        for product, role in (("api", "php-fpm"), ("frontend", "frontend")):
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as work:
+                root = Path(work)
+                config = root / "controller"
+                config.mkdir(mode=0o700)
+                publisher = root / "publisher-download"
+                qualification = publisher / "qualification"
+                qualification.mkdir(parents=True)
+                native = publisher / "amd64"
+                if product == "api":
+                    native /= role
+                image = native / "image"
+                blobs = image / "blobs" / "sha256"
+                blobs.mkdir(parents=True)
+                config_bytes = b'{"architecture":"amd64"}'
+                config_digest = hashlib.sha256(config_bytes).hexdigest()
+                (blobs / config_digest).write_bytes(config_bytes)
+                manifest = json.dumps({
+                    "config": {"digest": "sha256:" + config_digest, "size": len(config_bytes)},
+                    "layers": [],
+                }).encode()
+                child = "sha256:" + hashlib.sha256(manifest).hexdigest()
+                (blobs / child.removeprefix("sha256:")).write_bytes(manifest)
+                (image / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}')
+                (image / "index.json").write_text(json.dumps({
+                    "schemaVersion": 2, "manifests": [{"digest": child, "size": len(manifest)}],
+                }))
+                spdx = native / "syft.spdx.json"
+                spdx.write_bytes(b'{"spdxVersion":"SPDX-2.3"}')
+                inventory = scan.digest(spdx)
+                subject = {"oci_digest": child, "platform": platform}
+                association = native / "association.json"
+                association.write_text(json.dumps(subject))
+                children = {(role, platform): child}
+
+                def verify_association(observed, contents, expected):
+                    if observed != expected or contents != spdx.read_bytes():
+                        raise ValueError("unexpected SPDX association")
+
+                report = {"database": {"next_update": "2026-11-25T13:00:00Z"}}
+                if product == "api":
+                    item = {"subject": subject, "sbom_sha256": inventory}
+                    pair = {"workflow": {"run_id": "10", "run_attempt": "1"},
+                            "images": {"php-fpm": {"candidate_index_digest": DIGEST, "platforms": [item]},
+                                       "nginx": {"candidate_index_digest": DIGEST}}}
+                    receipt = qualification / "unpublished-runtime-pair.json"
+                    receipt.write_text(json.dumps(pair))
+                    (qualification / "source-security.json").write_text(json.dumps(report))
+                    pin = Backend(SOURCE, DIGEST, DIGEST, scan.digest(receipt), "2026-11-25T12:00:00Z",
+                                  None, adapter.API_ARCHIVE)
+                    downloaded = (gh, 10, 1, children, qualification, publisher)
+                    acquire = "qualified_backend_source"
+                    verifier = "verify_api_candidate"
+                else:
+                    proof_root = qualification / "publisher"
+                    proof_root.mkdir()
+                    proof = tuple(proof_root / name for name in adapter.FRONTEND_PROOF)
+                    proof[-1].write_bytes(b"protected OCI index")
+                    proof[-2].write_text(json.dumps({"records": [{"workflow_run_id": "10",
+                                                                   "workflow_run_attempt": "1"}]}))
+                    (proof_root / "source-security.json").write_text(json.dumps(report))
+                    independent = publisher / "repository-security"
+                    independent.mkdir()
+                    (independent / "result.json").write_text(json.dumps(report))
+                    evaluation = qualification / "scan" / "amd64"
+                    evaluation.mkdir(parents=True)
+                    (evaluation / "evaluation.json").write_text(json.dumps({"syft": {"spdx_digest": inventory}}))
+                    pin = Frontend(scan.digest(proof[-1]), SOURCE, adapter.FRONTEND_ARCHIVE)
+                    downloaded = (gh, 10, 1, children, proof, publisher)
+                    acquire = "qualified_frontend_source"
+                    verifier = "verify_frontend_candidate"
+
+                with (patch.object(adapter, "PRIVATE", config),
+                      patch.object(adapter, acquire, return_value=nullcontext(downloaded)) as acquire_publisher,
+                      patch.object(adapter, verifier, return_value=(children, {})) as verify,
+                      patch.object(adapter, "verified_gh"),
+                      patch.object(scan, "download_publisher_artifact") as download,
+                      patch.object(scan, "admission_governance"),
+                      patch.object(scan, "reevaluation_engine", return_value=SimpleNamespace(
+                          verify_syft_association=verify_association))):
+                    with scan.component_archive(product, pin, gh, current=True, preserve=True):
+                        stored = adapter.retained_archive(product, pin)
+                        self.assertEqual(stored.stat().st_mode & 0o777, 0o700)
+                    acquire_publisher.side_effect = AssertionError("Actions is unavailable")
+                    with scan.archived_material(product, pin, gh, current=False) as restored:
+                        self.assertEqual(restored[role, platform][0], child)
+                        restored_association = restored[role, platform][1] / "association.json"
+                    verify.assert_called_once()
+                    download.assert_not_called()
+                    restored_association.write_text("{}")
+                    with self.assertRaisesRegex(ValueError, "unexpected SPDX association"):
+                        with scan.archived_material(product, pin, gh, current=False):
+                            self.fail("corrupt retained input was accepted")
+                    restored_association.unlink()
+                    with self.assertRaises(FileNotFoundError):
+                        with scan.archived_material(product, pin, gh, current=False):
+                            self.fail("partial retained input was accepted")
+                    acquire_publisher.assert_called_once()
+                    download.assert_not_called()
+
     def test_retained_qualification_cannot_authorize_activation(self):
         from fcos_lab_rollout_adapter import API_ARCHIVE, FRONTEND_ARCHIVE, verified_backend_archive, verified_frontend_archive
 
