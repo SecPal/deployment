@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+[Unit]
+Description=Apply admitted SecPal public reference image updates
+Wants=network-online.target
+After=network-online.target haproxy.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/secpal/reference-update/venv/bin/python3 -I /usr/local/libexec/secpal/reference-update/reference_update.py
+StandardInput=null
+UMask=0077
+Environment=PATH=/usr/sbin:/usr/bin HOME=/root
+StateDirectory=secpal-reference-update
+StateDirectoryMode=0700
+RuntimeDirectory=secpal-reference-oci
+RuntimeDirectoryMode=0711
+TimeoutStartSec=20min
+TimeoutStopSec=3min
+KillMode=mixed
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateDevices=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_SETGID CAP_SETUID CAP_KILL
+AmbientCapabilities=CAP_SETUID
+ReadWritePaths=/run/lock /etc/containers/systemd/users/20004 /etc/containers/systemd/users/20005
+ReadWritePaths=/var/lib/secpal-reference/config
+ReadWritePaths=/run/user/20004 /run/user/20005 /run/user/20006 /var/home/secpal-app /var/home/secpal-api /var/home/secpal-pg
+BindReadOnlyPaths=/usr/local/libexec/secpal/reference-update/node/bin:/usr/local/bin
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes

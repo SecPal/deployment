@@ -179,8 +179,7 @@ Standalone `--repository-root` is the supported invocation for this explicit
 operator-run CLI. Managed API dispatch additionally requires its actual
 maintained managed scope and `--managed-worktree deployment=ABSOLUTE_ACTIVE_WORKTREE`.
 Do not invent a scope, substitute another clone, or use self-check/baseline-only
-success as dispatch admission. No Polyscope configuration or runtime change
-is required for this standalone procedure.
+success as dispatch admission.
 
 ### Completeness, diagnostics and authoritative owners
 

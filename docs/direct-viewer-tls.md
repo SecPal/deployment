@@ -281,5 +281,6 @@ binding. New live host installation, SELinux policy or firewall changes require
 separate applicable authority. Optional public qualification must name exact
 server IDs, DNS A/AAAA records, ports, CA directory, public challenge-source
 reachability, duration, rate limits, private-state retention and rollback. This
-source delivery changes no reference host, DNS or provider firewall, and never
-targets the protected `app.secpal.dev` / `api.secpal.dev` Polyscope server.
+source delivery changes no reference host, DNS or provider firewall. The
+protected reference endpoints `app.secpal.dev` and `api.secpal.dev` are excluded
+from qualification.

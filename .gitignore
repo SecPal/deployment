@@ -49,4 +49,3 @@ Thumbs.db
 
 # Local agent and workspace state
 .context/
-.polyscope*

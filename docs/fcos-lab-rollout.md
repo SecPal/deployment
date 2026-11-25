@@ -71,6 +71,27 @@ remains on major 18 and its approved image layout. CRS also needs ruleset
 authenticity. Version proposals use immutable publisher identities. SecPal's
 product SemVer release decisions remain with the product publishers.
 
+For SecPal-owned Lab and reference targets, protected automation may
+select technically qualified, unpublished candidates from the exact current
+protected product main. The existing discovery command can verify the signed
+pre-registry records with its installed, pinned CLI and the repository's
+scoped Actions read credentials:
+
+```bash
+python3 scripts/fcos_lab_discovery.py --qualified frontend --gh /reviewed/tools/gh
+python3 scripts/fcos_lab_discovery.py --qualified api --gh /reviewed/tools/gh
+```
+
+The reported index, platform digests and signed receipt identify immutable
+inputs to the same deployment procedure. Discovery conveys neither target
+admission nor official release acceptance. Compare equivalent current
+scanner evidence against the installed predecessor under the existing
+deployment lock. Apply target-specific exposure and compatibility requirements,
+including the public reference's exposure. The controller still honors the
+current protected Lab pins and the migration-free API compatibility contract.
+See [deployment #93](https://github.com/SecPal/deployment/issues/93) for that
+scope and the separate Managed Hosting contract.
+
 ## Migration-free release lanes
 
 The adapter accepts the lab-only `LAB_FRONTEND_DIGEST` and
@@ -82,6 +103,20 @@ Health checks still exercise PostgreSQL, the application and inspection
 services on every host. This keeps those services running during frontend
 activation and makes the previous frontend a compatible rollback target.
 Qualification of other components can extend these same five operations.
+
+The timer's service runs the coordinator with `--component-updates`. Before
+staging or resuming a journaled release, the coordinator requires the
+accepted and candidate fingerprints to match protected source. Each activation
+may change one component. The frontend lane keeps the backend pins intact.
+The API lane requires an exact archived pair and native compatibility record
+while keeping the frontend pins intact. Neither lane permits fixture,
+migration or infrastructure changes.
+The index attestation identifies the exact Frontend publisher run and
+attempt. The service requires successful completion of that attempt and
+its final publication gate before contacting any guest. That publisher
+gate owns the scanner, native runtime, SBOM and attestation checks.
+Missing evidence or a rejected change fails the service and preserves
+the journal for operator review.
 
 The backend lane uses a complete reviewed set of lab-only pins in
 `scripts/integration_runtime_contract.py`: `LAB_API_SOURCE_COMMIT`,
@@ -143,6 +178,27 @@ schema and ledger. Use separate storage, slot-local credentials and queues,
 and the same restricted runtime grants, including read-only access to the
 migration ledger. Test the exact signed predecessor and candidate pairs.
 
+Capture the enrolled schema with `pg_dump --schema-only --no-owner
+--no-privileges` and the CHECK catalog with
+`psql -XqAt -v ON_ERROR_STOP=1 -f scripts/fcos-lab-check-catalog.sql`.
+Use the same native PostgreSQL 18 version in the disposable restore. Capture
+both inputs while the enrolled schema and migration ledger are stable, then
+recheck their identities after the dump. Run
+`scripts/fcos-lab-compare-restored-schema.sh` as the rehearsal Podman user
+with the pinned evidence architecture validator, those two files and the
+disposable database container name. Use the
+`secpal-update-proof-<id>` name, `io.secpal.fcos.schema-rehearsal=true` label
+and `--network none` for this schema-only check.
+
+The comparison uses PostgreSQL's CHECK catalog for constraint properties,
+column types and collations, and named dependency identities. PostgreSQL
+replays the complete enrolled DDL in a second database in the disposable
+cluster. The complete dumps of the replay and the restore must then agree.
+This covers SQL spellings, casts, operators, functions and non-CHECK schema
+objects without excluding CHECK clauses from the comparison. Record the
+enrolled schema hash returned by the tool in the compatibility record.
+Preserve the independent application, role and migration-ledger checks.
+
 On the disposable database, run the role helper's `prepare` operation
 before starting PostgreSQL. Apply its reviewed `grant-role-contract` SQL to
 the empty database, restore using `pg_restore --role=secpal_owner --no-owner
@@ -180,17 +236,25 @@ the exact test coverage and the restored schema and ledger. Do not publish
 test data or credentials. Add the following keys to
 `config/quadlet/fcos-lab-rollout/backend-compatibility.json`:
 
-| Key                               | Required value                                                                                                                                                                                     |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema_version`                  | `1`                                                                                                                                                                                                |
-| `previous_pair`, `candidate_pair` | Exact signed OCI pair digests                                                                                                                                                                      |
-| `schema`                          | SHA-256 of `pg_dump --schema-only --no-owner --no-privileges` against the rehearsal database, dropping lines beginning with PostgreSQL's `\restrict` and `\unrestrict` markers followed by a space |
-| `ledger`                          | SHA-256 of the unaligned single SQL result plus its terminating newline from `SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY id), '[]'::jsonb) FROM public.migrations AS m`                        |
-| `forward`                         | Object with exactly `linux/amd64` and `linux/arm64`, each referencing the distinct private successful rehearsal record as a `sha256:…` digest                                                      |
-| `rollback`                        | `null` or the same two-platform map referencing separate successful predecessor rehearsal records                                                                                                  |
+| Key                               | Required value                                                                                                                                                                                                          |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema_version`                  | `1`                                                                                                                                                                                                                     |
+| `previous_pair`, `candidate_pair` | Exact signed OCI pair digests                                                                                                                                                                                           |
+| `schema`                          | SHA-256 of the enrolled database's exact `pg_dump --schema-only --no-owner --no-privileges` output, with PostgreSQL's `\restrict` and `\unrestrict` lines removed, after verified equivalence with the isolated restore |
+| `ledger`                          | SHA-256 of the unaligned single SQL result plus its terminating newline from `SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY id), '[]'::jsonb) FROM public.migrations AS m`                                             |
+| `forward`                         | Object with exactly `linux/amd64` and `linux/arm64`, each referencing the distinct private successful rehearsal record as a `sha256:…` digest                                                                           |
+| `rollback`                        | `null` or the same two-platform map referencing separate successful predecessor rehearsal records                                                                                                                       |
 
 Set `LAB_API_COMPATIBILITY_SHA256` to the lowercase SHA-256 of the exact JSON
 file bytes. This binds the reviewed record to the existing release fingerprint.
+A technically qualified unpublished API pair can use the same preparation
+operation when the protected lab contract sets
+`LAB_API_TRANSPORT = "oci-archive-v1"`. The pair pin then binds the exact
+signed qualification receipt. The controller downloads the authenticated
+Actions archives for that invocation. Each guest verifies the receipt and
+current source-security report, imports only the exact native children, and
+applies the same compatibility, runtime inspection and activation checks.
+
 Every guest verifies the file hash and pair and compares the schema and
 ledger to its live database before staging. Missing or failed rehearsals
 leave the candidate ineligible. The guest also continues to snapshot
@@ -220,6 +284,26 @@ checks the requested revision and fingerprint against protected main, independen
 verifies the supplied publisher bundle and immutable index with the same pinned
 verifier, checks the native child, pulls it as the rootless runtime user,
 and validates the affected Quadlets and image drop-ins in isolation.
+
+An unpublished Frontend candidate can be staged with the same native archive
+transport when the protected Lab contract selects
+`LAB_FRONTEND_TRANSPORT = "oci-archive-v1"`. Its signed qualification
+binds the verified index and native descriptors. The controller checks the
+independent repository security job and both platform records before preparing
+the guest. The guest verifies the signed qualification, the exact index and
+the native import before accepting the prepared record.
+
+The frontend lane requires the unchanged normalized
+Grype and Trivy evaluations in `config/quadlet/fcos-lab-rollout/frontend-security/`
+from the protected candidate revision. For each native architecture it
+uses `ARCH-installed.json` and `ARCH-candidate.json`. Both files must
+refer to the exact native subjects with equivalent current scanner inputs.
+The controller calls the existing `component-update-v1` policy under the
+rollout lock after observing the guest and immediately before switching it.
+If the comparison evidence expires while a candidate is pending, the
+controller can use refreshed evaluations from a descendant on protected main
+with the identical release fingerprint. This does not change the pending
+candidate or admit different native subjects for the remaining guests.
 
 | Operation  | Guest and controller behavior                                                                                                                                                                                               |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -326,6 +410,13 @@ before installing the exact reviewed source revision.
    restrict,from="<verified controller WireGuard source IPv4>/32",command="/usr/local/libexec/secpal-fcos-lab-rollout/guest --ssh-entry" ssh-ed25519 <dedicated-controller-public-key>
    ```
 
+   The frontend switch mounts a read-only source offer generated from the
+   verified frontend commit and the adopted OpenAPI revision recorded in
+   [Frontend #1788](https://github.com/SecPal/frontend/pull/1788). The backend
+   switch renders release metadata from the exact selected PHP-FPM image
+   revision in its existing pool configuration. Each switch and rollback
+   regenerates only the corresponding component metadata.
+
    Verify `sshd -T` admits public keys from the configured authorized-keys
    file. Through the dedicated key, verify an exact read-back of the
    enrolled baseline and rejection of an explicit SSH command, TCP
@@ -334,6 +425,50 @@ before installing the exact reviewed source revision.
 secpal-lab-rollout` to verify the exact no-argument rule and no other
    privilege. Verify the dedicated account cannot modify the key, policy,
    journal, helper or Quadlets. The existing recovery key remains independent.
+
+### Archived component proposals
+
+The existing controller can use `--archive-proposals /absolute/state/scanners`
+with `--component-updates`. Supply `grype.tar.gz` and `trivy.tar.gz`
+from the exact Linux AMD64 release assets in the pinned governance
+reevaluation workflow. The controller verifies the release hashes before
+running the scanners. The directory should be private to the existing
+controller and have room for the scanner databases.
+
+After reconciliation, the controller verifies all three installed fingerprints
+against the accepted journal. It discovers qualified archives from protected
+product main, excludes an identical or non-descendant identity and scans native
+predecessor and candidate subjects against the same current database snapshots.
+The candidate still needs independent source-security acceptance. An API
+proposal also needs the existing native compatibility record for the exact
+predecessor and candidate pair. Keep the candidate record in
+`backend-compatibility-candidate.json` beside the current record. Missing
+evidence leaves that component deferred.
+
+Before its first guest preparation, the controller retains the qualified
+publisher files and both native OCI layouts, including their SPDX inventories
+and associations. Entries live in the existing private rollout configuration
+directory under `archives/api-<pair-receipt-sha256>` and
+`archives/frontend-<index-sha256>`. Seed entries for the currently accepted
+components from their exact verified publisher inputs before upgrading an
+existing controller. The existing encrypted controller backup includes this
+directory. Restore the required entries into an isolated directory and verify
+the signatures, native layout and SPDX associations independently of Actions
+downloads before relying on the backup.
+
+Historical predecessor verification uses the retained inputs through the
+existing publisher verifier. A missing or malformed retained entry stops the
+comparison. Candidates still need current source admission and current matched
+vulnerability evaluations before the existing activation checks can run.
+Keep the accepted release and any separately qualified recovery targets in
+the backup scope regardless of the Actions retention deadline.
+
+The existing GitHub-signed proposal transaction changes the component pins and
+comparison documents. An API proposal copies the exact candidate record into the
+active path in the same commit as its hash and runtime pins. The controller requests normal protected auto-merge
+for the exact proposal head. The rollout path rechecks exact predecessors and
+the component decision under its lock before activation. An open proposal defers
+further proposals until its disposition.
 
 ## Controller setup and qualification
 
@@ -349,8 +484,18 @@ install -d -m 0700 "$rollout_lib" "$rollout_config" "$rollout_state"
 install -d "$HOME/.config/systemd/user"
 install -m 0700 scripts/fcos_lab_rollout_adapter.py "$rollout_lib/"
 install -m 0600 scripts/fcos_lab_rollout.py scripts/fcos-lab-release-paths.txt \
+  scripts/fcos_lab_discovery.py scripts/fcos_lab_proposal.py scripts/fcos_lab_scan.py \
   scripts/fetch-oci-attestation.py scripts/integration_runtime_contract.py \
   scripts/image_attestation_runtime.py scripts/fcos-lab-gh-binary-sha256.txt "$rollout_lib/"
+git clone --no-checkout https://github.com/SecPal/.github.git "$rollout_lib/governance"
+policy=56c9ccc92c206edfaaf64c4b7ba99d02e4a64189
+git -C "$rollout_lib/governance" checkout --detach "$policy"
+test "$(git -C "$rollout_lib/governance" rev-parse HEAD)" = "$policy"
+test -z "$(git -C "$rollout_lib/governance" status --porcelain --untracked-files=all)"
+python3 -m venv "$rollout_lib/policy-venv"
+"$rollout_lib/policy-venv/bin/python3" -m pip install --only-binary=:all: \
+  --requirement "$rollout_lib/governance/requirements/requirements.txt"
+"$rollout_lib/policy-venv/bin/python3" -I -c 'import jsonschema, referencing'
 install -m 0644 config/quadlet/fcos-lab-rollout/secpal-fcos-lab-rollout.{service,timer} \
   "$HOME/.config/systemd/user/"
 ssh-keygen -q -t ed25519 -N "" -f "$rollout_config/rollout_ed25519"
@@ -570,12 +715,18 @@ available.
 
 ## FCOS operations handoff
 
-| Status                       | Scope                                                                                                                                                                                                                                                         |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| LIVE QUALIFIED               | Retained multiarch FCOS installs, direct IPv4/IPv6 WireGuard and pinned SSH, SELinux and rootless Podman/Quadlet. Native Stable staging and controlled FCOS 45 activation passed on all three lab hosts. The frontend lab timer has delivered a real release. |
-| CONFIGURED / READY           | Zincati periodic maintenance on the current independently restartable lab assignments. The existing lab backend adapter, signed-pair admission and proposals.                                                                                                 |
-| NOT YET QUALIFIED            | First unattended Zincati reboot, first live changed-code backend release, independent off-host restoration of the development host and its public endpoints, and public application automatic deployment on FCOS.                                             |
-| LATER PRODUCTION REQUIREMENT | Complete production credential custody, data recovery, activated application update/migration/rollback and any coordination required by the actual topology.                                                                                                  |
+| Status                       | Scope                                                                                                                                                                                                                                                                               |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LIVE QUALIFIED               | Retained multiarch FCOS installs, direct IPv4/IPv6 WireGuard and pinned SSH, SELinux and rootless Podman/Quadlet. Native Stable staging and controlled FCOS 45 activation passed on all three lab hosts. The lab timer has delivered real frontend and migration-free API releases. |
+| CONFIGURED / READY           | Zincati periodic maintenance on the current independently restartable lab assignments. The existing lab backend adapter, signed-pair admission and proposals.                                                                                                                       |
+| NOT YET QUALIFIED            | First unattended Zincati reboot, independent off-host restoration of the development host and its public endpoints, and public application automatic deployment on FCOS.                                                                                                            |
+| LATER PRODUCTION REQUIREMENT | Complete production credential custody, data recovery, activated application update/migration/rollback and any coordination required by the actual topology.                                                                                                                        |
+
+The first migration-free API rollout selected source `59261efc38eb` in
+[deployment #496](https://github.com/SecPal/deployment/pull/496). The existing
+timer activated the exact signed pair sequentially on CX23, CX33 and CAX21.
+PostgreSQL cluster, volume and migration ledger read-back passed on all
+three hosts, along with HTTPS, browser login and organisation read-back.
 
 The current lab assignments use separate PostgreSQL clusters and local
 Podman networks. Each host moved from FCOS `44.20261023.3.1` to
@@ -634,7 +785,7 @@ Keep root and operator credentials out of Git and out of Codex output.
 | Source and release identity             | Protected Git refs and verified commits for deployment, API, frontend and governance. Export any unpublished work, admitted release identities, public access inventory and nonversioned operational instructions to external custody.                                                                                                                        |
 | Provider, public DNS and TLS            | Independently accessible provider Console/Rescue account, MFA and break-glass material, exact resource identity and protections, reviewed firewall and DNS bindings, TLS renewal authority. Install the broker's protected configuration and scoped credential through the independent administrator.                                                         |
 | Management connectivity                 | Root-owned NetworkManager/WireGuard configuration for both the hub link and direct test link, exact peer reservations, last applied generations, recovery SSH keys and independently pinned public host keys. Retain key continuity for unchanged machines under existing custody. Prepare authorized replacement for the reinstalled host's keys.            |
-| Accounts and local operations           | User IDs and mappings, systemd units and settings, Codex/maintenance lease boundaries, installer executables and constrained administrative policy. The administrator exports any local material that cannot be reproduced from reviewed Git. Preserve separate Codex, Polyscope and application accounts.                                                    |
+| Accounts and local operations           | User IDs and mappings, systemd units and settings, Codex/maintenance lease boundaries, installer executables and constrained administrative policy. The administrator exports any local material that cannot be reproduced from reviewed Git. Preserve the separation of development, edge and application service accounts.                                  |
 | Rollout controller                      | Protected `~/.config/secpal-fcos-lab-rollout/` and `~/.local/state/secpal-fcos-lab-rollout/`, with host pins, scoped SSH credential, witnesses and accepted journal. Record the exact reviewed installed helper and adapter. Keep service definitions and verifier pins from Git.                                                                             |
 | Public application and development data | A consistent off-host copy of PostgreSQL data and roles and the associated private and public file trees, exact runtime and edge configuration, and independently recoverable application encryption/decryption and other durable keys. Capture developer state required after disk loss. Verify the recovery metadata and read-back from a separate machine. |
 
