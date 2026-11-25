@@ -426,6 +426,31 @@ class GuestContract(unittest.TestCase):
     def setUp(self):
         self.guest = Path(__file__).resolve().parents[1] / "scripts/fcos-lab-rollout-guest.sh"
 
+    def test_guest_release_metadata_binds_exact_sources(self):
+        source = "a" * 40
+        command = ('source "$1"; render_source_offer "$2"; '
+                   'render_frontend_dropin "$3"')
+        result = subprocess.run(["bash", "-c", command, "test", self.guest, source,
+                                 "ghcr.io/secpal/frontend@" + DIGEST], capture_output=True,
+                                text=True, check=True)
+        manifest, dropin = result.stdout.split("\n", 1)
+        self.assertEqual(json.loads(manifest), {"version": 1, "repositories": {
+            "frontend": {"sourceUrl": "https://codeload.github.com/SecPal/frontend/tar.gz/" + source},
+            "contracts": {"sourceUrl": "https://codeload.github.com/SecPal/contracts/tar.gz/"
+                                       "f8771b74d887b84b84dcc94e2405df7b47222466"},
+        }})
+        self.assertIn("target=/usr/share/nginx/html/source-offer.json,ro=true", dropin)
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "fpm.conf"
+            original = "[secpal]\nenv[SESSION_DOMAIN]=$SESSION_DOMAIN\n"
+            config.write_text(original + "env[BOOTSTRAP_API_RELEASE_VERSION]=previous\n")
+            command = 'source "$1"; render_api_release "$2" "$3"'
+            command_args = ["bash", "-c", command, "test", self.guest, config]
+            output = subprocess.check_output(command_args + [source], text=True)
+            self.assertEqual(output, original + f"env[BOOTSTRAP_API_RELEASE_VERSION]=git.{source}\n"
+                             f"env[BOOTSTRAP_API_RELEASE_SOURCE_URL]=https://codeload.github.com/SecPal/api/tar.gz/{source}\n")
+            self.assertNotEqual(subprocess.run(command_args + ["main"], capture_output=True).returncode, 0)
+
     def test_backend_transition_requires_exact_forward_evidence_and_separate_rollback_evidence(self):
         previous = "sha256:" + "1" * 64
         candidate = "sha256:" + "2" * 64
@@ -676,8 +701,10 @@ class GuestContract(unittest.TestCase):
             'backend_role_ref() { printf "ghcr.io/secpal/api@%s\n" "$image_digest"; }; '
             'untouched_instances() { printf "unrelated identity\n"; }; '
             'matches() { return 0; }; singleton_roles() { return 0; }; check_installed() { return 0; }; '
+            'write_release_asset() { [[ "$3" == "$fpm_pool" && "$4" =~ ^$sha$ ]] && printf "metadata\\n"; }; '
             'runtime() { case "$*" in '
             '"podman image exists "*) return 0;; '
+            '"podman image inspect "*) printf "%040d\\n" 1;; '
             '"systemctl --user show "*"-migrate.service") printf "%s\n" "$migration";; '
             '"systemctl --user show "*) printf "inactive\n";; '
             '"systemctl --user "*) printf "%s\n" "$*";; '
@@ -706,6 +733,7 @@ class GuestContract(unittest.TestCase):
         self.assertEqual(result.stdout.splitlines(), [
             f"systemctl --user --job-mode=ignore-requirements stop {slot}-api.service",
             f"systemctl --user --job-mode=ignore-requirements stop {slot}-php-fpm.service {background}",
+            "metadata",
             "systemctl --user daemon-reload",
             f"systemctl --user start {slot}-php-fpm.service",
             f"systemctl --user start {slot}-api.service",

@@ -15,6 +15,10 @@ units=/etc/containers/systemd/users/20000
 security_units=/etc/containers/systemd/users/20001
 assets=/var/lib/secpal-application-poc/haproxy01
 frontend=$slot-frontend
+source_offer=$assets/assets/source-offer.json
+fpm_pool=$assets/assets/zz-fpm-session.conf
+# Frontend #1788 records the exact OpenAPI source used for these deployments.
+contracts_source=f8771b74d887b84b84dcc94e2405df7b47222466
 dropin_dir=$units/$frontend.container.d
 dropin=$dropin_dir/90-rollout.conf
 image=ghcr.io/secpal/frontend
@@ -215,6 +219,44 @@ backend_role() {
 
 render_dropin() { printf '[Container]\nImage=%s\n' "$1"; }
 
+render_frontend_dropin() {
+    render_dropin "$1"
+    printf 'Mount=type=bind,source=%s,target=/usr/share/nginx/html/source-offer.json,ro=true\n' "$source_offer"
+}
+
+render_source_offer() {
+    [[ $1 =~ ^$sha$ ]] || return 1
+    jq -cn --arg frontend "https://codeload.github.com/SecPal/frontend/tar.gz/$1" \
+        --arg contracts "https://codeload.github.com/SecPal/contracts/tar.gz/$contracts_source" \
+        '{version:1,repositories:{frontend:{sourceUrl:$frontend},contracts:{sourceUrl:$contracts}}}'
+}
+
+render_api_release() {
+    local pool=$1 source=$2
+    [[ $source =~ ^$sha$ && $(grep -c '^\[' "$pool") == 1 && $(grep -cx '\[secpal\]' "$pool") == 1 ]] || return 1
+    sed -E '/^env\[BOOTSTRAP_API_RELEASE_(VERSION|SOURCE_URL)\][[:blank:]]*=/d' "$pool" || return 1
+    printf 'env[BOOTSTRAP_API_RELEASE_VERSION]=git.%s\nenv[BOOTSTRAP_API_RELEASE_SOURCE_URL]=https://codeload.github.com/SecPal/api/tar.gz/%s\n' \
+        "$source" "$source"
+}
+
+release_asset() {
+    [[ -f $1 && ! -L $1 && $(stat -c '%u:%g:%a' "$1") == "0:0:644" ]]
+}
+
+write_release_asset() {
+    local path=$1 temp
+    shift
+    [[ ! -e $path && ! -L $path ]] || release_asset "$path" || return 1
+    trusted_directory "${path%/*}" '0 0 755' && release_asset "$fpm_pool" || return 1
+    temp=$(mktemp --tmpdir="${path%/*}" .release-metadata.XXXXXXXX) || return 1
+    if ! "$@" > "$temp" || ! chmod 0644 "$temp" || ! chcon --reference="$fpm_pool" "$temp" ||
+            ! sync -f "$temp" || ! mv -T -- "$temp" "$path"; then
+        rm -f -- "$temp"
+        return 1
+    fi
+    sync -f "${path%/*}"
+}
+
 backend_matches() {
     local record=$1 role override component ref config expected actual
     for role in "${backend_roles[@]}"; do
@@ -237,13 +279,19 @@ backend_matches() {
 }
 
 matches() {
-    local record=$1 ref config kind observed
+    local record=$1 ref config kind observed selected source
     ref=$(jq -er .ref <<< "$record") && config=$(jq -er .config <<< "$record") &&
         kind=$(jq -er .kind <<< "$record") || return 1
     if [[ $kind == base ]]; then
         [[ ! -e $dropin && ! -L $dropin ]] || return 1
     else
-        [[ -f $dropin && ! -L $dropin ]] && cmp -s "$dropin" <(render_dropin "$ref") || return 1
+        release_asset "$dropin" || return 1
+        if ! cmp -s "$dropin" <(render_dropin "$ref"); then
+            cmp -s "$dropin" <(render_frontend_dropin "$ref") && release_asset "$source_offer" || return 1
+            selected=$(jq -er .revision <<< "$record") &&
+                source=$(frontend_field "$selected" FRONTEND_SOURCE_COMMIT "$sha") &&
+                cmp -s "$source_offer" <(render_source_offer "$source") || return 1
+        fi
     fi
     observed=$(inspect_role frontend) || return 1
     [[ $observed == "$ref ${ref##*@} $config true false true" ]] && backend_matches "$record"
@@ -272,7 +320,7 @@ validate_quadlet() {
     local ref=$1
     mkdir -p "$scratch/quadlets/$frontend.container.d" || return 1
     cp -- "$units/$frontend.container" "$units/$slot-edge.network" "$scratch/quadlets/" || return 1
-    render_dropin "$ref" > "$scratch/quadlets/$frontend.container.d/90-rollout.conf" || return 1
+    render_frontend_dropin "$ref" > "$scratch/quadlets/$frontend.container.d/90-rollout.conf" || return 1
     # The generator receives only non-secret Quadlet definitions.
     chmod 0755 "$scratch" "$scratch/quadlets" "$scratch/quadlets/$frontend.container.d" || return 1
     chmod 0644 "$scratch/quadlets/$frontend.container" "$scratch/quadlets/$slot-edge.network" \
@@ -296,13 +344,16 @@ restart_frontend() {
 }
 
 switch_image() {
-    local record=$1 ref kind
+    local record=$1 ref kind selected source
     ref=$(jq -er .ref <<< "$record") && kind=$(jq -er .kind <<< "$record") || return 1
     runtime podman image exists "$ref" || return 1
     if [[ $kind == base ]]; then
         rm -f -- "$dropin" || return 1
     else
-        render_dropin "$ref" > "$dropin_dir/.next" &&
+        selected=$(jq -er .revision <<< "$record") &&
+            source=$(frontend_field "$selected" FRONTEND_SOURCE_COMMIT "$sha") &&
+            write_release_asset "$source_offer" render_source_offer "$source" &&
+            render_frontend_dropin "$ref" > "$dropin_dir/.next" &&
             chmod 0644 "$dropin_dir/.next" &&
             mv -T -- "$dropin_dir/.next" "$dropin" || return 1
     fi
@@ -787,7 +838,7 @@ backend_running() {
 }
 
 switch_backend() {
-    local record=$1 role ref service untouched expires
+    local record=$1 role ref service untouched expires fpm_ref source
     local -a services=()
     if jq -e 'has("backend")' <<< "$record" >/dev/null; then
         expires=$(jq -er .backend.expires <<< "$record") && backend_expiry "$expires" || return 1
@@ -798,6 +849,9 @@ switch_backend() {
             [[ $ref =~ ^"$api_image@"$digest$ ]] &&
             backend_step native-image runtime podman image exists "$ref" || return 1
     done
+    fpm_ref=$(backend_role_ref "$record" php-fpm) &&
+        source=$(runtime podman image inspect --format '{{index .Labels "org.opencontainers.image.revision"}}' "$fpm_ref") &&
+        [[ $source =~ ^$sha$ ]] || return 1
     backend_step database-snapshot migrations_idle || return 1
     untouched=$(backend_step running-identities untouched_instances) &&
         backend_step stop-http runtime systemctl --user --job-mode=ignore-requirements stop "$slot-api.service" &&
@@ -806,6 +860,7 @@ switch_backend() {
         [[ $(runtime systemctl --user show --value -p ActiveState "$service") == inactive ]] || return 1
     done
     backend_step install-images install_backend_refs "$record" &&
+        backend_step install-images write_release_asset "$fpm_pool" render_api_release "$fpm_pool" "$source" &&
         backend_step reload-units runtime systemctl --user daemon-reload &&
         backend_step start-fpm runtime systemctl --user start "$slot-php-fpm.service" &&
         backend_step start-http runtime systemctl --user start "$slot-api.service" &&
