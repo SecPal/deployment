@@ -153,14 +153,11 @@ def compatible(repo, release, before, after, database):
         raise ValueError("invalid native API qualification identities")
 
 
-class RecoveryUnavailable(ValueError):
-    """The canonical reference recovery authority is not available."""
-
-
-def require_recovery():
-    # #109 owns Recovery Set publication and verification. An image-only
-    # rollback rehearsal is not a substitute for that authority.
-    raise RecoveryUnavailable("missing current verified Recovery Set under deployment #109")
+def validate_enrollment(config):
+    if (set(config) != {"baseline", "exposure", "data_class"} or
+            config["data_class"] != "secpal-owned-synthetic" or
+            re.fullmatch(SHA, config["baseline"]) is None):
+        raise ValueError("reference image-only update requires an enrolled synthetic target")
 
 
 def lane(repo, latest, target, baseline, posture, progress):
@@ -258,9 +255,6 @@ def lane(repo, latest, target, baseline, posture, progress):
             record(saved, {"revision": latest.revision, "runtime": {role: asdict(value) for role, value in stages.items()}})
 
         ready()
-        progress[0] = "comparison"
-        require_recovery()
-        progress[0] = "activation"
         apply(target, active, stages, archives, ready, finish, rollback_allowed)
         print(f"reference-update.{target}: activated {desired.source[:12]}", flush=True)
 
@@ -280,8 +274,7 @@ def main():
     publisher.fetch_publisher_zip = publisher_zip
     try:
         config = root_json(CONFIG)
-        if set(config) != {"baseline", "exposure"} or re.fullmatch(SHA, config["baseline"]) is None:
-            raise ValueError("invalid reference configuration")
+        validate_enrollment(config)
         fd = os.open(LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "rb+") as lock:
             lock_info = os.fstat(lock.fileno())
@@ -301,9 +294,6 @@ def main():
                 progress = ["observation"]
                 try:
                     lane(repo, latest, product, config["baseline"], config["exposure"], progress)
-                except RecoveryUnavailable as error:
-                    print(f"reference-update.comparison: {product}: {error}", file=sys.stderr, flush=True)
-                    result = 1
                 except ERRORS as error:
                     print(f"reference-update.{progress[0]}: {product}: {type(error).__name__}: "
                           "reference admission or operation failed", file=sys.stderr, flush=True)

@@ -5,8 +5,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Public reference updates
 
-Activation remains a draft until the existing Deployment #93 requirement for
-a current, verified Recovery Set under #109 can be checked for this target.
+This service is limited to the operator-enrolled synthetic data on the two
+SecPal-owned public reference hosts. It performs an image-only switch with a
+verified predecessor. It never migrates, restores, initializes, or moves any
+persistent state. A customer installation, any target with real customer data,
+or a change to PostgreSQL, private objects, or key generations requires its
+own recovery authority, including the verified Recovery Set required by
+[Deployment #109](https://github.com/SecPal/deployment/issues/109).
 
 `secpal-reference-update.timer` runs the root-owned reference transaction
 every ten minutes. The service takes its candidate pins and their
@@ -25,13 +30,21 @@ observed ZIP digest and existing signed publisher evidence before import.
 
 The operator enrolls the previously accepted deployment revision and
 the live exposure fingerprint in the root-owned
-`/etc/secpal/reference-update.json`. The root-only
+`/etc/secpal/reference-update.json`, with `data_class` explicitly set to
+`secpal-owned-synthetic`. Confirm the target's data classification and the
+applicable cross-host logical restore before enrollment. Use the existing
+[logical restore procedure](fcos-application-poc.md#cross-host-logical-restore)
+with the reference database, including any data or file dependencies relevant
+to that target. A successful restore exercise is scoped to the data exercised. The root-only
 `/etc/secpal/reference-update-witness` holds the enrolled synthetic account
 credential for the existing public API tests. Before replacing pins, the service
 rechecks the installed runtime, the actual public route and loopback
 listeners, both protected source heads, and the exact comparison report.
 The API also requires the enrolled PostgreSQL schema and migration
-ledger and native forward and reverse evidence. The transaction stages
+ledger and native forward and reverse evidence. The previous image must
+remain admissible with the live schema. The browser-facing check uses the
+reference's same origin, verifies host-only cookies, and exercises login,
+organization access, and logout. The transaction stages
 and checks the Quadlets before switching, then verifies the public
 service and the unchanged database. A failed switch restores the
 previous configuration when its authenticated rollback remains valid.

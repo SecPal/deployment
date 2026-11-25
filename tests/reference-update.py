@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from reference_update import Pin, planned_change
+from reference_update import Pin, planned_change, validate_enrollment
 from reference_runtime import lanepaths, render_pin
 
 
@@ -22,6 +22,17 @@ class ReferenceContract(unittest.TestCase):
         self.assertEqual(planned_change(previous, offered), offered)
         with self.assertRaises(ValueError):
             planned_change(previous, Pin(previous.source, offered.identity))
+
+    def test_reference_scope_requires_explicit_synthetic_enrollment(self):
+        valid = {"baseline": "a" * 40, "exposure": {}, "data_class": "secpal-owned-synthetic"}
+        validate_enrollment(valid)
+        for invalid in (
+            {"baseline": valid["baseline"], "exposure": {}},
+            {**valid, "data_class": "production"},
+            {**valid, "data_class": "customer-test"},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                validate_enrollment(invalid)
 
     def test_only_exact_running_image_is_replaced(self):
         old = "ghcr.io/secpal/api@sha256:" + "a" * 64

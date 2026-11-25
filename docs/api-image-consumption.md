@@ -48,9 +48,14 @@ Integration uses the existing disposable PostgreSQL 18 fixture with TLS/SCRAM
 and the unchanged production PHP secret bootstrap. No application secrets are
 exported by a custom runtime entrypoint or mounted into Nginx.
 
-Source integration is not activation authority. A later switch still requires
-a valid Recovery Set, actual schema/data compatibility, migration/deployment
-locks, current OCI/security evidence and separately authorized activation.
+Source integration alone does not authorize activation. A later switch requires
+the applicable recovery evidence, actual schema/data compatibility,
+migration/deployment locks, current OCI/security evidence and authorized
+activation. Production, customer data and state-changing work require the
+verified Recovery Set under [deployment #109][recovery-set]. The
+[synthetic public reference contract](public-reference-updates.md) applies
+only to the enrolled, migration-free image switch and the exact verified
+rollback predecessor.
 FrankenPHP single-image releases are retired from SecPal-owned deployment,
 rollback and recovery. Use an accepted PHP-FPM/Nginx pair and verify
 compatibility with the enrolled schema, data and recovery point under
@@ -206,6 +211,7 @@ fresh admission before it can be selected. Tags, unchecked environment
 variables and manual tag changes are never rollback inputs.
 
 [recovery]: https://github.com/SecPal/deployment/issues/93#issuecomment-7126107302
+[recovery-set]: https://github.com/SecPal/deployment/issues/109
 
 ## Scope status
 

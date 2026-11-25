@@ -227,36 +227,41 @@ def public_accept(*, authenticated=False, target=None):
             request(FRONT, asset.decode(), 200)
     if target == "frontend":
         _, config = request(FRONT, "/runtime-config.js", 200)
-        if re.findall(rb'apiBaseUrl:\s*"([^"]+)"', config) != [API.encode()]:
+        if re.findall(rb'apiBaseUrl:\s*"([^"]+)"', config) != [FRONT.encode()]:
             raise ValueError("reference frontend API origin differs")
-        return
-    request(API, "/health/ready", 200)
-    for origin in (FRONT, "https://other.example"):
-        headers, _ = request(API, "/v1/auth/login", 204, method="OPTIONS",
-                             headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
-        if headers.get("Access-Control-Allow-Origin") != (FRONT if origin == FRONT else None):
-            raise ValueError("reference CORS policy differs")
+    if target != "frontend":
+        request(API, "/health/ready", 200)
+        for origin in (FRONT, "https://other.example"):
+            headers, _ = request(API, "/v1/auth/login", 204, method="OPTIONS",
+                                 headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
+            if headers.get("Access-Control-Allow-Origin") != (FRONT if origin == FRONT else None):
+                raise ValueError("reference CORS policy differs")
     if not authenticated:
         return
-    request(API, "/v1/me", 401)
-    request(API, "/sanctum/csrf-cookie", 204)
-    token, = [unquote(cookie.value) for cookie in cookies if cookie.name == "XSRF-TOKEN"]
+    request(FRONT, "/v1/me", 401)
+    request(FRONT, "/sanctum/csrf-cookie", 204)
+    auth_cookies = [cookie for cookie in cookies if cookie.name in {"XSRF-TOKEN", "secpal-session"}]
+    if ({cookie.name for cookie in auth_cookies} != {"XSRF-TOKEN", "secpal-session"} or
+            any(cookie.domain != "app.secpal.dev" or cookie.domain_specified or not cookie.secure or
+                cookie.path != "/" for cookie in auth_cookies)):
+        raise ValueError("reference browser cookies are not host-only and secure")
+    token, = [unquote(cookie.value) for cookie in auth_cookies if cookie.name == "XSRF-TOKEN"]
     headers = {"X-XSRF-TOKEN": token}
-    request(API, "/v1/auth/login", 200, method="POST", headers=headers,
+    request(FRONT, "/v1/auth/login", 200, method="POST", headers=headers,
             body={"email": "test@example.com", "password": protected(SYNTHETIC_PASSWORD).decode().strip()})
     try:
-        _, identity = request(API, "/v1/me", 200)
+        _, identity = request(FRONT, "/v1/me", 200)
         profile = json.loads(identity)
         if profile.get("data", profile)["email"] != "test@example.com":
             raise ValueError("reference synthetic account differs")
-        _, organization = request(API, "/v1/organizational-units", 200)
+        _, organization = request(FRONT, "/v1/organizational-units", 200)
         collection = json.loads(organization)
         if not (collection.get("data", collection) if isinstance(collection, dict) else collection):
             raise ValueError("reference organizations are unavailable")
     finally:
         token, = [unquote(cookie.value) for cookie in cookies if cookie.name == "XSRF-TOKEN"]
-        request(API, "/v1/auth/logout", (200, 204), method="POST", headers={"X-XSRF-TOKEN": token}, body={})
-    request(API, "/v1/me", 401)
+        request(FRONT, "/v1/auth/logout", (200, 204), method="POST", headers={"X-XSRF-TOKEN": token}, body={})
+    request(FRONT, "/v1/me", 401)
 
 
 def postgres_facts():
