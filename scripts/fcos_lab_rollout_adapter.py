@@ -50,6 +50,7 @@ ARCHIVE_MAX = 150_000_000
 OPERATIONS = {"observe", "prepare", "activate", "accept", "rollback"}
 PRIVATE = Path.home() / ".config/secpal-fcos-lab-rollout"
 TOOLS = Path(__file__).resolve().parent
+FRONTEND_PROOF = ("pre-registry.json", "pre-registry.bundle.json", "prepared.json", "index.json")
 ED25519_WIRE_PREFIX = b"\0\0\0\x0bssh-ed25519\0\0\0\x20"
 PRIVATE_IPV4 = tuple(map(ipaddress.IPv4Network, ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")))
 
@@ -530,17 +531,39 @@ def api_archive_identity(backend, qualification):
     return pair
 
 
-def make_oci_archive(layout, child, path):
+def verified_native_image(layout, child):
+    if re.fullmatch(DIGEST, child) is None:
+        raise ValueError("invalid native OCI subject")
     manifest = layout / "blobs" / "sha256" / child.removeprefix("sha256:")
-    if "sha256:" + hashlib.sha256(manifest.read_bytes()).hexdigest() != child:
+    raw = manifest.read_bytes()
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != child:
         raise ValueError("archive lacks the approved OCI manifest")
     index = json.loads((layout / "index.json").read_bytes())
     descriptor, = index["manifests"]
-    if descriptor["digest"] != child:
+    if (index["schemaVersion"] != 2 or descriptor["digest"] != child or descriptor["size"] != len(raw)
+            or json.loads((layout / "oci-layout").read_bytes()) != {"imageLayoutVersion": "1.0.0"}):
         raise ValueError("archive OCI descriptor differs from the signed native subject")
+    document = json.loads(raw)
+    files = [manifest]
+    for blob in (document["config"], *document["layers"]):
+        value = blob["digest"]
+        if re.fullmatch(DIGEST, value) is None:
+            raise ValueError("invalid native OCI blob digest")
+        blob_path = manifest.parent / value.removeprefix("sha256:")
+        if blob_path.stat().st_size != blob["size"]:
+            raise ValueError("native OCI blob differs from the signed manifest")
+        with blob_path.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != value.removeprefix("sha256:"):
+                raise ValueError("native OCI blob differs from the signed manifest")
+        files.append(blob_path)
+    return layout / "oci-layout", layout / "index.json", *dict.fromkeys(files)
+
+
+def make_oci_archive(layout, child, path):
+    files = verified_native_image(layout, child)
     with tarfile.open(path, "w") as packaged:
-        for name in ("oci-layout", "index.json", "blobs"):
-            packaged.add(layout / name, arcname=name)
+        for file in files:
+            packaged.add(file, arcname=file.relative_to(layout))
     if not 0 < path.stat().st_size <= ARCHIVE_MAX:
         raise ValueError("native transport exceeds the guest limit")
 
@@ -569,14 +592,46 @@ def write_backend_archive_request(output, host, platform, release, previous, bac
     write_archive_request(output, API_ARCHIVE, request, paths, images)
 
 
+def retained_archive(product, pin):
+    identity = pin.pair if product == "api" else pin.index
+    if product not in {"api", "frontend"} or re.fullmatch(DIGEST, identity) is None:
+        raise ValueError("invalid retained Lab archive identity")
+    root = PRIVATE / "archives"
+    if os.path.lexists(root):
+        require_private_directory(PRIVATE)
+        require_private_directory(root)
+    return root / (product + "-" + identity.removeprefix("sha256:"))
+
+
+def require_private_directory(path):
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError("retained Lab archive directory is not private")
+
+
+def retained_directory(path):
+    require_private_directory(path)
+    for entry in path.rglob("*"):
+        info = entry.lstat()
+        if (info.st_uid != os.getuid() or info.st_mode & 0o022
+                or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))):
+            raise ValueError("unexpected retained Lab archive entry")
+    return path
+
+
+def publisher_environment(temporary):
+    return {"PATH": "/usr/bin:/bin", "HOME": temporary, "GH_CONFIG_DIR": temporary,
+            "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1",
+            "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1", "GH_TELEMETRY": "false"}
+
+
 @contextmanager
 def qualified_frontend_source(source, gh, *, current=True):
     if re.fullmatch(r"[a-f0-9]{40}", source) is None:
         raise ValueError("invalid protected frontend source")
     with tempfile.TemporaryDirectory(prefix="fcos-lab-archive-") as temporary:
         root = Path(temporary)
-        environment = {"PATH": "/usr/bin:/bin", "HOME": temporary, "GH_CONFIG_DIR": temporary,
-                       "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1"}
+        environment = publisher_environment(temporary)
         verified_gh(gh, environment)
         prefix = "repos/SecPal/frontend/actions"
         workflow = ".github/workflows/publish-container.yml"
@@ -624,27 +679,56 @@ def qualified_frontend_source(source, gh, *, current=True):
         source_report = json.loads((security / "result.json").read_bytes())
         if source_report != json.loads((publisher / "source-security.json").read_bytes()):
             raise ValueError("frontend candidate source security differs from the independent job")
-        proof = tuple(publisher / name for name in (
-            "pre-registry.json", "pre-registry.bundle.json", "prepared.json", "index.json"))
+        proof = tuple(publisher / name for name in FRONTEND_PROOF)
         yield gh, run_id, attempt, children, proof, root
 
 
 
 @contextmanager
-def verified_frontend_archive(frontend, *, current=True, gh=None):
-    with qualified_frontend_source(frontend.source, gh or TOOLS / "gh", current=current) as result:
-        if "sha256:" + hashlib.sha256(result[4][-1].read_bytes()).hexdigest() != frontend.index:
-            raise ValueError("archived frontend differs from the protected OCI pin")
-        yield result
+def verified_frontend_archive(frontend, *, current=True, gh=None, retained=None):
+    gh = gh or TOOLS / "gh"
+    if retained is None:
+        with qualified_frontend_source(frontend.source, gh, current=current) as result:
+            check_frontend_archive_index(frontend, result[4][-1])
+            yield result
+        return
+    if current:
+        raise ValueError("retained qualification cannot authorize new activation")
+    retained_directory(retained)
+    qualification = retained / "qualification"
+    publisher = qualification / "publisher"
+    proof = tuple(publisher / name for name in FRONTEND_PROOF)
+    check_frontend_archive_index(frontend, proof[-1])
+    records = json.loads(proof[-2].read_bytes())["records"]
+    if not records:
+        raise ValueError("missing retained frontend invocation")
+    run, attempt = (int(records[0][key]) for key in ("workflow_run_id", "workflow_run_attempt"))
+    if min(run, attempt) <= 0:
+        raise ValueError("invalid retained frontend invocation")
+    with tempfile.TemporaryDirectory(prefix="fcos-lab-verifier-") as temporary:
+        environment = publisher_environment(temporary)
+        verified_gh(gh, environment)
+        children, _ = verify_frontend_candidate(
+            qualification, frontend.source, run, attempt, gh, environment, current=False,
+        )
+        independent = retained / "repository-security" / "result.json"
+        if json.loads(independent.read_bytes()) != json.loads((publisher / "source-security.json").read_bytes()):
+            raise ValueError("retained frontend source evidence differs from the independent job")
+        yield gh, run, attempt, children, proof, retained
+
+
+def check_frontend_archive_index(frontend, index):
+    if "sha256:" + hashlib.sha256(index.read_bytes()).hexdigest() != frontend.index:
+        raise ValueError("archived frontend differs from the protected OCI pin")
+
 
 def prepare_archived_frontend(ssh, host, platform, release, previous, frontend):
-    with verified_frontend_archive(frontend) as (gh, run_id, attempt, children, proof, root):
-        native = root / "native"
-        arch = platform.removeprefix("linux/")
-        download_publisher_artifact(gh, "frontend", run_id, frontend.source,
-                                    f"frontend-native-{arch}-{run_id}-{attempt}", native, ARCHIVE_MAX)
+    from fcos_lab_scan import component_archive
+
+    with component_archive("frontend", frontend, TOOLS / "gh", current=True, preserve=True) as (root, material):
+        child, native, _ = material["frontend", platform]
+        proof = tuple(root / "qualification" / "publisher" / name for name in FRONTEND_PROOF)
         archive = root / "frontend.tar"
-        child = children["frontend", platform]
         make_oci_archive(native / "image", child, archive)
         with tempfile.TemporaryFile() as wire:
             request = request_line("prepare", host, platform, release, previous, child)
@@ -663,7 +747,8 @@ def archived_frontend_evidence(repo, release, previous, evidence_revision):
         previous_children, _, _ = publisher_children(installed)
         active = {("frontend", platform): digest for platform, digest in previous_children.items()}
     else:
-        with verified_frontend_archive(installed, current=False) as (_, _, _, active, _, _):
+        retained = retained_archive("frontend", installed)
+        with verified_frontend_archive(installed, current=False, retained=retained) as (_, _, _, active, _, _):
             pass
 
     return protected_comparison(repo, evidence_revision, "frontend", active, proposed)
@@ -707,7 +792,8 @@ def archived_component_evidence(repo, release, previous, protected_main):
         if installed.transport == "registry":
             active = installed_backend_children(installed)
         else:
-            with verified_backend_archive(installed, current=False) as (_, _, _, active, _, _, _):
+            retained = retained_archive("api", installed)
+            with verified_backend_archive(installed, current=False, retained=retained) as (_, _, _, active, _, _, _):
                 pass
         return protected_comparison(repo, evidence_revision, "api", active, proposed)
     if frontend != old_frontend and frontend.transport == FRONTEND_ARCHIVE:
@@ -724,9 +810,7 @@ def qualified_backend_source(source, gh, *, current=True):
     prefix = "repos/SecPal/api/actions/workflows/publish-container.yml/runs"
     with tempfile.TemporaryDirectory(prefix="fcos-lab-archive-") as temporary:
         root = Path(temporary)
-        verification_env = {"PATH": "/usr/bin:/bin", "HOME": temporary, "GH_CONFIG_DIR": temporary,
-                            "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1",
-                            "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1", "GH_TELEMETRY": "false"}
+        verification_env = publisher_environment(temporary)
         verified_gh(gh, verification_env)
         listing = github_json(gh, f"{prefix}?branch=main&head_sha={source}&event=push&status=success&per_page=2")
         if not listing["workflow_runs"]:
@@ -748,11 +832,32 @@ def qualified_backend_source(source, gh, *, current=True):
 
 
 @contextmanager
-def verified_backend_archive(backend, *, current=True, gh=None):
-    with qualified_backend_source(backend.source, gh or TOOLS / "gh", current=current) as result:
-        gh, run_id, attempt, children, qualification, root = result
-        pair = api_archive_identity(backend, qualification)
-        yield gh, run_id, attempt, children, pair, qualification, root
+def verified_backend_archive(backend, *, current=True, gh=None, retained=None):
+    gh = gh or TOOLS / "gh"
+    if retained is None:
+        with qualified_backend_source(backend.source, gh, current=current) as result:
+            gh, run_id, attempt, children, qualification, root = result
+            pair = api_archive_identity(backend, qualification)
+            yield gh, run_id, attempt, children, pair, qualification, root
+        return
+    if current:
+        raise ValueError("retained qualification cannot authorize new activation")
+    retained_directory(retained)
+    qualification = retained / "qualification"
+    pair = api_archive_identity(backend, qualification)
+    with tempfile.TemporaryDirectory(prefix="fcos-lab-verifier-") as temporary:
+        environment = publisher_environment(temporary)
+        verified_gh(gh, environment)
+        run, attempt = api_receipt_invocation(pair)
+        children, _ = verify_api_candidate(
+            qualification, backend.source, gh, environment, current=False, selected=(run, attempt),
+        )
+        yield gh, run, attempt, children, pair, qualification, retained
+
+
+def api_receipt_invocation(pair):
+    workflow = pair["workflow"]
+    return int(workflow["run_id"]), int(workflow["run_attempt"])
 
 def api_native_attempt(pair, platform, attempt):
     attempts = {p["smoke"]["workflow_run_attempt"] for role in ("nginx", "php-fpm")
@@ -764,17 +869,16 @@ def api_native_attempt(pair, platform, attempt):
 
 
 def prepare_archived_backend(ssh, host, platform, release, previous, backend):
-    with verified_backend_archive(backend) as (gh, run_id, attempt, children, pair, qualification, root):
-        arch = platform.removeprefix("linux/")
+    from fcos_lab_scan import component_archive
+
+    with component_archive("api", backend, TOOLS / "gh", current=True, preserve=True) as (root, material):
         roles = ("nginx", "php-fpm")
-        producing_attempt = api_native_attempt(pair, platform, attempt)
-        native = root / "native"
-        download_publisher_artifact(gh, "api", run_id, backend.source, f"api-native-{arch}-{run_id}-{producing_attempt}", native, ARCHIVE_MAX)
         archives = [root / (role + ".tar") for role in roles]
         for role, archive in zip(roles, archives, strict=True):
-            make_oci_archive(native / role / "image", children[role, platform], archive)
+            child, native, _ = material[role, platform]
+            make_oci_archive(native / "image", child, archive)
         with tempfile.TemporaryFile() as wire:
-            write_backend_archive_request(wire, host, platform, release, previous, backend, qualification, archives)
+            write_backend_archive_request(wire, host, platform, release, previous, backend, root / "qualification", archives)
             return subprocess.run(ssh, stdin=wire, timeout=810, check=False).returncode
 
 

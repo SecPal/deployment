@@ -27,6 +27,171 @@ SOURCE = "7" * 40
 
 
 class AdapterContract(unittest.TestCase):
+    def test_missing_retained_predecessor_cannot_fall_back_to_actions(self):
+        from fcos_lab_rollout_adapter import FRONTEND_ARCHIVE, verified_frontend_archive
+
+        with (tempfile.TemporaryDirectory() as work,
+              patch("fcos_lab_rollout_adapter.download_publisher_artifact") as download,
+              patch("fcos_lab_rollout_adapter.github_json") as api):
+            pin = Frontend(DIGEST, SOURCE, FRONTEND_ARCHIVE)
+            with self.assertRaises(FileNotFoundError):
+                with verified_frontend_archive(pin, current=False, retained=Path(work) / "missing"):
+                    self.fail("missing predecessor was accepted")
+            download.assert_not_called()
+            api.assert_not_called()
+
+    def test_exact_native_staging_rejects_altered_blobs_and_excludes_extra_files(self):
+        import tarfile
+        from fcos_lab_rollout_adapter import make_oci_archive
+
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            layout = root / "image"
+            blobs = layout / "blobs" / "sha256"
+            blobs.mkdir(parents=True)
+
+            def blob(content):
+                digest = hashlib.sha256(content).hexdigest()
+                (blobs / digest).write_bytes(content)
+                return {"digest": "sha256:" + digest, "size": len(content)}
+
+            config = blob(b'{"architecture":"amd64"}')
+            layer = blob(b"layer")
+            manifest = blob(json.dumps({"config": config, "layers": [layer]}).encode())
+            (layout / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}')
+            (layout / "index.json").write_text(json.dumps({"schemaVersion": 2, "manifests": [manifest]}))
+            (blobs / "extraneous").write_bytes(b"unexpected")
+            result = root / "native.tar"
+            make_oci_archive(layout, manifest["digest"], result)
+            with tarfile.open(result) as archive:
+                self.assertCountEqual(archive.getnames(), ["oci-layout", "index.json"] + [
+                    "blobs/sha256/" + item["digest"].removeprefix("sha256:")
+                    for item in (config, layer, manifest)
+                ])
+            (blobs / layer["digest"].removeprefix("sha256:")).write_bytes(b"wrong")
+            with self.assertRaisesRegex(ValueError, "blob differs"):
+                make_oci_archive(layout, manifest["digest"], root / "wrong.tar")
+
+    def test_capture_and_restore_use_verified_exact_native_material(self):
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+        import fcos_lab_rollout_adapter as adapter
+        import fcos_lab_scan as scan
+
+        platform = "linux/amd64"
+        gh = Path("/trusted/gh")
+        for product, role in (("api", "php-fpm"), ("frontend", "frontend")):
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as work:
+                root = Path(work)
+                config = root / "controller"
+                config.mkdir(mode=0o700)
+                publisher = root / "publisher-download"
+                qualification = publisher / "qualification"
+                qualification.mkdir(parents=True)
+                native = publisher / "amd64"
+                if product == "api":
+                    native /= role
+                image = native / "image"
+                blobs = image / "blobs" / "sha256"
+                blobs.mkdir(parents=True)
+                config_bytes = b'{"architecture":"amd64"}'
+                config_digest = hashlib.sha256(config_bytes).hexdigest()
+                (blobs / config_digest).write_bytes(config_bytes)
+                manifest = json.dumps({
+                    "config": {"digest": "sha256:" + config_digest, "size": len(config_bytes)},
+                    "layers": [],
+                }).encode()
+                child = "sha256:" + hashlib.sha256(manifest).hexdigest()
+                (blobs / child.removeprefix("sha256:")).write_bytes(manifest)
+                (image / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}')
+                (image / "index.json").write_text(json.dumps({
+                    "schemaVersion": 2, "manifests": [{"digest": child, "size": len(manifest)}],
+                }))
+                spdx = native / "syft.spdx.json"
+                spdx.write_bytes(b'{"spdxVersion":"SPDX-2.3"}')
+                inventory = scan.digest(spdx)
+                subject = {"oci_digest": child, "platform": platform}
+                association = native / "association.json"
+                association.write_text(json.dumps(subject))
+                children = {(role, platform): child}
+
+                def verify_association(observed, contents, expected):
+                    if observed != expected or contents != spdx.read_bytes():
+                        raise ValueError("unexpected SPDX association")
+
+                report = {"database": {"next_update": "2026-11-25T13:00:00Z"}}
+                if product == "api":
+                    item = {"subject": subject, "sbom_sha256": inventory}
+                    pair = {"workflow": {"run_id": "10", "run_attempt": "1"},
+                            "images": {"php-fpm": {"candidate_index_digest": DIGEST, "platforms": [item]},
+                                       "nginx": {"candidate_index_digest": DIGEST}}}
+                    receipt = qualification / "unpublished-runtime-pair.json"
+                    receipt.write_text(json.dumps(pair))
+                    (qualification / "source-security.json").write_text(json.dumps(report))
+                    pin = Backend(SOURCE, DIGEST, DIGEST, scan.digest(receipt), "2026-11-25T12:00:00Z",
+                                  None, adapter.API_ARCHIVE)
+                    downloaded = (gh, 10, 1, children, qualification, publisher)
+                    acquire = "qualified_backend_source"
+                    verifier = "verify_api_candidate"
+                else:
+                    proof_root = qualification / "publisher"
+                    proof_root.mkdir()
+                    proof = tuple(proof_root / name for name in adapter.FRONTEND_PROOF)
+                    proof[-1].write_bytes(b"protected OCI index")
+                    proof[-2].write_text(json.dumps({"records": [{"workflow_run_id": "10",
+                                                                   "workflow_run_attempt": "1"}]}))
+                    (proof_root / "source-security.json").write_text(json.dumps(report))
+                    independent = publisher / "repository-security"
+                    independent.mkdir()
+                    (independent / "result.json").write_text(json.dumps(report))
+                    evaluation = qualification / "scan" / "amd64"
+                    evaluation.mkdir(parents=True)
+                    (evaluation / "evaluation.json").write_text(json.dumps({"syft": {"spdx_digest": inventory}}))
+                    pin = Frontend(scan.digest(proof[-1]), SOURCE, adapter.FRONTEND_ARCHIVE)
+                    downloaded = (gh, 10, 1, children, proof, publisher)
+                    acquire = "qualified_frontend_source"
+                    verifier = "verify_frontend_candidate"
+
+                with (patch.object(adapter, "PRIVATE", config),
+                      patch.object(adapter, acquire, return_value=nullcontext(downloaded)) as acquire_publisher,
+                      patch.object(adapter, verifier, return_value=(children, {})) as verify,
+                      patch.object(adapter, "verified_gh"),
+                      patch.object(scan, "download_publisher_artifact") as download,
+                      patch.object(scan, "admission_governance"),
+                      patch.object(scan, "reevaluation_engine", return_value=SimpleNamespace(
+                          verify_syft_association=verify_association))):
+                    with scan.component_archive(product, pin, gh, current=True, preserve=True):
+                        stored = adapter.retained_archive(product, pin)
+                        self.assertEqual(stored.stat().st_mode & 0o777, 0o700)
+                    acquire_publisher.side_effect = AssertionError("Actions is unavailable")
+                    with scan.archived_material(product, pin, gh, current=False) as restored:
+                        self.assertEqual(restored[role, platform][0], child)
+                        restored_association = restored[role, platform][1] / "association.json"
+                    verify.assert_called_once()
+                    if product == "api":
+                        self.assertEqual(verify.call_args.kwargs["selected"], (10, 1))
+                    download.assert_not_called()
+                    restored_association.write_text("{}")
+                    with self.assertRaisesRegex(ValueError, "unexpected SPDX association"):
+                        with scan.archived_material(product, pin, gh, current=False):
+                            self.fail("corrupt retained input was accepted")
+                    restored_association.unlink()
+                    with self.assertRaises(FileNotFoundError):
+                        with scan.archived_material(product, pin, gh, current=False):
+                            self.fail("partial retained input was accepted")
+                    acquire_publisher.assert_called_once()
+                    download.assert_not_called()
+
+    def test_retained_qualification_cannot_authorize_activation(self):
+        from fcos_lab_rollout_adapter import API_ARCHIVE, FRONTEND_ARCHIVE, verified_backend_archive, verified_frontend_archive
+
+        frontend = Frontend(DIGEST, SOURCE, FRONTEND_ARCHIVE)
+        backend = Backend(SOURCE, DIGEST, DIGEST, DIGEST, "2026-11-23T00:00:00Z", None, API_ARCHIVE)
+        for verify, pin in ((verified_frontend_archive, frontend), (verified_backend_archive, backend)):
+            with self.assertRaisesRegex(ValueError, "cannot authorize"):
+                with verify(pin, current=True, retained=Path("/retained")):
+                    self.fail("historical qualification was used for activation")
+
     def test_protected_release_verification_accepts_the_direct_launch_identity(self):
         from types import SimpleNamespace
         from fcos_lab_rollout_adapter import admit_source_text

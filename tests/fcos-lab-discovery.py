@@ -25,6 +25,18 @@ LAB_API_SOURCE = Backend.from_source((Path(__file__).resolve().parents[1] / "scr
 
 
 class CandidateSelectors(unittest.TestCase):
+    def test_matching_installed_source_skips_action_archive_lookup(self):
+        from fcos_lab_discovery import qualified_candidate
+
+        installed = "a" * 40
+        gh = Path("/trusted/gh")
+        with (patch("fcos_lab_discovery.verified_gh") as verify_cli,
+              patch("fcos_lab_discovery.protected_source", return_value=installed),
+              patch("fcos_lab_discovery.qualified_frontend_source") as acquire):
+            self.assertIsNone(qualified_candidate("frontend", gh, installed_source=installed))
+            verify_cli.assert_called_once()
+            acquire.assert_not_called()
+
     def test_postgresql_stays_on_major_and_distribution(self):
         catalog = "Tags: 18.7, 18.7-bookworm, 18-bookworm\nTags: 19.1-bookworm, 18.9-alpine"
         self.assertEqual(official_tag(catalog, r"(18)\.([0-9]+)-bookworm"), "18.7-bookworm")

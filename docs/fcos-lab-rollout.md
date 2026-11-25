@@ -445,6 +445,24 @@ predecessor and candidate pair. Keep the candidate record in
 `backend-compatibility-candidate.json` beside the current record. Missing
 evidence leaves that component deferred.
 
+Before its first guest preparation, the controller retains the qualified
+publisher files and both native OCI layouts, including their SPDX inventories
+and associations. Entries live in the existing private rollout configuration
+directory under `archives/api-<pair-receipt-sha256>` and
+`archives/frontend-<index-sha256>`. Seed entries for the currently accepted
+components from their exact verified publisher inputs before upgrading an
+existing controller. The existing encrypted controller backup includes this
+directory. Restore the required entries into an isolated directory and verify
+the signatures, native layout and SPDX associations independently of Actions
+downloads before relying on the backup.
+
+Historical predecessor verification uses the retained inputs through the
+existing publisher verifier. A missing or malformed retained entry stops the
+comparison. Candidates still need current source admission and current matched
+vulnerability evaluations before the existing activation checks can run.
+Keep the accepted release and any separately qualified recovery targets in
+the backup scope regardless of the Actions retention deadline.
+
 The existing GitHub-signed proposal transaction changes the component pins and
 comparison documents. An API proposal copies the exact candidate record into the
 active path in the same commit as its hash and runtime pins. The controller requests normal protected auto-merge

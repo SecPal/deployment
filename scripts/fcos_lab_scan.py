@@ -18,8 +18,10 @@ import tarfile
 from tempfile import TemporaryDirectory
 
 from fcos_lab_rollout_adapter import (
-    ARCHIVE_MAX, DIGEST, admission_governance, admit_component_update,
-    api_native_attempt, download_publisher_artifact, proposal_stage, verified_backend_archive, verified_frontend_archive,
+    ARCHIVE_MAX, admission_governance, admit_component_update,
+    api_native_attempt, api_receipt_invocation, download_publisher_artifact, proposal_stage, retained_archive,
+    require_private_directory, verified_backend_archive, verified_frontend_archive,
+    verified_native_image,
 )
 
 
@@ -32,37 +34,91 @@ def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
 
+def preserve_archive(root, target):
+    require_private_directory(target.parent.parent)
+    target.parent.mkdir(mode=0o700, exist_ok=True)
+    require_private_directory(target.parent)
+    # The backup reads the protected tree. Make only a complete entry visible there.
+    with TemporaryDirectory(prefix="fcos-lab-retain-", dir=target.parent.parent.parent) as temporary:
+        complete = Path(temporary) / "archive"
+        complete.mkdir(mode=0o700)
+        for name in ("qualification", "repository-security", "amd64", "arm64"):
+            source = root / name
+            if source.exists():
+                shutil.copytree(source, complete / name)
+        complete.rename(target)
+
+
 @contextmanager
-def archived_material(product, pin, gh, *, current):
-    """Read the native archives and the SPDX identities from the verified receipt."""
+def component_archive(product, pin, gh, *, current, preserve=False):
+    """Resolve the same native material from the publisher or retained controller state."""
+    stored = retained_archive(product, pin)
+    retained = None if current else stored
     if product == "frontend":
-        with verified_frontend_archive(pin, gh=gh, current=current) as (_, run, attempt, children, _, root):
-            material = {}
-            for key, subject in children.items():
-                _, platform = key
-                arch = platform.removeprefix("linux/")
-                native = root / arch
-                download_publisher_artifact(gh, product, run, pin.source,
-                                            f"frontend-native-{arch}-{run}-{attempt}", native, ARCHIVE_MAX)
-                evaluation = json.loads((root / "qualification" / "scan" / arch / "evaluation.json").read_bytes())
-                material[key] = (subject, native, evaluation["syft"]["spdx_digest"])
-            yield material
+        verifier = verified_frontend_archive
     elif product == "api":
-        with verified_backend_archive(pin, gh=gh, current=current) as (_, run, attempt, children, pair, _, root):
-            material = {}
-            for platform in sorted({key[1] for key in children}):
-                arch = platform.removeprefix("linux/")
-                native = root / arch
-                producer = api_native_attempt(pair, platform, attempt)
-                download_publisher_artifact(gh, product, run, pin.source,
-                                            f"api-native-{arch}-{run}-{producer}", native, ARCHIVE_MAX)
-                for role, role_record in pair["images"].items():
-                    item, = (item for item in role_record["platforms"] if item["subject"]["platform"] == platform)
-                    key = role, platform
-                    material[key] = (children[key], native / role, item["sbom_sha256"])
-            yield material
+        verifier = verified_backend_archive
     else:
         raise ValueError("unknown comparison component")
+
+    with verifier(pin, gh=gh, current=current, retained=retained) as result:
+        _, run, attempt, children = result[:4]
+        if preserve and product == "api" and api_receipt_invocation(result[4]) != (run, attempt):
+            raise ValueError("retained API receipt differs from the qualified publisher invocation")
+        root = result[-1]
+        native_root = root
+        if preserve and os.path.lexists(stored):
+            with verifier(pin, gh=gh, current=False, retained=stored):
+                native_root = stored
+        material = {}
+        for (role, platform), subject in children.items():
+            arch = platform.removeprefix("linux/")
+            native = native_root / arch
+            if product == "frontend":
+                evaluation = json.loads((root / "qualification" / "scan" / arch / "evaluation.json").read_bytes())
+                spdx = evaluation["syft"]["spdx_digest"]
+            else:
+                pair = result[4]
+                entries = pair["images"][role]["platforms"]
+                item, = (entry for entry in entries if entry["subject"]["platform"] == platform)
+                spdx = item["sbom_sha256"]
+            if current and native_root == root and not native.exists():
+                producer = api_native_attempt(pair, platform, attempt) if product == "api" else attempt
+                download_publisher_artifact(gh, product, run, pin.source,
+                                            f"{product}-native-{arch}-{run}-{producer}", native, ARCHIVE_MAX)
+            material[role, platform] = (subject, native / role if product == "api" else native, spdx)
+        if preserve or not current:
+            engine = reevaluation_engine(admission_governance())
+            for (_, platform), artifact in material.items():
+                verify_native_inventory(platform, artifact, engine)
+        if preserve and native_root == root:
+            preserve_archive(root, stored)
+        yield root, material
+
+
+@contextmanager
+def archived_material(product, pin, gh, *, current):
+    with component_archive(product, pin, gh, current=current) as (_, material):
+        yield material
+
+
+def reevaluation_engine(governance):
+    spec = spec_from_file_location("secpal_reevaluation", governance / "scripts/secpal-vulnerability-reevaluation.py")
+    engine = module_from_spec(spec)
+    spec.loader.exec_module(engine)
+    return engine
+
+
+def verify_native_inventory(platform, artifact, engine):
+    subject_digest, native, signed_spdx = artifact
+    spdx = native / "syft.spdx.json"
+    if digest(spdx) != signed_spdx:
+        raise ValueError("native SPDX differs from the signed publisher receipt")
+    verified_native_image(native / "image", subject_digest)
+    subject = {"oci_digest": subject_digest, "platform": platform}
+    association = json.loads((native / "association.json").read_bytes())
+    engine.verify_syft_association(association, spdx.read_bytes(), subject)
+    return subject, spdx, association
 
 
 class ScanSnapshot:
@@ -83,9 +139,7 @@ class ScanSnapshot:
         self.trivy_version = pins["TRIVY_VERSION"]
         self.ignore = governance / "policies/trivy-repository-scan-ignore-v1.yaml"
 
-        spec = spec_from_file_location("secpal_reevaluation", governance / "scripts/secpal-vulnerability-reevaluation.py")
-        self.evaluation = module_from_spec(spec)
-        spec.loader.exec_module(self.evaluation)
+        self.evaluation = reevaluation_engine(governance)
         self.trivy = self.extract(archives / "trivy.tar.gz", "trivy", self.trivy_digest)
         if refresh:
             grype = self.extract(self.grype_archive, "grype", "sha256:" + pins["GRYPE_ARCHIVE_SHA256"])
@@ -130,27 +184,9 @@ class ScanSnapshot:
 
     def scan(self, product, platform, artifact):
         subject_digest, native, signed_spdx = artifact
-        if re.fullmatch(DIGEST, subject_digest) is None or digest(native / "syft.spdx.json") != signed_spdx:
-            raise ValueError("native SPDX differs from the signed publisher receipt")
         image = native / "image"
-        manifest = image / "blobs" / "sha256" / subject_digest.removeprefix("sha256:")
-        descriptor, = json.loads((image / "index.json").read_bytes())["manifests"]
-        if descriptor["digest"] != subject_digest or digest(manifest) != subject_digest:
-            raise ValueError("native image differs from the signed platform subject")
-        document = json.loads(manifest.read_bytes())
-        for blob in (document["config"], *document["layers"]):
-            value = blob["digest"]
-            if re.fullmatch(DIGEST, value) is None:
-                raise ValueError("invalid native OCI blob digest")
-            path = image / "blobs" / "sha256" / value.removeprefix("sha256:")
-            if path.stat().st_size != blob["size"] or digest(path) != value:
-                raise ValueError("native OCI blob differs from the signed manifest")
-
         engine = self.evaluation
-        subject = {"oci_digest": subject_digest, "platform": platform}
-        association = json.loads((native / "association.json").read_bytes())
-        spdx = native / "syft.spdx.json"
-        engine.verify_syft_association(association, spdx.read_bytes(), subject)
+        subject, spdx, association = verify_native_inventory(platform, artifact, engine)
         inventory = {"format": "SPDX", "subject": subject, "spdx_digest": signed_spdx}
         with TemporaryDirectory(prefix="native-", dir=self.work) as directory:
             root = Path(directory)
