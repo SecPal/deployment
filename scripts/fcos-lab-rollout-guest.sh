@@ -837,6 +837,13 @@ backend_running() {
     matches "$1" && singleton_roles && check_installed && [[ $(untouched_instances) == "$2" ]]
 }
 
+backend_image_source() {
+    local source
+    source=$(runtime podman image inspect --format '{{index .Labels "org.opencontainers.image.revision"}}' "$1") &&
+        [[ $source =~ ^$sha$ ]] || return 1
+    printf '%s\n' "$source"
+}
+
 switch_backend() {
     local record=$1 role ref service untouched expires fpm_ref source
     local -a services=()
@@ -849,9 +856,8 @@ switch_backend() {
             [[ $ref =~ ^"$api_image@"$digest$ ]] &&
             backend_step native-image runtime podman image exists "$ref" || return 1
     done
-    fpm_ref=$(backend_role_ref "$record" php-fpm) &&
-        source=$(runtime podman image inspect --format '{{index .Labels "org.opencontainers.image.revision"}}' "$fpm_ref") &&
-        [[ $source =~ ^$sha$ ]] || return 1
+    fpm_ref=$(backend_step native-image backend_role_ref "$record" php-fpm) &&
+        source=$(backend_step native-image backend_image_source "$fpm_ref") || return 1
     backend_step database-snapshot migrations_idle || return 1
     untouched=$(backend_step running-identities untouched_instances) &&
         backend_step stop-http runtime systemctl --user --job-mode=ignore-requirements stop "$slot-api.service" &&

@@ -426,6 +426,20 @@ class GuestContract(unittest.TestCase):
     def setUp(self):
         self.guest = Path(__file__).resolve().parents[1] / "scripts/fcos-lab-rollout-guest.sh"
 
+    def test_guest_metadata_label_failure_keeps_the_native_image_diagnostic(self):
+        command = ('source "$1"; status=$2; '
+                   'runtime() { '
+                   'if [[ "$status" == failed ]]; then printf "raw inspection error\\n" >&2; return 1; fi; '
+                   'printf "main\\n"; }; '
+                   'backend_step native-image backend_image_source image')
+        for mode in ("failed", "bad-label"):
+            with self.subTest(mode=mode):
+                checked = subprocess.run(["bash", "-c", command, "test", self.guest, mode],
+                                         capture_output=True, text=True, check=False)
+                self.assertNotEqual(checked.returncode, 0)
+                self.assertEqual(checked.stdout, "")
+                self.assertEqual(checked.stderr, "FCOS lab backend operation failed: fcos-lab-backend.native-image\n")
+
     def test_guest_release_metadata_binds_exact_sources(self):
         source = "a" * 40
         command = ('source "$1"; render_source_offer "$2"; '
