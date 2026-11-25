@@ -22,6 +22,12 @@ from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, ProxyHandle
 STATE = Path("/var/lib/secpal-reference-update")
 QUADLETS = Path("/etc/containers/systemd/users")
 EDGE = Path("/etc/haproxy/secpal.cfg")
+REFERENCE_CONFIG = Path("/var/lib/secpal-reference/config")
+FPM_POOL = REFERENCE_CONFIG / "zz-fpm-session.conf"
+SOURCE_OFFER = REFERENCE_CONFIG / "source-offer.json"
+# Frontend #1788 records the adopted OpenAPI source. The later OpenPLZ types
+# added in #1935 already exist in this published specification.
+CONTRACTS_SOURCE = "f8771b74d887b84b84dcc94e2405df7b47222466"
 SYNTHETIC_PASSWORD = Path("/etc/secpal/reference-update-witness")
 FRONT = "https://app.secpal.dev"
 API = "https://api.secpal.dev"
@@ -92,7 +98,34 @@ def render_pin(text, old, new):
     return re.sub(r"(?m)^Image=.*$", "Image=" + new, text)
 
 
-def replace_quadlet(path, content):
+def source_archive(repository, source):
+    if re.fullmatch(r"[a-f0-9]{40}", source) is None:
+        raise ValueError("invalid corresponding source revision")
+    return f"https://codeload.github.com/SecPal/{repository}/tar.gz/{source}"
+
+
+def api_release(source):
+    return {"version": "git." + source, "source_url": source_archive("api", source)}
+
+
+def source_offer(source):
+    return {"version": 1, "repositories": {
+        "frontend": {"sourceUrl": source_archive("frontend", source)},
+        "contracts": {"sourceUrl": source_archive("contracts", CONTRACTS_SOURCE)},
+    }}
+
+
+def render_api_release(text, source):
+    if re.findall(r"(?m)^\[.*\]$", text) != ["[secpal]"]:
+        raise ValueError("unexpected reference FPM pool")
+    release = api_release(source)
+    text = re.sub(r"(?m)^env\[BOOTSTRAP_API_RELEASE_(?:VERSION|SOURCE_URL)\][ 	]*=.*(?:\n|$)", "", text)
+    return (text.rstrip() + "\n"
+            + "env[BOOTSTRAP_API_RELEASE_VERSION]=" + release["version"] + "\n"
+            + "env[BOOTSTRAP_API_RELEASE_SOURCE_URL]=" + release["source_url"] + "\n")
+
+
+def replace_protected_config(path, content):
     with tempfile.NamedTemporaryFile(dir=path.parent, prefix="." + path.name + ".", delete=False) as stream:
         temporary = Path(stream.name)
         try:
@@ -192,7 +225,7 @@ def exposure(target=None, *, live=True):
     return configs
 
 
-def public_accept(*, authenticated=False, target=None):
+def public_accept(*, authenticated=False, target=None, source=None):
     cookies = http.cookiejar.CookieJar()
     opener = build_opener(ProxyHandler({}), NoRedirect(), HTTPCookieProcessor(cookies))
 
@@ -229,8 +262,18 @@ def public_accept(*, authenticated=False, target=None):
         _, config = request(FRONT, "/runtime-config.js", 200)
         if re.findall(rb'apiBaseUrl:\s*"([^"]+)"', config) != [FRONT.encode()]:
             raise ValueError("reference frontend API origin differs")
+        if source is not None:
+            _, payload = request(FRONT, "/source-offer.json", 200)
+            if json.loads(payload) != source_offer(source):
+                raise ValueError("reference source offer differs from the installed frontend source")
     if target != "frontend":
         request(API, "/health/ready", 200)
+        if source is not None:
+            release = api_release(source)
+            for base in (API, FRONT):
+                _, payload = request(base, "/v1/release", 200)
+                if json.loads(payload) != {"data": release}:
+                    raise ValueError("reference release metadata differs from the installed API source")
         for origin in (FRONT, "https://other.example"):
             headers, _ = request(API, "/v1/auth/login", 204, method="OPTIONS",
                                  headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
@@ -298,6 +341,12 @@ def apply(target, before, desired, tarfiles, ready, after, rollback_allowed):
         role = ROLE[name]
         previous[path] = current
         proposed[path] = render_pin(current.decode(), before[role].image, desired[role].image).encode()
+    if target == "api":
+        previous[FPM_POOL] = protected(FPM_POOL)
+        proposed[FPM_POOL] = render_api_release(previous[FPM_POOL].decode(), desired["php-fpm"].source).encode()
+    else:
+        previous[SOURCE_OFFER] = protected(SOURCE_OFFER)
+        proposed[SOURCE_OFFER] = (json.dumps(source_offer(desired["frontend"].source), sort_keys=True) + "\n").encode()
     for role, tarball in tarfiles.items():
         image = podman(target, "pull", "--quiet", f"oci-archive:{tarball}", timeout=180).decode().strip()
         item = desired[role]
@@ -334,7 +383,7 @@ def apply(target, before, desired, tarfiles, ready, after, rollback_allowed):
         if target == "api":
             unit(target, "--job-mode=ignore-requirements", "stop", *names, timeout=90)
         for path, content in config.items():
-            replace_quadlet(path, content)
+            replace_protected_config(path, content)
         unit(target, "daemon-reload")
         if target == "api":
             unit(target, "--job-mode=ignore-dependencies", "start", "secpal-php-fpm.service", timeout=90)

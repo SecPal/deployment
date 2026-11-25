@@ -10,7 +10,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from reference_update import Pin, planned_change, validate_enrollment
-from reference_runtime import lanepaths, render_pin
+from reference_runtime import lanepaths, render_api_release, render_pin, source_offer
 
 
 class ReferenceContract(unittest.TestCase):
@@ -33,6 +33,33 @@ class ReferenceContract(unittest.TestCase):
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 validate_enrollment(invalid)
+
+    def test_release_metadata_uses_the_signed_source_and_preserves_the_pool(self):
+        original = "[secpal]\nenv[SESSION_DOMAIN]=$SESSION_DOMAIN\n"
+        first = "a" * 40
+        next_source = "b" * 40
+        update = render_api_release(render_api_release(original, first), next_source)
+        self.assertEqual(update, render_api_release(original, next_source))
+        self.assertTrue(update.startswith(original))
+        self.assertIn("BOOTSTRAP_API_RELEASE_VERSION]=git." + next_source, update)
+        self.assertIn("https://codeload.github.com/SecPal/api/tar.gz/" + next_source, update)
+        with self.assertRaises(ValueError):
+            render_api_release(original, "main")
+        with self.assertRaises(ValueError):
+            render_api_release(original + "[other]\n", first)
+
+    def test_source_offer_binds_the_frontend_commit_and_verified_contracts(self):
+        source = "b" * 40
+        offer = source_offer(source)
+        self.assertEqual(offer["version"], 1)
+        repositories = offer["repositories"]
+        self.assertEqual(set(repositories), {"frontend", "contracts"})
+        self.assertEqual(repositories["frontend"]["sourceUrl"],
+                         "https://codeload.github.com/SecPal/frontend/tar.gz/" + source)
+        self.assertEqual(repositories["contracts"]["sourceUrl"],
+                         "https://codeload.github.com/SecPal/contracts/tar.gz/f8771b74d887b84b84dcc94e2405df7b47222466")
+        with self.assertRaises(ValueError):
+            source_offer("main")
 
     def test_only_exact_running_image_is_replaced(self):
         old = "ghcr.io/secpal/api@sha256:" + "a" * 64

@@ -251,7 +251,7 @@ def lane(repo, latest, target, baseline, posture, progress):
         def finish():
             if not exposure_matches() or not database_matches():
                 raise ValueError("reference exposure or database changed during activation")
-            public_accept(authenticated=True, target=target)
+            public_accept(authenticated=True, target=target, source=desired.source)
             record(saved, {"revision": latest.revision, "runtime": {role: asdict(value) for role, value in stages.items()}})
 
         ready()

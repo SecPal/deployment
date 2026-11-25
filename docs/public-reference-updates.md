@@ -44,9 +44,17 @@ The API also requires the enrolled PostgreSQL schema and migration
 ledger and native forward and reverse evidence. The previous image must
 remain admissible with the live schema. The browser-facing check uses the
 reference's same origin, verifies host-only cookies, and exercises login,
-organization access, and logout. The transaction stages
+organization access, and logout. Enroll the existing read-only frontend mount
+from `/var/lib/secpal-reference/config/source-offer.json` to the image's
+`/usr/share/nginx/html/source-offer.json` serving boundary. Enroll the existing
+FPM configuration bind for API release metadata. Each lane writes and verifies
+its source metadata from the qualified commit. The corresponding Contracts
+archive is the OpenAPI revision adopted in [Frontend #1788][contracts-source].
+The transaction stages
 and checks the Quadlets before switching, then verifies the public
 service and the unchanged database. A failed switch restores the
 previous configuration when its authenticated rollback remains valid.
 A failed rollback leaves the backups and reports a failed system
 service for the existing Zabbix systemd alarm.
+
+[contracts-source]: https://github.com/SecPal/frontend/pull/1788
