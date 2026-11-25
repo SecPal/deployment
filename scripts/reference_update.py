@@ -32,6 +32,7 @@ from reference_runtime import (
 ROOT = Path(__file__).resolve().parent
 CONFIG = Path("/etc/secpal/reference-update.json")
 LOCK = Path("/run/lock/secpal-reference-frontend.lock")
+OCI_CACHE = Path("/var/cache/secpal-reference-oci")
 GH = ROOT / "gh"
 COMPATIBILITY = "config/quadlet/fcos-lab-rollout/backend-compatibility.json"
 SHA = r"[a-f0-9]{40}"
@@ -203,7 +204,9 @@ def lane(repo, latest, target, baseline, posture, progress):
             old_children = stack.enter_context(signed_runtime(target, before, current=False))[0]
             binds(target, active, before, old_children)
         children, publisher_run, attempt, native_root = stack.enter_context(signed_runtime(target, desired, current=True))
-        root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix=f"reference-{target}-")))
+        # Rootless Podman enters its existing mount namespace during import.
+        # Only the verified OCI tar is staged outside the service's private tmp.
+        root = Path(stack.enter_context(tempfile.TemporaryDirectory(dir=OCI_CACHE, prefix=f"reference-{target}-")))
         root.chmod(0o711)
         native = native_root / "native"
         name = f"{target}-native-amd64-{publisher_run}-{attempt}"

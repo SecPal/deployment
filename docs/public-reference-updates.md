@@ -27,6 +27,9 @@ under the same directory. Root fetches protected GitHub metadata
 directly. Only the exact OCI ZIP download uses the existing authenticated
 account as an unprivileged process. Root verifies the independently
 observed ZIP digest and existing signed publisher evidence before import.
+The service keeps temporary downloads private. It stages only the verified OCI
+archive in its systemd cache directory so the existing rootless Podman mount
+namespace can open it. The transaction removes that archive on completion.
 
 The operator enrolls the previously accepted deployment revision and
 the live exposure fingerprint in the root-owned
