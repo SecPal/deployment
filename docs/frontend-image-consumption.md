@@ -44,10 +44,14 @@ This is source-contract acceptance, not activation. The operator confirmed that
 the demo frontend remained at
 `ghcr.io/secpal/frontend@sha256:1c737d692e633d355f2ee92e82f0d78929c4dcf43f959e3e17d1cdc6c41fb0c9`
 during the API cutover on 2026-11-10. Its independent monitoring is retained.
-No complete cross-environment inventory of historical consumers or permitted
-recovery/rollback targets exists. Historical CVE findings remain open unless
-subject-specific remediation or complete retirement is established; neither a
-new publication nor this source change proves retirement.
+The [retirement decision][recovery] removed these exact frontend indexes
+from SecPal-owned deployment, rollback and recovery:
+
+- `sha256:43daf20f17ad76049377f7bf16b52a74464a42394b49e91934bbc6dcf7327859`
+- `sha256:5abf611911e59c7a14cc369b39ceed19f33d3b7cd50d9124ab1171dd1fad45aa`
+
+Current consumer pins and their security evidence remain subject to the
+existing admission rules.
 
 ## First qualified FCOS lab rollout
 
@@ -162,11 +166,14 @@ evidence for a new OCI index digest.
 A new digest requires a new reviewed deployment pull request. There is no
 automatic selection of a newer publication.
 
-Rollback also requires a new reviewed pull request and fresh verification of
-a previously recorded OCI index digest. `latest`, `main`, release, source-SHA,
-branch, discovery, or other tags, environment overrides, manual Docker tags,
-configurable registry or repository values, and registry fallbacks are never
-update or rollback inputs.
+Rollback requires a new reviewed pull request and fresh verification of a
+still-supported OCI index. Verify API compatibility and target admission
+under [deployment #93][recovery]. Use the reviewed registry, repository and
+immutable digest for every update or rollback. Tags, environment overrides,
+manual Docker tags, configurable registry or repository values, and registry
+fallbacks are never update or rollback inputs.
+
+[recovery]: https://github.com/SecPal/deployment/issues/93#issuecomment-7126107302
 
 The deployment repository performs registry reads only. It does not push an
 image or manifest, generate an attestation, mutate a tag, or request registry

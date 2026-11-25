@@ -369,6 +369,22 @@ class OciAttestationBundleContractTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             fetcher._validate_runtime_pair(json_bytes(body), datetime(2026, 11, 23, tzinfo=timezone.utc))
 
+    def test_isolated_fixture_pair_keeps_exact_binding_after_publication_expiry(self) -> None:
+        from datetime import datetime, timezone
+        fetcher = load_fetcher()
+        expired = datetime(2026, 11, 24, tzinfo=timezone.utc)
+        body = {
+            "source": {"repository": "https://github.com/SecPal/api", "commit": fetcher.API_SOURCE_COMMIT},
+            "images": {"php-fpm": {"reference": fetcher.PHP_FPM_IMAGE},
+                       "nginx": {"reference": fetcher.API_IMAGE}},
+        }
+        fetcher._validate_runtime_pair(json_bytes(body), expired, reference_fixture=True)
+        body["images"]["nginx"]["reference"] = fetcher.PHP_FPM_IMAGE
+        with self.assertRaisesRegex(ValueError, "both component indexes"):
+            fetcher._validate_runtime_pair(json_bytes(body), expired, reference_fixture=True)
+        with self.assertRaisesRegex(ValueError, "reference fixture"):
+            fetcher._validate_runtime_pair(json_bytes(body), expired, {}, reference_fixture=True)
+
     def test_reviewed_lab_pair_binds_source_indexes_and_expiry(self) -> None:
         from datetime import datetime, timezone
         fetcher = load_fetcher()

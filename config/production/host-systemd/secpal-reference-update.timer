@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+[Unit]
+Description=Reconcile the public SecPal references every ten minutes
+
+[Timer]
+OnCalendar=*:03/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

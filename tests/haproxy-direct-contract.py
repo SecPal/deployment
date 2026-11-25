@@ -79,6 +79,23 @@ class DirectContractTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 direct.decode_document(value)
 
+    def test_public_reference_browser_auth_does_not_share_lab_cookies(self):
+        document = self.document() | {'tls_lifecycle': 'http01'}
+        default = direct.render(direct.from_document(document))
+        spec = direct.from_document(document | {'frontend_host': 'app.secpal.dev',
+                                                'api_host': 'api.secpal.dev'})
+        reference = direct.render(spec)
+        self.assertIn('acl app_api_versioned path_beg /v1/', reference)
+        self.assertIn('acl app_api_exact path /sanctum/csrf-cookie /health/ready', reference)
+        self.assertLess(reference.index('use_backend secpal_api if frontend_origin app_api_versioned { ssl_fc }'),
+                        reference.index('use_backend secpal_frontend if frontend_origin'))
+        self.assertIn('{ path /sanctum/csrf-cookie /v1/me }', reference)
+        for cookie in ('XSRF-TOKEN', 'secpal-session'):
+            expiry = f'{cookie}=; Max-Age=0; Path=/; Domain=secpal.dev; Secure'
+            self.assertIn(expiry, reference)
+            self.assertNotIn(expiry, default)
+        self.assertEqual(direct.from_config(reference.encode()), spec)
+
     def test_listener_overlap_and_typed_construction(self):
         doc = self.document()
         for rows in ([doc['listeners'][0]] * 2,
