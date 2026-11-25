@@ -13,6 +13,9 @@ or a change to PostgreSQL, private objects, or key generations requires its
 own recovery authority, including the verified Recovery Set required by
 [Deployment #109](https://github.com/SecPal/deployment/issues/109).
 
+The [one-time synthetic address cutover](synthetic-address-contract-cutover.md)
+defines a separate attended procedure for the exact #3114 and #2280 candidates.
+
 `secpal-reference-update.timer` runs the root-owned reference transaction
 every ten minutes. The service takes its candidate pins and their
 comparison evidence from the existing protected deployment source. It
