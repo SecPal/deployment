@@ -48,7 +48,7 @@ def free_port(family=socket.AF_INET):
 class TLSRuntime(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Fail closed rather than binding test servers on the Polyscope host.
+        # Bind test servers only inside the isolated user and network namespace.
         outer = os.environ.get('SECPAL_FIXTURE_OUTER_NETNS')
         if (outer is None or not outer.isdecimal() or os.geteuid()!=0
                 or os.stat('/proc/self/ns/net').st_ino==int(outer)):
