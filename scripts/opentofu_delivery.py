@@ -138,6 +138,14 @@ def repair_pr(pr, intent, head, actor):
             "unexpected repair PR provenance or state")
 
 
+def read_repair_pr(get, number, intent, head, actor):
+    # List responses omit commit counts. Bind the full record to the listed head.
+    pr = get(f"pulls/{number}")
+    require(pr["number"] == number, "unexpected repair PR number")
+    repair_pr(pr, intent, head, actor)
+    return pr
+
+
 def reauthenticate(get, intent):
     RECONCILE.protected_base(get, intent["base"])
     first = intent["proposals"][0]
@@ -187,7 +195,7 @@ def existing_prs(get, intent, actor):
         if ref.startswith(PREFIX) and authored(pr["user"], actor):
             if ref.startswith(f'{PREFIX}{intent["source"].rsplit("/", 1)[1]}/'):
                 existing = repair_commit(get, head, actor)
-                repair_pr(pr, existing, head, actor)
+                pr = read_repair_pr(get, number, existing, head, actor)
                 if existing == intent:
                     current.append(pr)
                 else:
@@ -339,7 +347,7 @@ def select_repair(get, proposals, source, base, actor):
             continue
         head = pr["head"]["sha"]
         intent = repair_commit(get, head, actor)
-        repair_pr(pr, intent, head, actor)
+        pr = read_repair_pr(get, pr["number"], intent, head, actor)
         if intent["base"] != base:
             continue
         for original in intent["proposals"]:

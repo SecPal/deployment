@@ -79,7 +79,7 @@ class Writer(SourceGitHub):
         pr = {"number": 484, "user": ACTOR, "state": "open", "commits": 1, "draft": False,
               "head": {"ref": payload["head"], "sha": REPAIR, "repo": repository},
               "base": {"ref": payload["base"], "repo": repository}}
-        self.open.append(pr)
+        self.open.append({key: value for key, value in pr.items() if key != "commits"})
         self.routes["pulls/484"] = pr
         return {"number": 484}
 
@@ -169,11 +169,26 @@ class SignedWriterTests(unittest.TestCase):
         stale_head = "f" * 40
         stale_intent = dict(github.intent, base=stale_base)
         stale = dict(live, number=483, head=dict(live["head"], sha=stale_head, ref=candidate_ref(stale_intent)))
+        github.routes["pulls/483"] = stale
+        summary = [{key: value for key, value in record.items() if key != "commits"}
+                   for record in (stale, live)]
         with patch.object(delivery, "repair_commit", side_effect=[stale_intent, github.intent]):
             self.assertEqual(
-                delivery.select_repair(github.get, [stale, live], DO, BASE, ACTOR),
+                delivery.select_repair(github.get, summary, DO, BASE, ACTOR),
                 (live, github.intent),
             )
+
+    def test_listed_repair_head_must_match_the_full_pr_read_back(self):
+        github = Writer()
+        github.deliver()
+        listed = github.open[-1]
+        full = github.routes["pulls/484"]
+        github.routes["pulls/484"] = dict(full, head=dict(full["head"], sha="f" * 40))
+        with self.assertRaisesRegex(Rejected, "unexpected repair PR"):
+            github.deliver()
+        with self.assertRaisesRegex(Rejected, "unexpected repair PR"):
+            delivery.select_repair(github.get, [listed], DO, BASE, ACTOR)
+        self.assertEqual([kind for kind, _ in github.writes], ["ref", "commit", "pull"])
 
     def test_concurrent_ref_change_blocks_pr_creation(self):
         github = Writer()
