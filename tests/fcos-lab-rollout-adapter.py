@@ -27,6 +27,61 @@ SOURCE = "7" * 40
 
 
 class AdapterContract(unittest.TestCase):
+    def test_missing_retained_predecessor_cannot_fall_back_to_actions(self):
+        from fcos_lab_rollout_adapter import FRONTEND_ARCHIVE, verified_frontend_archive
+
+        with (tempfile.TemporaryDirectory() as work,
+              patch("fcos_lab_rollout_adapter.download_publisher_artifact") as download,
+              patch("fcos_lab_rollout_adapter.github_json") as api):
+            pin = Frontend(DIGEST, SOURCE, FRONTEND_ARCHIVE)
+            with self.assertRaises(FileNotFoundError):
+                with verified_frontend_archive(pin, current=False, retained=Path(work) / "missing"):
+                    self.fail("missing predecessor was accepted")
+            download.assert_not_called()
+            api.assert_not_called()
+
+    def test_exact_native_staging_rejects_altered_blobs_and_excludes_extra_files(self):
+        import tarfile
+        from fcos_lab_rollout_adapter import make_oci_archive
+
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            layout = root / "image"
+            blobs = layout / "blobs" / "sha256"
+            blobs.mkdir(parents=True)
+
+            def blob(content):
+                digest = hashlib.sha256(content).hexdigest()
+                (blobs / digest).write_bytes(content)
+                return {"digest": "sha256:" + digest, "size": len(content)}
+
+            config = blob(b'{"architecture":"amd64"}')
+            layer = blob(b"layer")
+            manifest = blob(json.dumps({"config": config, "layers": [layer]}).encode())
+            (layout / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}')
+            (layout / "index.json").write_text(json.dumps({"schemaVersion": 2, "manifests": [manifest]}))
+            (blobs / "extraneous").write_bytes(b"unexpected")
+            result = root / "native.tar"
+            make_oci_archive(layout, manifest["digest"], result)
+            with tarfile.open(result) as archive:
+                self.assertCountEqual(archive.getnames(), ["oci-layout", "index.json"] + [
+                    "blobs/sha256/" + item["digest"].removeprefix("sha256:")
+                    for item in (config, layer, manifest)
+                ])
+            (blobs / layer["digest"].removeprefix("sha256:")).write_bytes(b"wrong")
+            with self.assertRaisesRegex(ValueError, "blob differs"):
+                make_oci_archive(layout, manifest["digest"], root / "wrong.tar")
+
+    def test_retained_qualification_cannot_authorize_activation(self):
+        from fcos_lab_rollout_adapter import API_ARCHIVE, FRONTEND_ARCHIVE, verified_backend_archive, verified_frontend_archive
+
+        frontend = Frontend(DIGEST, SOURCE, FRONTEND_ARCHIVE)
+        backend = Backend(SOURCE, DIGEST, DIGEST, DIGEST, "2026-11-23T00:00:00Z", None, API_ARCHIVE)
+        for verify, pin in ((verified_frontend_archive, frontend), (verified_backend_archive, backend)):
+            with self.assertRaisesRegex(ValueError, "cannot authorize"):
+                with verify(pin, current=True, retained=Path("/retained")):
+                    self.fail("historical qualification was used for activation")
+
     def test_protected_release_verification_accepts_the_direct_launch_identity(self):
         from types import SimpleNamespace
         from fcos_lab_rollout_adapter import admit_source_text

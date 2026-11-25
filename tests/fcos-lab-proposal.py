@@ -42,25 +42,23 @@ class ProposalContract(unittest.TestCase):
         from fcos_lab_proposal import archived_selection
         from fcos_lab_rollout_adapter import FRONTEND_ARCHIVE
         installed = Frontend(OLD.index, OLD.source, FRONTEND_ARCHIVE)
-        report = {"index": installed.index, "source_commit": installed.source}
-        with patch("fcos_lab_proposal.qualified_candidate", return_value=report) as discovery, patch(
-            "fcos_lab_proposal.github_json"
-        ) as compare:
+        with (patch("fcos_lab_proposal.qualified_candidate", return_value=None) as discovery,
+              patch("fcos_lab_proposal.github_json") as compare):
             self.assertEqual(archived_selection("frontend", installed, Path("/trusted/gh")), None)
-            discovery.assert_called_once_with("frontend", Path("/trusted/gh"), current=False)
+            discovery.assert_called_once_with("frontend", Path("/trusted/gh"), current=False,
+                                              installed_source=installed.source)
             compare.assert_not_called()
 
     def test_archived_selection_rejects_divergence_and_preserves_exact_plan(self):
         from fcos_lab_proposal import archived_selection
         from fcos_lab_rollout_adapter import FRONTEND_ARCHIVE
         report = {"index": NEW.index, "source_commit": NEW.source}
-        with patch("fcos_lab_proposal.qualified_candidate", return_value=report), patch(
-            "fcos_lab_proposal.github_json", return_value={"status": "diverged"}
-        ), self.assertRaisesRegex(ValueError, "does not advance"):
+        with (patch("fcos_lab_proposal.qualified_candidate", return_value=report),
+              patch("fcos_lab_proposal.github_json", return_value={"status": "diverged"}),
+              self.assertRaisesRegex(ValueError, "does not advance")):
             archived_selection("frontend", OLD, Path("/trusted/gh"))
-        with patch("fcos_lab_proposal.qualified_candidate", return_value=report), patch(
-            "fcos_lab_proposal.github_json", return_value={"status": "ahead"}
-        ):
+        with (patch("fcos_lab_proposal.qualified_candidate", return_value=report),
+              patch("fcos_lab_proposal.github_json", return_value={"status": "ahead"})):
             self.assertEqual(archived_selection("frontend", OLD, Path("/trusted/gh")),
                              Frontend(NEW.index, NEW.source, FRONTEND_ARCHIVE))
 
@@ -72,9 +70,8 @@ class ProposalContract(unittest.TestCase):
         report = {"source_commit": installed.source, "indexes": {"nginx": installed.nginx,
                   "php-fpm": installed.fpm}, "receipt": installed.pair,
                   "source_security_expires": "2026-11-25T12:00:00Z"}
-        with patch("fcos_lab_proposal.qualified_candidate", return_value=report), patch(
-            "fcos_lab_proposal.github_json"
-        ) as compare:
+        with (patch("fcos_lab_proposal.qualified_candidate", return_value=report),
+              patch("fcos_lab_proposal.github_json") as compare):
             self.assertIsNone(archived_selection("api", installed, Path("/trusted/gh")))
             compare.assert_not_called()
 

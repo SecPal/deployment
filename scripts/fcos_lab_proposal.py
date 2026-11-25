@@ -301,7 +301,9 @@ def backend_candidate(report, current):
 
 def archived_selection(product, installed, gh):
     """Select the signed main identity. The caller still has to admit an update."""
-    report = qualified_candidate(product, gh, current=False)
+    report = qualified_candidate(product, gh, current=False, installed_source=installed.source)
+    if report is None:
+        return None
     source = report["source_commit"]
     if product == "frontend":
         selected = Frontend(report["index"], source, FRONTEND_ARCHIVE)

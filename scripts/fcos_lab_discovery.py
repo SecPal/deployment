@@ -137,7 +137,7 @@ def protected_source(product, gh):
     return source
 
 
-def qualified_candidate(product, gh, *, current=True):
+def qualified_candidate(product, gh, *, current=True, installed_source=None):
     """Report the exact protected-main candidate without conferring deployment authority."""
     if product not in {"frontend", "api"}:
         raise ValueError("unknown product")
@@ -146,6 +146,8 @@ def qualified_candidate(product, gh, *, current=True):
                        "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1", "GH_TELEMETRY": "false"}
         verified_gh(gh, environment)
     source = protected_source(product, gh)
+    if source == installed_source:
+        return None
     verify = qualified_frontend_source if product == "frontend" else qualified_backend_source
     with verify(source, gh, current=current) as result:
         _, run_id, attempt, children, *documents = result
