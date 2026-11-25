@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import re
 import shlex
 import subprocess
@@ -266,12 +267,17 @@ class RepositorySecurityTests(unittest.TestCase):
         pip, = [entry for entry in dependabot["updates"] if entry["package-ecosystem"] == "pip"]
         self.assertCountEqual(pip["directories"], [f"/requirements/{name}" for name in dependencies])
         self.assertEqual(pip["schedule"]["interval"], "daily")
+        self.assertEqual(pip["groups"], {"deployment-python": {
+            "group-by": "dependency-name", "update-types": ["patch", "minor"],
+        }})
         auto_merge = yaml.load(
             (ROOT / ".github/workflows/dependabot-auto-merge.yml").read_text(),
             Loader=yaml.BaseLoader,
         )
-        ecosystems = auto_merge["jobs"]["auto-merge"]["with"]["allowed-ecosystems"].split(",")
-        self.assertNotIn("pip", ecosystems)
+        inputs = auto_merge["jobs"]["auto-merge"]["with"]
+        self.assertIn("pip", inputs["allowed-ecosystems"].split(","))
+        self.assertCountEqual(json.loads(inputs["pip-plain-manifest-paths"]),
+                              [str(path.relative_to(ROOT)) for path in paths])
 
 
 if __name__ == "__main__":
