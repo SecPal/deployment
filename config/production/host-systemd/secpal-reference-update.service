@@ -16,6 +16,8 @@ UMask=0077
 Environment=PATH=/usr/sbin:/usr/bin HOME=/root
 StateDirectory=secpal-reference-update
 StateDirectoryMode=0700
+RuntimeDirectory=secpal-reference-oci
+RuntimeDirectoryMode=0711
 TimeoutStartSec=20min
 TimeoutStopSec=3min
 KillMode=mixed
