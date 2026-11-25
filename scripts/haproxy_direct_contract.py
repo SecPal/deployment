@@ -254,8 +254,20 @@ def _render(spec: Direct, generation=None) -> str:
         sections = '\n'.join(line + ' { src ' + ' '.join(probe_sources) + ' }'
                              if line.startswith('    http-request return status 204 ') else line
                              for line in sections.split('\n'))
-        sections = sections.replace(marker, seam + marker +
-            '    use_backend secpal_acme if acme_target acme_method !{ ssl_fc }\n', 1)
+        routes = '    use_backend secpal_acme if acme_target acme_method !{ ssl_fc }\n'
+        if spec.routing == Routing('app.secpal.dev', 'api.secpal.dev'):
+            # The browser API shares the reference frontend origin so a
+            # parent-domain cookie cannot reach Labs and previews.
+            seam += '''    acl app_api_versioned path_beg /v1/
+    acl app_api_exact path /sanctum/csrf-cookie /health/ready
+    http-request set-var(txn.retire_reference_cookies) bool(true) if frontend_origin { ssl_fc } { path /sanctum/csrf-cookie /v1/me }
+    http-response add-header Set-Cookie "XSRF-TOKEN=; Max-Age=0; Path=/; Domain=secpal.dev; Secure; SameSite=Lax" if { var(txn.retire_reference_cookies) -m bool } { status 200 204 }
+    http-response add-header Set-Cookie "secpal-session=; Max-Age=0; Path=/; Domain=secpal.dev; Secure; HttpOnly; SameSite=Lax" if { var(txn.retire_reference_cookies) -m bool } { status 200 204 }
+'''
+            routes += '''    use_backend secpal_api if frontend_origin app_api_versioned { ssl_fc }
+    use_backend secpal_api if frontend_origin app_api_exact { ssl_fc }
+'''
+        sections = sections.replace(marker, seam + marker + routes, 1)
         sections += '''
 backend secpal_acme
     timeout connect 1s

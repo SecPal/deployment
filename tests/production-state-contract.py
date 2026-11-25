@@ -241,6 +241,7 @@ class ProductionStateContractTest(unittest.TestCase):
         self.assertNotIn("valkey", combined)
         for role in API_ROLES:
             unit = rendered[f"secpal-{role}.container"]
+            self.assertIn("Environment=SESSION_DOMAIN=\n", unit)
             self.assertIn("source=/srv/secpal/private-storage,target=/app/storage/app/private,rw=true", unit)
             self.assertIn("source=/srv/secpal/public-storage,target=/app/storage/app/public,rw=true", unit)
             self.assertIn("/run/secpal/secrets/api/app-key", unit)
@@ -250,6 +251,7 @@ class ProductionStateContractTest(unittest.TestCase):
         self.assertNotIn("/run/secpal/secrets/postgres/", combined)
         self.assertNotIn("/run/secpal/secrets", rendered["secpal-frontend.container"])
         self.assertIn("Network=secpal-edge.network", rendered["secpal-frontend.container"])
+        self.assertIn("Environment=SECPAL_API_URL=https://app.secpal.dev\n", rendered["secpal-frontend.container"])
         logs = self.contract["log_policy"]
         container_units = {
             name: text
