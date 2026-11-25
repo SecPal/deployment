@@ -410,6 +410,13 @@ before installing the exact reviewed source revision.
    restrict,from="<verified controller WireGuard source IPv4>/32",command="/usr/local/libexec/secpal-fcos-lab-rollout/guest --ssh-entry" ssh-ed25519 <dedicated-controller-public-key>
    ```
 
+   The frontend switch mounts a read-only source offer generated from the
+   verified frontend commit and the adopted OpenAPI revision recorded in
+   [Frontend #1788](https://github.com/SecPal/frontend/pull/1788). The backend
+   switch renders release metadata from the exact selected PHP-FPM image
+   revision in its existing pool configuration. Each switch and rollback
+   regenerates only the corresponding component metadata.
+
    Verify `sshd -T` admits public keys from the configured authorized-keys
    file. Through the dedicated key, verify an exact read-back of the
    enrolled baseline and rejection of an explicit SSH command, TCP
