@@ -7,22 +7,19 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status and authority
 
-This document records retained D.2 declarations and their historical persistence
-semantics. They are not the current Managed Private Object Storage architecture.
-Current [#87](https://github.com/SecPal/deployment/issues/87) and
-[#88](https://github.com/SecPal/deployment/issues/88) supersede Managed-local
-authoritative private files. [#99](https://github.com/SecPal/deployment/issues/99)
-owns the provider-neutral, topology-neutral authoritative Private Object Storage
-contract: Managed Objects are off-host, and any Self-Hosted local adapter must
-preserve the same object semantics and independent recovery requirements. That
-contract is not implemented or qualified by the native runtime fixture below.
+The Managed FCOS reference uses an independently qualified PostgreSQL 18
+infrastructure container under
+[ADR-017](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-postgresql-18-canonical-baseline-adr017.md).
+Managed authoritative private objects are off-host under the
+[Private Object Storage contract](https://github.com/SecPal/deployment/issues/99).
+That contract also defines the semantics and independent recovery required
+of Self-Hosted storage adapters.
 
-PostgreSQL 18 is host-native systemd/SELinux infrastructure;
-see [the native contract](native-postgresql.md). The rootless state tool never
-initializes, re-owns, mounts or destroys PGDATA. The superseded PostgreSQL product
-container and initializer remain absent. The retained product roles use rootless
-Podman, the systemd user manager and native Quadlet. Source declarations do not
-establish real-host PostgreSQL qualification, live installation or backup.
+The declarations below apply to the retained portable Rocky runtime fixture,
+which uses [host-native PostgreSQL](native-postgresql.md) and local file
+trees. Its rootless product state tool never initializes, re-owns, mounts or
+destroys PGDATA. The fixture validates product bind persistence and provides
+no Managed storage or recovery admission.
 
 [`config/production/state-contract.json`](../../config/production/state-contract.json)
 is the metadata source for the retained declarations. The checked Quadlets are
@@ -36,7 +33,7 @@ standard library and D.2 adds no undeclared PyYAML runtime dependency. The
 loader rejects duplicate keys, unknown structure, and any supplied matrix whose
 canonical semantic digest differs from the reviewed matrix.
 
-## Classification summary
+## Portable fixture state and ownership
 
 | Object                                             | Authority and classification                                                                                                                            | Loss, restore, and D.7 boundary                                                |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
@@ -147,8 +144,14 @@ separately reviewed migration with explicit rollback and orphan detection.
 
 ## PostgreSQL and application recovery boundary
 
-PostgreSQL, private application storage, and public application storage form one
-business recovery boundary. D.7 must capture and restore a transactionally
+Managed recovery follows
+[ADR-020](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-state-recovery-authority-separation-adr020.md)
+and the Private Object Storage contract. Use the admitted recovery authorities
+for the target deployment.
+
+For the portable fixture's retained local-file layout, PostgreSQL, private
+application storage, and public application storage form one business recovery
+boundary. Recovery must capture and restore a transactionally
 appropriate PostgreSQL point plus both file trees, bind the evidence to the
 target release, and prove metadata after restore. Restoring only one member is
 not a successful SecPal recovery. No initializer may silently create a new
@@ -161,8 +164,8 @@ inode metadata and cross-role visibility across native systemd-user stop/start
 and container recreation. Frontend, native PostgreSQL, and future edge roles
 receive neither application-storage bind.
 
-The superseded PostgreSQL container and initializer stay absent. Native
-PostgreSQL owns its separate storage, listener, transport and role contracts.
+The portable fixture delegates storage, listener, transport and role contracts
+to its host-native PostgreSQL service.
 PostgreSQL also owns database sessions, durable queues and shared cache;
 Valkey state, credential copies and startup dependencies are removed.
 
@@ -205,9 +208,9 @@ recreation then passed. #296 narrows obsolete semantic authority; it does not
 recreate that resolved runtime failure. Historical D.2 evidence remains in Git
 and [#77](https://github.com/SecPal/deployment/pull/77).
 
-## D.7 handoff
+## Recovery inputs for the portable layout
 
-D.7 must implement, not redefine, these boundaries:
+Recover the portable layout using these boundaries:
 
 - required coordinated recovery: PostgreSQL, private storage, public storage,
   and PostgreSQL-backed durable queues;

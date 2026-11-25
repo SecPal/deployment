@@ -12,28 +12,25 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Scope and authority
 
-This record makes the accepted DIRECT decision durable for Rocky Linux 10.2+
-with SELinux enforcing. ADR-019 owns the two Edge modes and their trust
+ADR-019 owns DIRECT and PROTECTED and their trust
 boundaries; [ADR-022](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-deployment-topology-high-availability-adr022.md)
 owns the orthogonal `single`, `replacement`, and `ha` topologies. This record
 applies those authorities to DIRECT without replacing either ADR.
 
-PROTECTED remains a separately accepted mode: CloudFront Multi-Tenant owns the
-public Viewer Edge, while host-native HAProxy remains the authenticated
-Origin/backend boundary. PROTECTED is neither superseded nor implemented here;
-its implementation belongs to [#209](https://github.com/SecPal/deployment/issues/209)
-descendants.
+PROTECTED uses CloudFront Multi-Tenant as public Viewer Edge and HAProxy as
+the authenticated Origin boundary. Implementation belongs to
+[#209](https://github.com/SecPal/deployment/issues/209) descendants.
 
-The implementation in this document describes host-native HAProxy. ADR-019's
-current Managed refinement permits separately qualified containerized HAProxy
-and applies the same Viewer TLS, client identity and isolation boundaries to it.
-[The FCOS lab profile](../../fcos-application-poc.md#private-haproxy-gateway)
-records the scope of the container evidence.
+Managed FCOS uses independently qualified Podman/Quadlet infrastructure for
+HAProxy and CrowdSec/AppSec where technically appropriate, as defined in
+ADR-019. The portable Rocky implementation uses host-native HAProxy under
+systemd and SELinux. Both placements must meet the same DIRECT Viewer TLS,
+client identity and isolation boundaries.
 
 ## Selected Edge and endpoint contract
 
-The DIRECT reference Viewer Edge is **host-native HAProxy**, managed by systemd
-under SELinux, outside rootless product-container authority. HAProxy owns Viewer
+The DIRECT Viewer Edge is **HAProxy**, outside product-container
+authority. HAProxy owns Viewer
 TLS termination, public HTTP(S) ingress, routing, health-based backend selection,
 canonical client identity, and HTTP hygiene.
 
