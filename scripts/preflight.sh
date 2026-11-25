@@ -111,7 +111,6 @@ python3 scripts/validate-haproxy-reference.py
 python3 scripts/validate-haproxy-direct-reference.py
 python3 tests/product-backend-qualification.py
 python3 tests/production-postgres-retirement.py
-python3 tests/production-edge-decision-contract.py
 python3 tests/cloudfront-origin-prefix-lkg.py
 python3 tests/host-firewall-contract.py
 python3 tests/public-findings.py

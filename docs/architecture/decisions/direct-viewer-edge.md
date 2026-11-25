@@ -24,13 +24,11 @@ Origin/backend boundary. PROTECTED is neither superseded nor implemented here;
 its implementation belongs to [#209](https://github.com/SecPal/deployment/issues/209)
 descendants.
 
-This decision supersedes closed [#11](https://github.com/SecPal/deployment/issues/11)
-and the historical [Debian/NGINX/Certbot/no-WAF decision](production-edge.md)
-where they conflict with the current DIRECT architecture. Historical package
-pins, no-upstream-proxy rules, and no-L7-integration rules are not current
-implementation authority. Descendants implement this decision; changing the
-Edge technology, runtime authority, client-identity model, or certificate
-authority requires a new architecture-level decision.
+The implementation in this document describes host-native HAProxy. ADR-019's
+current Managed refinement permits separately qualified containerized HAProxy
+and applies the same Viewer TLS, client identity and isolation boundaries to it.
+[The FCOS lab profile](../../fcos-application-poc.md#private-haproxy-gateway)
+records the scope of the container evidence.
 
 ## Selected Edge and endpoint contract
 

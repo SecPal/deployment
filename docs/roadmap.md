@@ -5,9 +5,8 @@ SPDX-License-Identifier: CC0-1.0
 
 # Deployment roadmap
 
-This roadmap points to current owners and preserves completed phase evidence.
-Native GitHub relationships and issue state are authoritative for delivery
-progress; this summary is not a second work graph.
+This roadmap points to current delivery owners. Native GitHub issues and
+relationships own delivery status.
 
 ## Current production direction
 
@@ -122,53 +121,3 @@ and #128, bind them into #109 and prove #110 against the #92 construction path.
 Prepare the selected Edge and #129/#116 observations/runbooks independently.
 Compose the synthetic Managed lifecycle through #115 and Operations #14 before
 a live production activation.
-
-## Historical phase evidence
-
-The phase descriptions below record what was proven at the time. They do not
-define the current production architecture.
-
-### Phase A — Governance bootstrap (complete)
-
-Phase A established repository governance, licensing, deterministic preflight,
-and protected `main`. No deployment implementation existed at completion.
-
-### Phase B — Local container integration stack (complete)
-
-Phase B proved the former test-only Docker Compose integration, including its
-PostgreSQL/Valkey behavior, Caddy test gateway, browser flow, worker roles,
-singleton cardinality, migration, and cleanup. The preserved Phase-B completion
-record names `Local Integration / Compose Contract` and shows the historical
-check was enforced for `main` at that time. The executable Compose stack has
-since been retired; these names remain accurate historical evidence.
-
-### Phase C — Immutable image publishing (complete)
-
-Phase C proved reviewed API and frontend image publication and fail-closed,
-digest-only consumption. Phase C is complete, and its GitHub runs and immutable
-Git history retain the detailed evidence.
-
-### Former Phase D.1/D.2/D.3 sequence (historical / superseded)
-
-The former sequence recorded a Debian 13/AppArmor production host, D.1a
-integration parity, production state/secrets, and a Debian NGINX production
-Edge. Those documents and runs remain historical evidence. The current Managed FCOS/SELinux, PostgreSQL 18, and Edge
-authorities are ADR-017, ADR-018 and ADR-019.
-
-The retired non-production Debian cloud-conformance implementation records its
-original environment and evidence honestly, but now fails before provider
-authority. The Rocky qualification remains historical platform evidence; the FCOS
-reference has its own owner.
-
-### Former Phase E edge selection (historical / superseded)
-
-The old plan deferred selection of one production Edge until a later phase.
-ADR-019 supersedes that planning assumption by accepting DIRECT and PROTECTED.
-Implementation now follows the separate owner graphs above.
-
-### Recovery and operations history
-
-Earlier Phase F/G headings described future backup, restore, update, rollback,
-and private managed automation. Current recovery, acceptance, and runbook work
-uses the owner links above. Private customer inventory, credentials, placement,
-rollout, and commercial policy remain outside this public repository.
