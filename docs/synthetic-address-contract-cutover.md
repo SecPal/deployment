@@ -11,9 +11,11 @@ Lab guests CX23 (163965414), CX33 (163717938), and CAX21 (169716995).
 Use [deployment #93](https://github.com/SecPal/deployment/issues/93) for the
 activation and recovery controls. The routine timers retain the
 migration-free [Lab](fcos-lab-rollout.md) and
-[public reference](public-reference-updates.md) contracts. Customer targets and
-the production [RecoverySet](https://github.com/SecPal/deployment/issues/109)
-requirements are outside this authorization.
+[public reference](public-reference-updates.md) contracts. The operator accepts
+the fenced, independently verified logical recovery point below for this
+single cutover on the four named synthetic installations. All other
+state-changing rollouts retain their existing recovery rules, including the
+production [RecoverySet](https://github.com/SecPal/deployment/issues/109).
 
 ## Exact inputs
 
@@ -43,17 +45,25 @@ official registry release approval to its existing contract.
    cluster and migration ledger, fixture identities, and the active OpenPLZ
    import. Verify the complete off-host logical restore for each database using
    the existing [restore procedure](fcos-application-poc.md#cross-host-logical-restore).
-   Include any dependent private objects and key generations, or establish their
-   absence or continued availability across this cutover. Keep the installed
-   artifacts, unit definitions and credential material recoverable.
+   Verify that there are no private objects to recover and that all existing
+   key generations and their credentials remain recoverable. This scoped
+   logical recovery path cannot authorize a cutover if private objects exist,
+   a key generation is unaccounted for, or the data classification is uncertain.
+   Keep the installed artifacts, unit definitions and credential material
+   recoverable.
 2. Rehearse the new API migration and seed over the recovered state with the
    staged candidate and independent AMD64 and ARM64 qualification. The only
    pending Laravel migration must be
    `2026_11_25_210000_include_customer_house_number_in_duplicate_guard`.
    Verify the new index and existing organization, user and witness data.
-3. Stage both components by digest. In the maintenance window, hold the existing
-   deployment locks, pause the affected activations, and fence application writes
-   and workers. Verify the fenced recovery point before mutating the database.
+3. Stage both components by digest. In the maintenance window, hold the
+   existing deployment locks and pause the affected activations. Stop API HTTP
+   and verify it is no longer accepting requests. Drain and stop the scheduler,
+   both workers and PHP-FPM, then verify that all five roles are inactive.
+   Capture the final encrypted logical dump under this write fence. Record its
+   hash, PostgreSQL system identity, WAL position, timestamp and exact
+   migration ledger, then independently verify the fenced restore before
+   mutating the database.
    Use the existing separate migration unit and database role to apply the
    Laravel migration exactly once. Seed the test fixtures in place and explicitly
    run the API's checksum-bound OpenPLZ import if the approved data are absent or
