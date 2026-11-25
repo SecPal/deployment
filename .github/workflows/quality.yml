@@ -36,11 +36,11 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           languages: ${{ matrix.language }}
       - name: Analyze source
-        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           category: /language:${{ matrix.language }}
 
@@ -73,7 +73,7 @@ jobs:
 
       - name: Scan exact source with organization policy
         id: scan
-        uses: SecPal/.github/.github/actions/trivy-repository-scan@21456aaffba1519ced825347361b4237eddd955d # main
+        uses: SecPal/.github/.github/actions/trivy-repository-scan@faeaccafe5615cb61178120be82574d8c8aa6f43 # main
 
       - name: Require clean source security
         env:
@@ -126,7 +126,7 @@ jobs:
 
   reuse:
     name: REUSE Compliance
-    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@482d55cf6732dd27c7075283b2a8055259f5c3c6 # main
+    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@faeaccafe5615cb61178120be82574d8c8aa6f43 # main
 
   markdown-shell:
     name: Markdown and Shell

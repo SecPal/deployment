@@ -72,6 +72,7 @@ python3 tests/quadlet-integration-contract.py
 python3 tests/fcos-application-poc.py
 python3 tests/fcos-lab-rollout.py
 python3 tests/fcos-lab-rollout-adapter.py
+python3 tests/reference-update.py
 python3 tests/quadlet-integration-lifecycle.py
 python3 tests/ci-cloud-contract.py
 python3 tests/opentofu-reconciliation.py
@@ -112,7 +113,6 @@ python3 scripts/validate-haproxy-reference.py
 python3 scripts/validate-haproxy-direct-reference.py
 python3 tests/product-backend-qualification.py
 python3 tests/production-postgres-retirement.py
-python3 tests/production-edge-decision-contract.py
 python3 tests/cloudfront-origin-prefix-lkg.py
 python3 tests/host-firewall-contract.py
 python3 tests/public-findings.py

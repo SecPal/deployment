@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 -r ../qualification/requirements.txt
-reuse==6.1.2
+reuse==6.3.0
 shellcheck-py==0.11.0.1
 yamllint==1.37.1
 boolean.py==5.0

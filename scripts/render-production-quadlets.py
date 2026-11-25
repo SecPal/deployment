@@ -69,7 +69,7 @@ APPLICATION_ENVIRONMENT = (
     "Environment=FRONTEND_URL=https://app.secpal.dev",
     "Environment=SANCTUM_STATEFUL_DOMAINS=app.secpal.dev",
     "Environment=CORS_ALLOWED_ORIGINS=https://app.secpal.dev",
-    "Environment=SESSION_DOMAIN=.secpal.dev",
+    "Environment=SESSION_DOMAIN=",
     "Environment=SESSION_SECURE_COOKIE=true",
     "Environment=SESSION_HTTP_ONLY=true",
     "Environment=SESSION_SAME_SITE=lax",
@@ -305,6 +305,7 @@ def build_units(contract: dict) -> dict[str, str]:
     frontend = common_container(contract, "frontend", FRONTEND_IMAGE)
     frontend.extend(
         (
+            "Environment=SECPAL_API_URL=https://app.secpal.dev",
             *tmpfs_mounts("frontend"),
             "Network=secpal-edge.network",
             *publish_lines("frontend"),

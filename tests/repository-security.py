@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import re
 import shlex
 import subprocess
@@ -92,6 +93,14 @@ class RepositorySecurityTests(unittest.TestCase):
                     env={"ANALYSIS_RESULT": outcome},
                 )
                 self.assertEqual(observed.returncode == 0, outcome == "success")
+
+    def test_dependabot_groups_coupled_codeql_steps(self):
+        dependabot = yaml.load((ROOT / ".github/dependabot.yml").read_text(), Loader=yaml.BaseLoader)
+        actions, = [entry for entry in dependabot["updates"] if entry["package-ecosystem"] == "github-actions"]
+        for update_type in ("patch", "minor", "major"):
+            group = actions["groups"][f"github-actions-{update_type}"]
+            self.assertEqual(group["patterns"], ["github/codeql-action/*"])
+            self.assertEqual(group["update-types"], [update_type])
 
     def test_existing_required_check_cannot_succeed_after_failed_or_skipped_scan(self):
         job = self.workflow["jobs"]["repository-contract"]
@@ -266,12 +275,17 @@ class RepositorySecurityTests(unittest.TestCase):
         pip, = [entry for entry in dependabot["updates"] if entry["package-ecosystem"] == "pip"]
         self.assertCountEqual(pip["directories"], [f"/requirements/{name}" for name in dependencies])
         self.assertEqual(pip["schedule"]["interval"], "daily")
+        self.assertEqual(pip["groups"], {"deployment-python": {
+            "group-by": "dependency-name", "update-types": ["patch", "minor"],
+        }})
         auto_merge = yaml.load(
             (ROOT / ".github/workflows/dependabot-auto-merge.yml").read_text(),
             Loader=yaml.BaseLoader,
         )
-        ecosystems = auto_merge["jobs"]["auto-merge"]["with"]["allowed-ecosystems"].split(",")
-        self.assertNotIn("pip", ecosystems)
+        inputs = auto_merge["jobs"]["auto-merge"]["with"]
+        self.assertIn("pip", inputs["allowed-ecosystems"].split(","))
+        self.assertCountEqual(json.loads(inputs["pip-plain-manifest-paths"]),
+                              [str(path.relative_to(ROOT)) for path in paths])
 
 
 if __name__ == "__main__":
