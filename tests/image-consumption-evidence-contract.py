@@ -2,7 +2,10 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Verify the current API and frontend artifact evidence references."""
+"""Check source and documentation evidence references.
+
+Runtime admission and expiry are exercised by oci-attestation-bundle-contract.py.
+"""
 
 from __future__ import annotations
 

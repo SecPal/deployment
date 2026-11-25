@@ -31,9 +31,13 @@ record their selected releases and activation evidence separately.
 The existing anonymous OCI fetcher verifies the pair artifact's digest and
 signed publisher identity, its exact source and both index references, then
 verifies and stages each image separately. It rejects swapped companions.
-The stored SQLite OpenVEX horizon of `2026-11-23T00:00:00Z` applies only to
-the exact PHP-FPM subjects. That horizon has passed; new target admission
-requires current applicable evidence.
+The stored SQLite OpenVEX horizon of `2026-11-23T00:00:00Z` applies to
+the exact PHP-FPM subjects and has passed. The verifier rejects this pair for
+cloud and other non-reference admission paths after the horizon. Renew central
+security qualification before admitting it there. Only the closed, local
+loopback reference fixture can exercise the exact pinned pair after expiry.
+The [OCI verifier tests](../tests/oci-attestation-bundle-contract.py) cover both
+paths. The documentation consistency check confirms the stored value alone.
 
 The HTTP role `api` runs Nginx and retains the HAProxy backend port. The
 `php-fpm` role owns application/database secrets and the private socket.
@@ -76,7 +80,7 @@ before it can be selected for a rollback.
 The runner verifies both images with the pinned GitHub CLI and pulls through
 fresh, empty Podman authentication files. The
 [fixture toolchain contract](quadlet-integration.md) describes the runner
-requirements; the [hosted workflow](../.github/workflows/local-integration.yml)
+requirements. The [hosted workflow](../.github/workflows/local-integration.yml)
 pins the GitHub CLI version and checksums for both native architectures.
 
 ## Token-free OCI bundle verification
@@ -112,7 +116,7 @@ configuration variables, and any inherited `GH_HOST`, passes
 `--hostname github.com` and disables prompting, update notifications, and
 telemetry. Because the artifact argument is the digest-validated local OCI
 index rather than an `oci://` reference, GitHub CLI does not reopen the
-registry. The temporary index, bundle, and temporary authentication state
+registry. The temporary index, bundle, and authentication state
 are removed on success, failure, and signals.
 
 The digest-derived OCI Referrers fallback is metadata transport only. It is
