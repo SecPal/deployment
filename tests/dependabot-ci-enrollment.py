@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Keep deployment automation restricted to qualified CI, hook, and gateway inputs."""
+"""Keep deployment automation restricted to qualified CI, hook, Python, and gateway inputs."""
 import json
 from pathlib import Path
 import unittest
@@ -28,7 +28,7 @@ class EnrollmentContract(unittest.TestCase):
         )
         self.assertEqual(job['with']['phase'], '2')
         self.assertEqual(job['with']['merge-method'], 'squash')
-        self.assertEqual(job['with']['allowed-ecosystems'], 'github_actions,npm_and_yarn,pre_commit,docker')
+        self.assertEqual(job['with']['allowed-ecosystems'], 'github_actions,npm_and_yarn,pre_commit,docker,pip')
         self.assertEqual(json.loads(job['with']['docker-rules']), [{
             'image': 'library/caddy',
             'paths': ['containers/phase-b-gateway/Containerfile'],

@@ -34,6 +34,10 @@ updates:
       - /requirements/qualification
       - /requirements/quality
       - /requirements/schema
+    groups:
+      deployment-python:
+        group-by: dependency-name
+        update-types: [patch, minor]
     schedule:
       interval: daily
       time: "04:00"
