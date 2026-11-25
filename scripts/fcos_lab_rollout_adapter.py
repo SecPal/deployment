@@ -848,9 +848,16 @@ def verified_backend_archive(backend, *, current=True, gh=None, retained=None):
     with tempfile.TemporaryDirectory(prefix="fcos-lab-verifier-") as temporary:
         environment = publisher_environment(temporary)
         verified_gh(gh, environment)
-        children, _ = verify_api_candidate(qualification, backend.source, gh, environment, current=False)
-        workflow = pair["workflow"]
-        yield gh, int(workflow["run_id"]), int(workflow["run_attempt"]), children, pair, qualification, retained
+        run, attempt = api_receipt_invocation(pair)
+        children, _ = verify_api_candidate(
+            qualification, backend.source, gh, environment, current=False, selected=(run, attempt),
+        )
+        yield gh, run, attempt, children, pair, qualification, retained
+
+
+def api_receipt_invocation(pair):
+    workflow = pair["workflow"]
+    return int(workflow["run_id"]), int(workflow["run_attempt"])
 
 def api_native_attempt(pair, platform, attempt):
     attempts = {p["smoke"]["workflow_run_attempt"] for role in ("nginx", "php-fpm")

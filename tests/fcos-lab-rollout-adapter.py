@@ -168,6 +168,8 @@ class AdapterContract(unittest.TestCase):
                         self.assertEqual(restored[role, platform][0], child)
                         restored_association = restored[role, platform][1] / "association.json"
                     verify.assert_called_once()
+                    if product == "api":
+                        self.assertEqual(verify.call_args.kwargs["selected"], (10, 1))
                     download.assert_not_called()
                     restored_association.write_text("{}")
                     with self.assertRaisesRegex(ValueError, "unexpected SPDX association"):

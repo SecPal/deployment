@@ -19,7 +19,7 @@ from tempfile import TemporaryDirectory
 
 from fcos_lab_rollout_adapter import (
     ARCHIVE_MAX, admission_governance, admit_component_update,
-    api_native_attempt, download_publisher_artifact, proposal_stage, retained_archive,
+    api_native_attempt, api_receipt_invocation, download_publisher_artifact, proposal_stage, retained_archive,
     require_private_directory, verified_backend_archive, verified_frontend_archive,
     verified_native_image,
 )
@@ -63,6 +63,8 @@ def component_archive(product, pin, gh, *, current, preserve=False):
 
     with verifier(pin, gh=gh, current=current, retained=retained) as result:
         _, run, attempt, children = result[:4]
+        if preserve and product == "api" and api_receipt_invocation(result[4]) != (run, attempt):
+            raise ValueError("retained API receipt differs from the qualified publisher invocation")
         root = result[-1]
         native_root = root
         if preserve and os.path.lexists(stored):
