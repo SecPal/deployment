@@ -75,6 +75,8 @@ python3 tests/fcos-lab-rollout-adapter.py
 python3 tests/reference-update.py
 python3 tests/quadlet-integration-lifecycle.py
 python3 tests/ci-cloud-contract.py
+python3 tests/opentofu-reconciliation.py
+python3 tests/opentofu-delivery.py
 python3 tests/ci-cloud-rocky-control.py
 python3 tests/ci-cloud-rocky-readiness.py
 python3 tests/ci-cloud-rocky-runtime-user-readiness.py
