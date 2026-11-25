@@ -94,6 +94,14 @@ class RepositorySecurityTests(unittest.TestCase):
                 )
                 self.assertEqual(observed.returncode == 0, outcome == "success")
 
+    def test_dependabot_groups_coupled_codeql_steps(self):
+        dependabot = yaml.load((ROOT / ".github/dependabot.yml").read_text(), Loader=yaml.BaseLoader)
+        actions, = [entry for entry in dependabot["updates"] if entry["package-ecosystem"] == "github-actions"]
+        for update_type in ("patch", "minor", "major"):
+            group = actions["groups"][f"github-actions-{update_type}"]
+            self.assertEqual(group["patterns"], ["github/codeql-action/*"])
+            self.assertEqual(group["update-types"], [update_type])
+
     def test_existing_required_check_cannot_succeed_after_failed_or_skipped_scan(self):
         job = self.workflow["jobs"]["repository-contract"]
         self.assertEqual(job["name"], "Repository Contract")
