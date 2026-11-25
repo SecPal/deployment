@@ -27,6 +27,7 @@ NoNewPrivileges=yes
 RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_SETGID CAP_SETUID CAP_KILL
+AmbientCapabilities=CAP_SETUID
 ReadWritePaths=/run/lock /etc/containers/systemd/users/20004 /etc/containers/systemd/users/20005
 ReadWritePaths=/var/lib/secpal-reference/config
 ReadWritePaths=/run/user/20004 /run/user/20005 /run/user/20006 /var/home/secpal-app /var/home/secpal-api /var/home/secpal-pg
