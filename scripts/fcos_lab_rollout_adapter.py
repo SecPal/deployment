@@ -207,7 +207,7 @@ def backend_declaration(declaration, helper):
     required = {"pair-proof", "native-image", "fpm-migrations", "fpm-config", "nginx-config",
                 "compatibility-evidence", "rollback-compatibility",
                 "database-snapshot", "quadlet-validation", "stop-http", "stop-backend",
-                "install-images", "reload-units", "start-fpm", "start-http", "start-background",
+                "install-images", "reload-units", "migration", "start-fpm", "start-http", "start-background",
                 "running-identities", "guest-health", "helper-identity"}
     if stages != required:
         raise ValueError("backend diagnostic coverage differs from the closed operation set")

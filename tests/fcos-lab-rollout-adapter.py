@@ -653,11 +653,18 @@ class GuestContract(unittest.TestCase):
         record = {"schema_version": 1, "previous_pair": previous, "candidate_pair": candidate,
                   "schema": "5" * 64, "ledger": "6" * 64, "forward": evidence, "rollback": None}
         command = 'source "$1"; validate_backend_compatibility "$2" "$3" "$4" "$5" "$6"'
+        migration = {"schema": "a" * 64, "ledger": "b" * 64}
+        changing = dict(record, schema_version=2, migration=migration, rollback=backward)
         cases = [(record, "false"), (dict(record, rollback=backward), "true"), ([record], None),
                  (dict(record, candidate_pair=previous), None), (dict(record, schema="7" * 64), None),
                  (dict(record, ledger="7" * 64), None), (dict(record, forward={}), None),
                  (dict(record, rollback=True), None), (dict(record, rollback=evidence), None),
-                 (dict(record, rollback=backward, unexpected=True), None)]
+                 (dict(record, rollback=backward, unexpected=True), None),
+                 (changing, json.dumps({"rollback": True, "migration": migration}, separators=(",", ":"))),
+                 (dict(changing, rollback=None), None),
+                 (dict(changing, migration={"schema": migration["schema"], "ledger": record["ledger"]}), None),
+                 (dict(changing, migration={**migration, "unexpected": "0" * 64}), None),
+                 (dict(changing, schema_version=1), None)]
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory) / "compatibility.json"
             for data, admitted in cases:
@@ -669,6 +676,26 @@ class GuestContract(unittest.TestCase):
                     self.assertEqual(result.returncode == 0, admitted is not None, result.stderr)
                     if admitted is not None:
                         self.assertEqual(result.stdout.strip(), admitted)
+            fixture.write_text(json.dumps(changing))
+            resumed = subprocess.check_output(["bash", "-c", command, "test", self.guest, fixture,
+                                               previous, candidate, migration["schema"], migration["ledger"]])
+            self.assertEqual(json.loads(resumed), {"rollback": True, "migration": migration})
+
+    def test_automatic_migration_allows_only_new_registered_definitions(self):
+        before = [{"existing": "a" * 64}, []]
+        after = [{"existing": "a" * 64, "new": "b" * 64}, []]
+        command = 'source "$1"; additive_migrations "$2" "$3"'
+        for candidate, allowed in (
+            (after, True),
+            (before, False),
+            ([{"new": "b" * 64}, []], False),
+            ([{"existing": "c" * 64, "new": "b" * 64}, []], False),
+            ([after[0], {"pgsql-schema.sql": "d" * 64}], False),
+        ):
+            with self.subTest(allowed=allowed, candidate=candidate):
+                check = subprocess.run(["bash", "-c", command, "test", self.guest,
+                                        json.dumps(before), json.dumps(candidate)], capture_output=True, check=False)
+                self.assertEqual(check.returncode == 0, allowed, check.stderr)
 
     def test_backend_guest_requires_the_same_attested_pair_and_native_children(self):
         encode = lambda value: json.dumps(value).encode()
@@ -929,9 +956,9 @@ class GuestContract(unittest.TestCase):
             f"systemctl --user --job-mode=ignore-requirements stop {slot}-php-fpm.service {background}",
             "metadata",
             "systemctl --user daemon-reload",
-            f"systemctl --user start {slot}-php-fpm.service",
-            f"systemctl --user start {slot}-api.service",
-            f"systemctl --user start {background}",
+            f"systemctl --user --job-mode=ignore-dependencies start {slot}-php-fpm.service",
+            f"systemctl --user --job-mode=ignore-dependencies start {slot}-api.service",
+            f"systemctl --user --job-mode=ignore-dependencies start {background}",
         ])
 
     def test_guest_rejects_inexact_or_misscoped_wire_requests(self):

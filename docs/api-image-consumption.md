@@ -52,9 +52,11 @@ the applicable recovery evidence, actual schema/data compatibility,
 migration/deployment locks, current OCI/security evidence and authorized
 activation. Production, customer data and state-changing work require the
 verified Recovery Set under [deployment #109][recovery-set]. The
-[synthetic public reference contract](public-reference-updates.md) applies
-only to the enrolled, migration-free image switch and the exact verified
-rollback predecessor.
+[synthetic public reference contract](public-reference-updates.md) applies to
+the enrolled image switch and the exact verified rollback predecessor.
+An enrolled synthetic instance may apply an explicitly qualified compatible
+migration under its own contract. The production Recovery Set requirement
+continues to apply to production state changes.
 Use an accepted PHP-FPM/Nginx pair for deployment, rollback and recovery. Verify
 compatibility with the enrolled schema, data and recovery point under
 [deployment #93][recovery]. If rollback compatibility cannot be established,

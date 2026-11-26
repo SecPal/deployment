@@ -603,9 +603,34 @@ backend_ledger() {
     printf '%s\n' "$ledger"
 }
 
+backend_ledger_hash() { backend_ledger | sha256sum | cut -d ' ' -f 1; }
+
 backend_schema() {
     runtime podman exec "$slot-postgres" pg_dump --schema-only -U secpal_fixture_admin -d secpal "$@" |
         sed -E '/^\\(un)?restrict /d' | sha256sum | cut -d ' ' -f 1
+}
+
+backend_postgres_identity() {
+    local version cluster container
+    version=$(sql 'SHOW server_version_num') &&
+        [[ $version =~ ^18[0-9]{4}$ ]] &&
+        cluster=$(sql 'SELECT system_identifier FROM pg_control_system()') &&
+        [[ $cluster == "$(cat "$store/cluster-id")" ]] &&
+        container=$(runtime podman container inspect --format '{{.Id}} {{.State.StartedAt}}' "$slot-postgres") &&
+        [[ $container == *' '* ]] || return 1
+    printf '%s\n' "$version" "$cluster" "$container" | sha256sum | cut -d ' ' -f 1
+}
+
+same_migrated_database() {
+    local proof=$1 schema ledger identity
+    migrations_idle &&
+        [[ $(sql "SELECT NOT rolcanlogin FROM pg_roles WHERE rolname='secpal_poc_migrate'") == t ]] &&
+        identity=$(backend_postgres_identity) &&
+        [[ $identity == "$(jq -er .postgres <<< "$proof")" ]] &&
+        schema=$(backend_schema --no-owner --no-privileges) &&
+        ledger=$(backend_ledger_hash) &&
+        [[ $schema == "$(jq -er .migration.schema <<< "$proof")" &&
+           $ledger == "$(jq -er .migration.ledger <<< "$proof")" ]]
 }
 
 backend_database() {
@@ -665,24 +690,44 @@ fpm_migrations() {
             $schemas[basename($file)] = hash_file("sha256", $file);
             if ($schemas[basename($file)] === false) exit(1);
         }
-        echo hash("sha256", json_encode([$files, $schemas], JSON_THROW_ON_ERROR)), "\n";
-    '
+        $definition = json_encode([$files, $schemas], JSON_THROW_ON_ERROR);
+        echo ($argv[1] === "manifest" ? $definition : hash("sha256", $definition)), "\n";
+    ' "${2:-hash}"
+}
+
+additive_migrations() {
+    jq -e --argjson before "$1" --argjson after "$2" -n '
+        ($before | type == "array" and length == 2 and (.[0] | type == "object")) and
+        ($after | type == "array" and length == 2 and (.[0] | type == "object")) and
+        $before[1] == $after[1] and ($after[0] | length) > ($before[0] | length) and
+        all($before[0] | to_entries[]; $after[0][.key] == .value)
+    ' >/dev/null
 }
 
 validate_backend_compatibility() {
-    jq --exit-status --raw-output --slurp --arg previous "$2" --arg candidate "$3" --arg schema "$4" --arg ledger "$5" '
+    jq --exit-status --compact-output --raw-output --slurp --arg previous "$2" --arg candidate "$3" --arg schema "$4" --arg ledger "$5" '
         def evidence:
             type == "object" and keys == ["linux/amd64","linux/arm64"]
             and all(.[]; type == "string" and test("^sha256:[a-f0-9]{64}$"));
+        def database_hash: type == "string" and test("^[a-f0-9]{64}$");
         select(length == 1) | .[0]
-        | select(type == "object" and keys ==
-            ["candidate_pair","forward","ledger","previous_pair","rollback","schema","schema_version"])
-        | select(.schema_version == 1 and .previous_pair == $previous and .candidate_pair == $candidate
-            and .schema == $schema and .ledger == $ledger and (.forward | evidence)
+        | select(type == "object")
+        | select(.previous_pair == $previous and .candidate_pair == $candidate
+            and (.schema | database_hash) and (.ledger | database_hash) and (.forward | evidence)
             and ([.forward[]] | unique | length) == 2)
         | select(.rollback == null or ((.rollback | evidence)
             and ([.forward[], .rollback[]] | length == (unique | length))))
-        | (.rollback != null | tostring)
+        | if .schema_version == 1 and .schema == $schema and .ledger == $ledger and keys ==
+            ["candidate_pair","forward","ledger","previous_pair","rollback","schema","schema_version"]
+          then (.rollback != null | tostring)
+          elif .schema_version == 2 and keys ==
+            ["candidate_pair","forward","ledger","migration","previous_pair","rollback","schema","schema_version"]
+            and .rollback != null and (.migration | type == "object" and keys == ["ledger","schema"]
+            and all(.[]; database_hash)) and .migration.ledger != .ledger
+            and ((.schema == $schema and .ledger == $ledger) or
+                 (.migration.schema == $schema and .migration.ledger == $ledger))
+          then {rollback:true,migration:.migration}
+          else empty end
     ' "$1"
 }
 
@@ -694,7 +739,7 @@ backend_compatibility() {
         git_object show "$revision:$compatibility_path" > "$evidence" &&
         [[ $(sha256sum < "$evidence") == "$pin  -" ]] &&
         schema=$(backend_schema --no-owner --no-privileges) &&
-        ledger=$(backend_ledger | sha256sum | cut -d ' ' -f 1) &&
+        ledger=$(backend_ledger_hash) &&
         [[ $schema =~ ^$hash$ && $ledger =~ ^$hash$ ]] &&
         validate_backend_compatibility "$evidence" "$1" "$2" "$schema" "$ledger"
 }
@@ -704,6 +749,15 @@ backend_rollback_admitted() {
     jq -e '.rollback == true' <<< "$1" >/dev/null &&
         expires=$(backend_field "$2" API_VEX_EXPIRES_AT '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z') &&
         backend_expiry "$expires"
+}
+
+qualified_backend_database() {
+    local proof=$1 snapshot=$2
+    if jq -e 'has("migration")' <<< "$proof" >/dev/null; then
+        same_migrated_database "$proof"
+    else
+        same_backend_database "$snapshot"
+    fi
 }
 
 backend_role_ref() {
@@ -740,6 +794,7 @@ validate_backend_quadlets() {
 
 prepare_backend() {
     local installed=$1 pins=$2 old_pins=$3 publisher pair nginx fpm expires snapshot component ref config old before after helper rollback
+    local migration=null postgres=null
     local -a values previous_values
     mapfile -t values <<< "$pins"
     mapfile -t previous_values <<< "$old_pins"
@@ -753,6 +808,11 @@ prepare_backend() {
         backend_expiry "$expires" &&
         singleton_roles && snapshot=$(backend_step database-snapshot backend_database) &&
         rollback=$(backend_step compatibility-evidence backend_compatibility "${previous_values[1]}" "$pair") || return 1
+    if [[ $rollback == '{'* ]]; then
+        migration=$(jq -ec '.migration' <<< "$rollback") &&
+            postgres=$(backend_step database-snapshot backend_postgres_identity) || return 1
+        rollback=true
+    fi
     if [[ $request_transport == oci-archive-v1 ]]; then
         [[ $(backend_field "$revision" API_TRANSPORT 'oci-archive-v1') == "$request_transport" ]] &&
             backend_step pair-proof verify_archived_backend "$publisher" "$pair" "$nginx" "$fpm" "$expires" &&
@@ -775,11 +835,14 @@ prepare_backend() {
             images=$(jq -c --arg key "$component" --arg ref "$ref" --arg config "$config" \
                 '.[$key]={ref:$ref,config:$config}' <<< "$images") || return 1
     done
-    old=$(backend_role_ref "$installed" php-fpm) &&
-        ref=$(jq -er .fpm.ref <<< "$images") &&
-        before=$(backend_step fpm-migrations fpm_migrations "$old") &&
-        after=$(backend_step fpm-migrations fpm_migrations "$ref") || return 1
-    if [[ ! $before =~ ^$hash$ || $before != "$after" ]]; then
+    old=$(backend_role_ref "$installed" php-fpm) && ref=$(jq -er .fpm.ref <<< "$images") || return 1
+    if [[ $migration != null ]]; then
+        before=$(backend_step fpm-migrations fpm_migrations "$old" manifest) &&
+            after=$(backend_step fpm-migrations fpm_migrations "$ref" manifest) &&
+            backend_step fpm-migrations additive_migrations "$before" "$after" || return 1
+    elif ! before=$(backend_step fpm-migrations fpm_migrations "$old") ||
+         ! after=$(backend_step fpm-migrations fpm_migrations "$ref") ||
+         [[ ! $before =~ ^$hash$ || $before != "$after" ]]; then
         printf '%s\n' 'Backend compatibility rejected: migration files or schema dumps differ' >&2
         return 1
     fi
@@ -794,7 +857,9 @@ prepare_backend() {
         same_backend_database "$snapshot" || return 1
     save prepared.json "$(jq -cn --argjson before "$installed" --argjson next "$candidate" \
         --arg database "$snapshot" --arg helper "$helper" --argjson rollback "$rollback" \
-        '{before:$before,next:$next,database:$database,helper:$helper,rollback:$rollback}')"
+        --argjson migration "$migration" --arg postgres "$postgres" \
+        '{before:$before,next:$next,database:$database,helper:$helper,rollback:$rollback}
+         + (if $migration == null then {} else {migration:$migration,postgres:$postgres} end)')"
 }
 
 backend_helper_hash() {
@@ -854,8 +919,27 @@ backend_image_source() {
     printf '%s\n' "$source"
 }
 
+run_backend_migration() (
+    local ref=$1 helper="$assets/assets/fcos-poc-db-roles.sh" status=0
+    local override="$units/$slot-migrate.container.d"
+    [[ $ref =~ ^"$api_image@"$digest$ && -f $helper && ! -L $helper ]] &&
+        [[ $(stat -c '%u:%g:%a' "$helper") =~ ^0:0:(644|755)$ ]] &&
+        [[ $(sha256sum < "$helper") == "$(git_object show "$revision:scripts/fcos-poc-db-roles.sh" | sha256sum)" ]] &&
+        [[ $(sql "SELECT NOT rolcanlogin FROM pg_roles WHERE rolname='secpal_poc_migrate'") == t ]] &&
+        migrations_idle && mkdir -m 0755 "$override" || return 1
+    trap 'status=$?; rm -f -- "$override/90-rollout.conf" && rmdir -- "$override" &&
+        runtime systemctl --user daemon-reload || status=1; exit "$status"' EXIT
+    render_dropin "$ref" > "$override/90-rollout.conf" &&
+        chmod 0644 "$override/90-rollout.conf" &&
+        restorecon -R "$override" &&
+        runtime systemctl --user daemon-reload &&
+        runtime systemctl --user show --property=ExecStart --value "$slot-migrate.service" |
+            grep -F -- "$ref" >/dev/null || return 1
+    runtime bash "$helper" migrate-existing haproxy01
+)
+
 switch_backend() {
-    local record=$1 role ref service untouched expires fpm_ref source
+    local record=$1 migration_proof=${2:-} role ref service untouched expires fpm_ref source
     local -a services=()
     if jq -e 'has("backend")' <<< "$record" >/dev/null; then
         expires=$(jq -er .backend.expires <<< "$record") && backend_expiry "$expires" || return 1
@@ -875,12 +959,18 @@ switch_backend() {
     for service in "${services[@]}"; do
         [[ $(runtime systemctl --user show --value -p ActiveState "$service") == inactive ]] || return 1
     done
+    if [[ -n $migration_proof ]]; then
+        same_backend_database "$(jq -er .database <<< "$migration_proof")" &&
+            backend_step migration run_backend_migration "$fpm_ref" &&
+            backend_step migration same_migrated_database "$migration_proof" || return 1
+    fi
     backend_step install-images install_backend_refs "$record" &&
         backend_step install-images write_release_asset "$fpm_pool" render_api_release "$fpm_pool" "$source" &&
         backend_step reload-units runtime systemctl --user daemon-reload &&
-        backend_step start-fpm runtime systemctl --user start "$slot-php-fpm.service" &&
-        backend_step start-http runtime systemctl --user start "$slot-api.service" &&
-        backend_step start-background runtime systemctl --user start "${services[@]:2}" &&
+        backend_step start-fpm runtime systemctl --user --job-mode=ignore-dependencies start "$slot-php-fpm.service" &&
+        backend_step start-http runtime systemctl --user --job-mode=ignore-dependencies start "$slot-api.service" &&
+        backend_step start-background runtime systemctl --user --job-mode=ignore-dependencies start "${services[@]:2}" &&
+        backend_step database-snapshot migrations_idle &&
         backend_step running-identities backend_running "$record" "$untouched"
 }
 
@@ -992,7 +1082,7 @@ main() {
     done
     exec 9>"$store/lock"
     flock -n 9 || deny
-    local installed prepared before next database
+    local installed prepared before next database migration_proof
     scratch=$(mktemp -d /var/tmp/secpal-fcos-rollout.XXXXXXXX)
     trap 'rm -rf -- "$scratch"' EXIT
 
@@ -1044,27 +1134,39 @@ main() {
     database=$(jq -er '.database // ""' <<< "$prepared") || deny
     if [[ -n $database ]]; then
         [[ $(backend_step helper-identity backend_helper_hash) == "$(jq -er .helper <<< "$prepared")" ]] || deny
-        same_backend_database "$database" || deny
+        migration_proof=
+        if [[ $(jq -r 'has("migration")' <<< "$prepared") == true ]]; then
+            if same_migrated_database "$prepared"; then
+                :
+            else
+                same_backend_database "$database" || deny
+                migration_proof=$prepared
+            fi
+        else
+            same_backend_database "$database" || deny
+        fi
         case "$operation" in
             activate)
                 backend_expiry "$(jq -er .backend.expires <<< "$next")" || deny
                 if ! matches "$next"; then
                     matches "$before" || deny
                     singleton_roles || deny
-                    if ! switch_backend "$next"; then
-                        same_backend_database "$database" || deny
+                    if ! switch_backend "$next" "$migration_proof"; then
+                        qualified_backend_database "$prepared" "$database" ||
+                            same_backend_database "$database" || deny
                         backend_step rollback-compatibility backend_rollback_admitted "$prepared" "$previous" || deny
+                        [[ $(sql "SELECT NOT rolcanlogin FROM pg_roles WHERE rolname='secpal_poc_migrate'") == t ]] || deny
                         switch_backend "$before" || deny
                         deny
                     fi
                 fi
-                same_backend_database "$database" || deny
+                qualified_backend_database "$prepared" "$database" || deny
                 ;;
             accept)
                 matches "$next" || deny
                 backend_expiry "$(jq -er .backend.expires <<< "$next")" || deny
                 backend_step guest-health health "$next" || exit 10
-                same_backend_database "$database" || deny
+                qualified_backend_database "$prepared" "$database" || deny
                 persist_accepted "$next" || deny
                 ;;
             rollback)
@@ -1075,7 +1177,8 @@ main() {
                     switch_backend "$before" || deny
                 fi
                 backend_step guest-health health "$before" || deny
-                same_backend_database "$database" || deny
+                qualified_backend_database "$prepared" "$database" ||
+                    same_backend_database "$database" || deny
                 persist_accepted "$before" || deny
                 ;;
         esac
