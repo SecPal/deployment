@@ -19,20 +19,29 @@ production [RecoverySet](https://github.com/SecPal/deployment/issues/109).
 
 ## Exact inputs
 
-Use the publisher-verified OCI candidates for [API #3114][api] at
-`ea83e8ccdf7a4b0d3bcf503a8d5e60cd84ea88c9` and [Frontend #2280][frontend]
+Use the publisher-verified OCI candidates for [API #3114][api] as included in
+protected main at `abb3bed3db54aa20335e054342ffa5f55b09b1be`, and [Frontend #2280][frontend]
 at `0a5bcc9f218703c5a602556f7cbfad82a254f722`. Bind the API pair receipt to
-[API publisher run 45711477028][api-run], attempt 1, and the frontend
+[API publisher run 45748341064][api-run], attempt 1, and the frontend
 pre-registry receipt to [Frontend publisher run 45712000616][frontend-run],
 attempt 1. Verify both signatures against their repository's protected
 `main` and `.github/workflows/publish-container.yml` identity. Rehash and
 verify the associated OCI bytes before staging.
 
+Require the existing archived-candidate selectors to admit these exact
+identities before staging. API requires the successful protected-main push
+publisher. For the frontend, the selector requires successful independent
+source security, publisher authentication, image validation, both native
+builds, the container contract and pre-registry qualification. Its existing
+registry-job allowlist permits this archived candidate only because the
+failure is confined to the official registry preparation gate. A failed or
+missing qualification job stops the cutover.
+
 | Input                                  | SHA-256                                                            |
 | -------------------------------------- | ------------------------------------------------------------------ |
-| API pair receipt                       | `9b765d3ae13eff11108c7083ae1e30dfbd6efa8b23371aeaa5f8580824509604` |
-| API PHP-FPM OCI index                  | `5fe917e5087d3568e7fbe071b1f25a548f489b15f778321e9de86074364def9d` |
-| API Nginx OCI index                    | `1d31a36df99f0a6b1c5004fc4477a839fc1a573f5c9a8a85ac863a629f97031c` |
+| API pair receipt                       | `fec1bf683cc4cb545d0b7e1af7038b0b5f317499388b22f828c9b5735c3e4c1e` |
+| API PHP-FPM OCI index                  | `dcef68d7be40e8b4810e10cc526cd05b14562f80a30cb24b225a931a65555c41` |
+| API Nginx OCI index                    | `375679b2174e507feb195bea2f9015d7210773bbdc597b170c72926656486dac` |
 | Frontend pre-registry receipt          | `6141f2576f80a5b7341bf17f631e11a97a0a63ed33be180935455a2704706c98` |
 | Frontend OCI index                     | `3c859855647284cbeee9ddf26dee547265d992e86f8e6630b8fd8a727205cb15` |
 | OpenPLZ/DE input authorized by the API | `1066a96a6b3a16629a94c834fca49fe58a2bb01558e17242c53a12d68b290088` |
@@ -112,5 +121,5 @@ separate final restore captured and verified under the write fence in step 3.
 
 [api]: https://github.com/SecPal/api/pull/3114
 [frontend]: https://github.com/SecPal/frontend/pull/2280
-[api-run]: https://github.com/SecPal/api/actions/runs/45711477028
+[api-run]: https://github.com/SecPal/api/actions/runs/45748341064
 [frontend-run]: https://github.com/SecPal/frontend/actions/runs/45712000616
