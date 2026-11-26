@@ -918,15 +918,15 @@ backend_image_source() {
 }
 
 run_backend_migration() (
-    local ref=$1 helper="$assets/assets/fcos-poc-db-roles.sh"
+    local ref=$1 helper="$assets/assets/fcos-poc-db-roles.sh" status=0
     local override="$units/$slot-migrate.container.d"
     [[ $ref =~ ^"$api_image@"$digest$ && -f $helper && ! -L $helper ]] &&
         [[ $(stat -c '%u:%g:%a' "$helper") =~ ^0:0:(644|755)$ ]] &&
         [[ $(sha256sum < "$helper") == "$(git_object show "$revision:scripts/fcos-poc-db-roles.sh" | sha256sum)" ]] &&
         [[ $(sql "SELECT NOT rolcanlogin FROM pg_roles WHERE rolname='secpal_poc_migrate'") == t ]] &&
         migrations_idle && mkdir -m 0755 "$override" || return 1
-    trap 'rc=$?; rm -f -- "$override/90-rollout.conf" && rmdir -- "$override" &&
-        runtime systemctl --user daemon-reload || rc=1; exit "$rc"' EXIT
+    trap 'status=$?; rm -f -- "$override/90-rollout.conf" && rmdir -- "$override" &&
+        runtime systemctl --user daemon-reload || status=1; exit "$status"' EXIT
     render_dropin "$ref" > "$override/90-rollout.conf" &&
         chmod 0644 "$override/90-rollout.conf" &&
         restorecon -R "$override" &&
