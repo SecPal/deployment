@@ -119,6 +119,34 @@ separate final restore captured and verified under the write fence in step 3.
    existing enrollment and protected deployment state before resuming the
    migration-free timers. Record the observed result for each target in #93.
 
+## Post-cutover enrollment
+
+The Lab pins adopt the already-running API pair and Frontend index in this
+contract. The combined pin change authorizes enrollment of this observed state.
+It carries no compatibility pin for starting a new backend activation. Future
+updates use the ordinary independently admitted component transactions.
+
+On each of the three guests and the public reference, verify the native signed
+publisher subjects, the running exact image pins, application readiness, and
+the unchanged PostgreSQL system identity recorded above. The approved
+post-cutover schema hash is
+`62126b55ff35c255997e59c4a4356f360b8990a36a3b085a597141bfdd3aa889` and the
+migration ledger hash is
+`650271e203e03a473618dbe7f7bcb1e9e9a26e4627ce4a27cef2c7f932e87e93`. Reuse
+the existing schema and ledger hash procedures. Keep the migration login closed.
+
+With timers stopped, retain the previous enrollments and journals under their
+original custody. Record the verified operating state via the existing guest
+`matches`, `health` and `persist_accepted` checks. Remove only the migration-unit
+override left by the attended cutover when it is idle and matches the staged
+candidate. Verify the remaining frozen unit layout and infrastructure
+identities under the approved #532 controller and role helper. Advance the
+protected foundation and initialize the existing coordinator journal through
+its matching three-guest observation, preserving the previous journal.
+Re-enroll the reference through its existing signed-runtime observation and
+exposure checks. No application activation or schema transition belongs to
+this baseline operation.
+
 [api]: https://github.com/SecPal/api/pull/3114
 [frontend]: https://github.com/SecPal/frontend/pull/2280
 [api-run]: https://github.com/SecPal/api/actions/runs/45748341064
