@@ -163,7 +163,9 @@ and checked-in schema dumps in the old and staged FPM images in networkless
 containers without runtime mounts or credentials.
 It checks the PostgreSQL 18 cluster identity, schema (including ownership and
 grants) and migration ledger again before switching or accepting the release.
-Changes that require a migration stay under the broader #93 contract.
+Changes that require a migration stay under the broader #93 contract. The
+[one-time synthetic address cutover](synthetic-address-contract-cutover.md)
+defines the attended procedure for the exact #3114 and #2280 candidates.
 
 ### Backend compatibility evidence
 
