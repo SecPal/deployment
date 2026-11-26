@@ -42,7 +42,7 @@ class EnrollmentContract(unittest.TestCase):
             '.github/workflows/local-integration.yml',
             '.github/workflows/rocky-evidence-architecture.yml',
         ])
-        self.assertEqual(workflow['permissions'], {'contents': 'write', 'pull-requests': 'write', 'checks': 'read', 'statuses': 'read'})
+        self.assertEqual(workflow['permissions'], {'contents': 'write', 'pull-requests': 'write', 'checks': 'read', 'statuses': 'read', 'attestations': 'read'})
 
 
 if __name__ == '__main__':

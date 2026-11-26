@@ -23,13 +23,14 @@ permissions:
   pull-requests: write
   checks: read
   statuses: read
+  attestations: read
 concurrency:
   group: ${{ github.repository }}-dependabot-auto-merge-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   auto-merge:
     # yamllint disable-line rule:line-length
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@5d04c4c2f3593238040943ca5e57e7b05ba94487 # main
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@56f7ee88608c46e51da8641328d34cadcf299408 # v1.1.2
     with:
       phase: "2"
       merge-method: squash
