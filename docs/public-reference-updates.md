@@ -6,9 +6,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 # Public reference updates
 
 This service is limited to the operator-enrolled synthetic data on the two
-SecPal-owned public reference hosts. It performs an image-only switch with a
-verified predecessor. It never migrates, restores, initializes, or moves any
-persistent state. A customer installation, any target with real customer data,
+SecPal-owned public reference endpoints. It performs a verified image switch
+and can apply a qualified compatible API migration. It has no restore,
+initialization, or storage migration operation. A customer installation, any target with real customer data,
 or a change to PostgreSQL, private objects, or key generations requires its
 own recovery authority, including the verified Recovery Set required by
 [Deployment #109](https://github.com/SecPal/deployment/issues/109).
@@ -48,8 +48,17 @@ credential for the existing public API tests. Before replacing pins, the service
 rechecks the installed runtime, the actual public route and loopback
 listeners, both protected source heads, and the exact comparison report.
 The API also requires the enrolled PostgreSQL schema and migration
-ledger and native forward and reverse evidence. The previous image must
-remain admissible with the live schema. The browser-facing check uses the
+ledger and native forward and reverse evidence. For the enrolled synthetic
+reference the protected [version 2 compatibility record](fcos-lab-rollout.md)
+may bind a separately qualified resulting schema and ledger. Use the same
+private restore qualification on the reference database and require the
+predecessor to support the resulting schema and data. The existing deployment
+lock covers the one-shot migration against the exact staged PHP-FPM image.
+The migration role is enabled only for that operation. Its login and temporary
+credentials are retired before the application starts. Automatic image
+rollback requires a qualified database state and leaves an applied migration
+in place. An unrecognized partial schema change requires recovery.
+The browser-facing check uses the
 reference's same origin, verifies host-only cookies, and exercises login,
 organization access, and logout. Enroll the existing read-only frontend mount
 from `/var/lib/secpal-reference/config/source-offer.json` to the image's

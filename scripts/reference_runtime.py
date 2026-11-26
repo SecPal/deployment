@@ -3,6 +3,7 @@
 
 """The fixed host operations for the two public reference workloads."""
 
+from contextlib import ExitStack
 from dataclasses import dataclass
 import hashlib
 import http.cookiejar
@@ -11,6 +12,7 @@ import os
 from pathlib import Path
 import pwd
 import re
+import secrets
 import stat
 import subprocess
 import tempfile
@@ -23,6 +25,7 @@ STATE = Path("/var/lib/secpal-reference-update")
 QUADLETS = Path("/etc/containers/systemd/users")
 EDGE = Path("/etc/haproxy/secpal.cfg")
 REFERENCE_CONFIG = Path("/var/lib/secpal-reference/config")
+DATABASE_CREDENTIALS = REFERENCE_CONFIG.parent
 FPM_POOL = REFERENCE_CONFIG / "zz-fpm-session.conf"
 SOURCE_OFFER = REFERENCE_CONFIG / "source-offer.json"
 # Frontend #1788 records the adopted OpenAPI source. The later OpenPLZ types
@@ -50,10 +53,10 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def run(arguments, *, data=None, timeout=30, output=subprocess.PIPE):
+def run(arguments, *, data=None, timeout=30, output=subprocess.PIPE, pass_fds=()):
     return subprocess.run(arguments, input=data, stdin=subprocess.DEVNULL if data is None else None,
                           stdout=output, stderr=subprocess.DEVNULL, env=ENV, timeout=timeout,
-                          check=True).stdout
+                          check=True, pass_fds=pass_fds).stdout
 
 
 def as_user(target, arguments):
@@ -163,6 +166,69 @@ def migration_state():
     if (state["ActiveState"], state["SubState"]) not in {("inactive", "dead"), ("active", "exited")}:
         raise ValueError("reference migration unit is not idle")
     return state
+
+
+def postgres_admin(*arguments, data=None):
+    # The database credential remains inside the existing PostgreSQL container.
+    return podman("postgres", "exec", "-i", "--user", "postgres", "secpal-reference-pg", "/bin/sh", "-ec",
+                  'PGPASSWORD=$(cat "$POSTGRES_PASSWORD_FILE"); export PGPASSWORD; '
+                  'exec psql -XqwAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"',
+                  "reference", *arguments, data=data)
+
+
+def migration_login_disabled():
+    return postgres_admin("-c", "SELECT rolcanlogin FROM pg_roles WHERE rolname='secpal_poc_migrate'") == b"f\n"
+
+
+def run_migration(expected):
+    service = "secpal-migrate.service"
+    if not migration_login_disabled():
+        raise ValueError("reference migration login is not disabled")
+    credentials = DATABASE_CREDENTIALS / "migration-database"
+    runtime = DATABASE_CREDENTIALS / "runtime-database"
+    details = credentials.lstat()
+    if (not stat.S_ISDIR(details.st_mode) or (details.st_uid, details.st_gid) != (20005, 20005)
+            or stat.S_IMODE(details.st_mode) != 0o750):
+        raise ValueError("unexpected reference migration credential directory")
+    unit("api", "stop", service)
+    if migration_state()["ActiveState"] != "inactive" or expected["php-fpm"].image.encode() not in unit(
+            "api", "show", "--property=ExecStart", "--value", service):
+        raise ValueError("reference migration unit does not bind the staged PHP-FPM image")
+
+    password = secrets.token_hex(32).encode() + b"\n"
+    with ExitStack() as cleanup:
+        directory = os.open(credentials, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        cleanup.callback(os.close, directory)
+        if os.fstat(directory) != details or os.listdir(directory):
+            raise ValueError("reference migration directory changed or contains credentials")
+        for name, contents in (("postgres-username", b"secpal_poc_migrate\n"),
+                               ("postgres-password", password), ("postgres-ca.crt", None)):
+            source_fd = os.open(runtime / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(source_fd, "rb") as source:
+                reference = os.fstat(source.fileno())
+                if (not stat.S_ISREG(reference.st_mode) or (reference.st_uid, reference.st_gid) != (861968, 861968)
+                        or stat.S_IMODE(reference.st_mode) != 0o400):
+                    raise ValueError("unexpected reference PostgreSQL credential ownership")
+                fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400, dir_fd=directory)
+                cleanup.callback(os.unlink, name, dir_fd=directory)
+                with os.fdopen(fd, "wb") as destination:
+                    destination.write(source.read() if contents is None else contents)
+                    os.fchown(destination.fileno(), reference.st_uid, reference.st_gid)
+                    source_attrs = f"/proc/self/fd/{source.fileno()}"
+                    destination_attrs = f"/proc/self/fd/{destination.fileno()}"
+                    run(["/usr/bin/chcon", f"--reference={source_attrs}", destination_attrs],
+                        pass_fds=(source.fileno(), destination.fileno()))
+        cleanup.callback(unit, "api", "stop", service)
+        cleanup.callback(postgres_admin, "-c", "ALTER ROLE secpal_poc_migrate NOLOGIN PASSWORD NULL")
+        postgres_admin("-c", r"\password secpal_poc_migrate", data=password * 2)
+        postgres_admin(data=b"SELECT clock_timestamp() + interval '10 minutes' AS expires \\gset\n"
+                            b"ALTER ROLE secpal_poc_migrate LOGIN VALID UNTIL :'expires';\n")
+        unit("api", "start", service, timeout=300)
+        if (not migration_state()["InvocationID"]
+                or unit("api", "show", "-p", "Result", "--value", service) != b"success\n"):
+            raise ValueError("reference migration job did not succeed")
+    if not migration_login_disabled():
+        raise ValueError("reference migration login is still enabled")
 
 
 def observe(target):
@@ -331,8 +397,8 @@ def postgres_facts():
             "ledger": hashlib.sha256(ledger).hexdigest()}
 
 
-def apply(target, before, desired, tarfiles, ready, after, rollback_allowed):
-    """Stage the existing image-only switch and restore the admitted predecessor on failure."""
+def apply(target, before, desired, tarfiles, ready, after, rollback_allowed, migrate=None):
+    """Stage the switch, including an admitted migration, under the deployment lock."""
     paths = lanepaths(target)
     previous = {}
     proposed = {}
@@ -376,16 +442,19 @@ def apply(target, before, desired, tarfiles, ready, after, rollback_allowed):
     for path, content in previous.items():
         (backup / path.name).write_bytes(content)
     names = [name + ".service" for name in paths if name != "secpal-migrate"]
-    migration = migration_state() if target == "api" else None
     ready()
 
-    def activate(config):
+    def activate(config, migration_step=None):
+        migration = migration_state() if target == "api" else None
         if target == "api":
             unit(target, "--job-mode=ignore-requirements", "stop", *names, timeout=90)
         for path, content in config.items():
             replace_protected_config(path, content)
         unit(target, "daemon-reload")
         if target == "api":
+            if migration_step is not None:
+                migration_step()
+                migration = migration_state()
             unit(target, "--job-mode=ignore-dependencies", "start", "secpal-php-fpm.service", timeout=90)
             unit(target, "--job-mode=ignore-dependencies", "start", *names, timeout=90)
             if migration_state() != migration:
@@ -406,7 +475,7 @@ def apply(target, before, desired, tarfiles, ready, after, rollback_allowed):
         raise ValueError("public reference did not become ready")
 
     try:
-        activate(proposed)
+        activate(proposed, migrate)
         verify(desired)
         after()
     except BaseException:

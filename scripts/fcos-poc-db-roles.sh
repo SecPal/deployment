@@ -37,8 +37,8 @@ report_cleanup_failure() {
 trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-if [[ $# != 2 || ! $2 =~ ^[a-z0-9]{8,24}$ || ( $1 != prepare && $1 != migrate ) ]]; then
-    printf '%s\n' 'Usage: fcos-poc-db-roles.sh prepare|migrate FIXTURE_INSTANCE' >&3
+if [[ $# != 2 || ! $2 =~ ^[a-z0-9]{8,24}$ || ( $1 != prepare && $1 != migrate && ( $1 != migrate-existing || $2 != haproxy01 ) ) ]]; then
+    printf '%s\n' 'Usage: fcos-poc-db-roles.sh prepare|migrate|migrate-existing FIXTURE_INSTANCE' >&3
     exit 64
 fi
 
@@ -101,8 +101,63 @@ TRANSPORT
 fi
 
 sql() {
-    podman exec -i "$prefix-postgres" psql -X -q -v ON_ERROR_STOP=1 +        -U secpal_fixture_admin -d secpal "$@"
+    podman exec -i "$prefix-postgres" psql -X -q -v ON_ERROR_STOP=1 -U secpal_fixture_admin -d secpal "$@"
 }
+
+remove_migration_credentials() {
+    podman unshare bash -c '
+        set -eu
+        rm -f -- "$1/postgres-password" "$1/postgres-username" "$1/postgres-ca.crt"
+        rmdir -- "$1"
+    ' bash "$storage/migration-database"
+}
+
+password() {
+    podman unshare bash -c 'cat -- "$1"; cat -- "$1"' bash "$storage/$1-database/postgres-password" |
+        sql -c "\\password $2"
+}
+run_migration() {
+    local bootstrap=$1 expires
+    stage=set-migration-password
+    password migration secpal_poc_migrate
+    stage=enable-logins
+    expires=$(date -u -d '+10 minutes' '+%Y-%m-%d %H:%M:%S+00')
+    sql -v expires="$expires" -v bootstrap="$bootstrap" <<'SQL'
+BEGIN;
+\if :bootstrap
+ALTER ROLE secpal_poc_runtime LOGIN;
+\endif
+ALTER ROLE secpal_poc_migrate LOGIN VALID UNTIL :'expires';
+COMMIT;
+SQL
+    stage=start-migration
+    systemctl --user start "$service"
+    stage=migration-result
+    test -n "$(systemctl --user show --property=InvocationID --value "$service")"
+    test "$(systemctl --user show --property=Result --value "$service")" = success
+}
+
+if [[ $1 == migrate-existing ]]; then
+    stage=existing-cluster
+    test "$(id -u)" = 20000
+    test "$(sql -At -c "SELECT NOT rolcanlogin AND NOT rolsuper FROM pg_roles WHERE rolname='secpal_poc_migrate'")" = t
+    test "$(systemctl --user show --property=ActiveState --value "$service")" = inactive
+    stage=existing-credential-root
+    podman unshare mkdir -m 0700 -- "$storage/migration-database"
+    retire=true
+    podman unshare bash -s -- "$storage" <<'MIGRATION'
+set -euo pipefail
+umask 077
+directory=$1/migration-database
+printf 'secpal_poc_migrate\n' > "$directory/postgres-username"
+openssl rand -hex 32 > "$directory/postgres-password"
+cp -- "$1/runtime-database/postgres-ca.crt" "$directory/postgres-ca.crt"
+chown 10001:10001 "$directory" "$directory"/*
+chmod 0400 "$directory"/*
+MIGRATION
+    run_migration false
+    exit 0
+fi
 
 stage=empty-cluster
 test "$(sql -At -c "SELECT current_user = 'secpal_fixture_admin' AND
@@ -134,34 +189,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE secpal_owner REVOKE EXECUTE ON FUNCTIONS FROM 
 COMMIT;
 SQL
 
-remove_migration_credentials() {
-    podman unshare bash -c '
-        set -eu
-        rm -- "$1/postgres-password" "$1/postgres-username" "$1/postgres-ca.crt"
-        rmdir -- "$1"
-    ' bash "$storage/migration-database"
-}
 retire=true
 
-password() {
-    podman unshare bash -c 'cat -- "$1"; cat -- "$1"' bash "$storage/$1-database/postgres-password" |
-        sql -c "\\password $2"
-}
 stage=set-runtime-password
 password runtime secpal_poc_runtime
-stage=set-migration-password
-password migration secpal_poc_migrate
-stage=enable-logins
-expires=$(date -u -d '+10 minutes' '+%Y-%m-%d %H:%M:%S+00')
-sql -v expires="$expires" <<'SQL'
-BEGIN;
-ALTER ROLE secpal_poc_runtime LOGIN;
-ALTER ROLE secpal_poc_migrate LOGIN VALID UNTIL :'expires';
-COMMIT;
-SQL
-stage=start-migration
-systemctl --user start "$service"
-stage=migration-result
-test "$(systemctl --user show --property=Result --value "$service")" = success
+run_migration true
 stage=restrict-migration-ledger
 sql -c 'REVOKE INSERT, UPDATE, DELETE ON TABLE public.migrations FROM secpal_runtime'

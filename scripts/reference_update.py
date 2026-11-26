@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Run the existing public reference image-only transactions from protected evidence."""
+"""Run the existing public reference update transactions from protected evidence."""
 
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass
@@ -25,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fcos_lab_rollout_adapter as publisher
 from fcos_lab_rollout import RolloutError, fetch_release, git, source_release
 from reference_runtime import (
-    NATIVE, STATE, UNITS, Container, NoRedirect, apply, as_user, exposure, observe, postgres_facts, protected,
-    public_accept, run,
+    NATIVE, STATE, UNITS, Container, NoRedirect, apply, as_user, exposure, migration_login_disabled,
+    observe, postgres_facts, protected, public_accept, run, run_migration,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -139,9 +139,13 @@ def compatible(repo, release, before, after, database):
     if not 0 < len(raw) <= 16384 or hashlib.sha256(raw).hexdigest() != after.compatibility:
         raise ValueError("invalid protected API compatibility digest")
     data = json.loads(raw)
-    expected = {"schema_version": 1, "previous_pair": before.pair, "candidate_pair": after.pair,
+    version = data["schema_version"]
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError("unsupported API compatibility record")
+    expected = {"previous_pair": before.pair, "candidate_pair": after.pair,
                 "schema": database["schema"], "ledger": database["ledger"]}
-    if (set(data) != set(expected) | {"forward", "rollback"} or
+    extras = {"migration"} if version == 2 else set()
+    if (set(data) != set(expected) | {"schema_version", "forward", "rollback"} | extras or
             any(data[key] != value for key, value in expected.items())):
         raise ValueError("public database does not match the qualified API pair")
     proofs = []
@@ -152,13 +156,22 @@ def compatible(repo, release, before, after, database):
         proofs.extend(entries.values())
     if len(set(proofs)) != 4 or any(re.fullmatch(publisher.DIGEST, evidence) is None for evidence in proofs):
         raise ValueError("invalid native API qualification identities")
+    if version == 1:
+        return None
+    migration = data["migration"]
+    if (not isinstance(migration, dict) or migration.keys() != {"schema", "ledger"}
+            or not all(isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value)
+                       for value in migration.values())
+            or migration["ledger"] == database["ledger"]):
+        raise ValueError("invalid qualified post-migration database")
+    return migration
 
 
 def validate_enrollment(config):
     if (set(config) != {"baseline", "exposure", "data_class"} or
             config["data_class"] != "secpal-owned-synthetic" or
             re.fullmatch(SHA, config["baseline"]) is None):
-        raise ValueError("reference image-only update requires an enrolled synthetic target")
+        raise ValueError("reference update requires an enrolled synthetic target")
 
 
 def lane(repo, latest, target, baseline, posture, progress):
@@ -224,12 +237,15 @@ def lane(repo, latest, target, baseline, posture, progress):
         progress[0] = "comparison"
         evidence = publisher.protected_comparison(repo, latest, target, old_children, children)
         database = postgres_facts() if target == "api" else None
+        migration = compatible(repo, latest, before, desired, database) if target == "api" else None
+        expected = {**database, **migration} if migration is not None else database
 
-        def database_matches():
-            return target != "api" or postgres_facts() == database
-
-        if target == "api":
-            compatible(repo, latest, before, desired, database)
+        def migrate():
+            if postgres_facts() != database:
+                raise ValueError("reference database changed before migration")
+            run_migration(stages)
+            if postgres_facts() != expected:
+                raise ValueError("reference migration did not reach its qualified schema and ledger")
 
         def now():
             return datetime.now(timezone.utc)
@@ -237,11 +253,16 @@ def lane(repo, latest, target, baseline, posture, progress):
         def rollback_allowed():
             if target == "api" and now() >= datetime.fromisoformat(before.expires):
                 raise ValueError("predecessor API rollback qualification expired")
-            if not database_matches() or not exposure_matches(live=False):
+            if target == "api" and postgres_facts() not in (database, expected):
+                raise ValueError("reference rollback database differs from both qualified states")
+            if migration is not None and not migration_login_disabled():
+                raise ValueError("reference migration login is active")
+            if not exposure_matches(live=False):
                 raise ValueError("rollback database or exposure no longer agrees")
 
         def ready():
-            if observe(target) != active or not exposure_matches() or not database_matches():
+            if observe(target) != active or not exposure_matches() or (
+                    target == "api" and postgres_facts() != database):
                 raise ValueError("reference predecessor, isolation or database changed during staging")
             if protected_head("deployment") != latest.revision or protected_head(target) != desired.source:
                 raise ValueError("protected source advanced before reference activation")
@@ -252,13 +273,14 @@ def lane(repo, latest, target, baseline, posture, progress):
             progress[0] = "activation"
 
         def finish():
-            if not exposure_matches() or not database_matches():
+            if not exposure_matches() or (target == "api" and postgres_facts() != expected):
                 raise ValueError("reference exposure or database changed during activation")
             public_accept(authenticated=True, target=target, source=desired.source)
             record(saved, {"revision": latest.revision, "runtime": {role: asdict(value) for role, value in stages.items()}})
 
         ready()
-        apply(target, active, stages, archives, ready, finish, rollback_allowed)
+        apply(target, active, stages, archives, ready, finish, rollback_allowed,
+              migrate=migrate if migration is not None else None)
         print(f"reference-update.{target}: activated {desired.source[:12]}", flush=True)
 
 

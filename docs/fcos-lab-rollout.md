@@ -8,13 +8,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 For host updates and the next controlled rebuild, start at the
 [FCOS operations handoff](#fcos-operations-handoff).
 
-This coordinator sequences compatible, migration-free changes to the
+This coordinator sequences compatible changes to the
 [FCOS application fixture](fcos-application-poc.md). The production update
 and RecoverySet requirements remain under
 [deployment #93](https://github.com/SecPal/deployment/issues/93). The user timer
 and coordinator provide protected-main release detection, staged rollout and
 interruption recovery. The guest adapter handles frontend image updates and
-reviewed migration-free API/PHP-FPM updates. Qualify a genuine release on
+reviewed API/PHP-FPM updates. Qualify a genuine release on
 all three hosts before relying on a new rollout lane.
 
 ## Release source and discovery
@@ -88,7 +88,7 @@ admission nor official release acceptance. Compare equivalent current
 scanner evidence against the installed predecessor under the existing
 deployment lock. Apply target-specific exposure and compatibility requirements,
 including the public reference's exposure. The controller still honors the
-current protected Lab pins and the migration-free API compatibility contract.
+current protected Lab pins and the API compatibility contract.
 See [deployment #93](https://github.com/SecPal/deployment/issues/93) for that
 scope and the separate Managed Hosting contract.
 
@@ -257,6 +257,19 @@ Actions archives for that invocation. Each guest verifies the receipt and
 current source-security report, imports only the exact native children, and
 applies the same compatibility, runtime inspection and activation checks.
 
+For an API change that adds migrations on the three enrolled synthetic
+guests, reuse the same compatibility record with `schema_version: 2`.
+Keep `schema` and `ledger` bound to the restored predecessor database.
+Add a `migration` object with the `schema` and `ledger` hashes observed
+after the exact candidate's one-shot has run on the verified native restore.
+The ledger must advance. Stay within the existing recovery boundary so the
+successful forward qualification and the independent rollback qualification
+on both architectures include the check for existing application data and
+roles. Run the predecessor's application, job and runtime-role checks
+against that same post-migration database. Both rollback records are
+required for a migration. A successful `artisan migrate` alone is insufficient.
+Changed existing migration files and replaced schema dumps are ineligible.
+
 Every guest verifies the file hash and pair and compares the schema and
 ledger to its live database before staging. Missing or failed rehearsals
 leave the candidate ineligible. The guest also continues to snapshot
@@ -265,7 +278,13 @@ check those permissions explicitly.
 
 Activation stops API HTTP, the workers, scheduler and FPM before updating
 their image references. It starts FPM before API HTTP and the background
-units. The guest checks the pair and worker cardinality and compares the
+units. For a qualified migration the guest stops those roles, rechecks the
+predecessor database and runs the existing separate migration one-shot using
+the staged PHP-FPM digest. The temporary migration login and credential files
+are retired before traffic restarts. The qualified resulting schema and ledger
+must match on acceptance. The migration stays applied after a compatible
+image rollback. Recovery of a partially changed database is a separate
+operation. The guest checks the pair and worker cardinality and compares the
 container IDs and start times of PostgreSQL, frontend, HAProxy, CrowdSec
 and SPOA across the switch. Rollback uses the locally retained predecessor
 and requires the same database snapshot and separate backward compatibility
@@ -613,7 +632,7 @@ complete host acceptance.
 
 The five-minute container timer covers the enrolled SecPal fixture.
 Frontend deployment is live-qualified. The backend lane admits reviewed
-migration-free API, FPM, worker and scheduler changes through the shared
+API, FPM, worker and scheduler changes through the shared
 release coordinator. Its first live code change still needs qualification.
 Discovery of PostgreSQL, HAProxy, CrowdSec, SPOA and CRS versions is
 informational. Those roles have no automatic rollout in this fixture.

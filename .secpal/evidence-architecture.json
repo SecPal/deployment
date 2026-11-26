@@ -27,6 +27,26 @@
       }
     },
     {
+      "id": "fcos-db-roles.existing-cluster",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.existing-cluster",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-db-roles.existing-credential-root",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-db-roles.existing-credential-root",
+        "kind": "semantic"
+      }
+    },
+    {
       "id": "fcos-db-roles.enable-logins",
       "reachable": true,
       "fallible": true,
