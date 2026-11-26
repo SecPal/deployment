@@ -713,17 +713,19 @@ validate_backend_compatibility() {
         select(length == 1) | .[0]
         | select(type == "object")
         | select(.previous_pair == $previous and .candidate_pair == $candidate
-            and .schema == $schema and .ledger == $ledger and (.forward | evidence)
+            and (.schema | database_hash) and (.ledger | database_hash) and (.forward | evidence)
             and ([.forward[]] | unique | length) == 2)
         | select(.rollback == null or ((.rollback | evidence)
             and ([.forward[], .rollback[]] | length == (unique | length))))
-        | if .schema_version == 1 and keys ==
+        | if .schema_version == 1 and .schema == $schema and .ledger == $ledger and keys ==
             ["candidate_pair","forward","ledger","previous_pair","rollback","schema","schema_version"]
           then (.rollback != null | tostring)
           elif .schema_version == 2 and keys ==
             ["candidate_pair","forward","ledger","migration","previous_pair","rollback","schema","schema_version"]
             and .rollback != null and (.migration | type == "object" and keys == ["ledger","schema"]
-            and all(.[]; database_hash)) and .migration.ledger != $ledger
+            and all(.[]; database_hash)) and .migration.ledger != .ledger
+            and ((.schema == $schema and .ledger == $ledger) or
+                 (.migration.schema == $schema and .migration.ledger == $ledger))
           then {rollback:true,migration:.migration}
           else empty end
     ' "$1"
@@ -965,9 +967,10 @@ switch_backend() {
     backend_step install-images install_backend_refs "$record" &&
         backend_step install-images write_release_asset "$fpm_pool" render_api_release "$fpm_pool" "$source" &&
         backend_step reload-units runtime systemctl --user daemon-reload &&
-        backend_step start-fpm runtime systemctl --user start "$slot-php-fpm.service" &&
-        backend_step start-http runtime systemctl --user start "$slot-api.service" &&
-        backend_step start-background runtime systemctl --user start "${services[@]:2}" &&
+        backend_step start-fpm runtime systemctl --user --job-mode=ignore-dependencies start "$slot-php-fpm.service" &&
+        backend_step start-http runtime systemctl --user --job-mode=ignore-dependencies start "$slot-api.service" &&
+        backend_step start-background runtime systemctl --user --job-mode=ignore-dependencies start "${services[@]:2}" &&
+        backend_step database-snapshot migrations_idle &&
         backend_step running-identities backend_running "$record" "$untouched"
 }
 

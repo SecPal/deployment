@@ -676,6 +676,10 @@ class GuestContract(unittest.TestCase):
                     self.assertEqual(result.returncode == 0, admitted is not None, result.stderr)
                     if admitted is not None:
                         self.assertEqual(result.stdout.strip(), admitted)
+            fixture.write_text(json.dumps(changing))
+            resumed = subprocess.check_output(["bash", "-c", command, "test", self.guest, fixture,
+                                               previous, candidate, migration["schema"], migration["ledger"]])
+            self.assertEqual(json.loads(resumed), {"rollback": True, "migration": migration})
 
     def test_automatic_migration_allows_only_new_registered_definitions(self):
         before = [{"existing": "a" * 64}, []]
@@ -952,9 +956,9 @@ class GuestContract(unittest.TestCase):
             f"systemctl --user --job-mode=ignore-requirements stop {slot}-php-fpm.service {background}",
             "metadata",
             "systemctl --user daemon-reload",
-            f"systemctl --user start {slot}-php-fpm.service",
-            f"systemctl --user start {slot}-api.service",
-            f"systemctl --user start {background}",
+            f"systemctl --user --job-mode=ignore-dependencies start {slot}-php-fpm.service",
+            f"systemctl --user --job-mode=ignore-dependencies start {slot}-api.service",
+            f"systemctl --user --job-mode=ignore-dependencies start {background}",
         ])
 
     def test_guest_rejects_inexact_or_misscoped_wire_requests(self):

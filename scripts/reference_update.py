@@ -142,12 +142,12 @@ def compatible(repo, release, before, after, database):
     version = data["schema_version"]
     if type(version) is not int or version not in (1, 2):
         raise ValueError("unsupported API compatibility record")
-    expected = {"previous_pair": before.pair, "candidate_pair": after.pair,
-                "schema": database["schema"], "ledger": database["ledger"]}
+    expected = {"previous_pair": before.pair, "candidate_pair": after.pair}
+    database_keys = {"schema", "ledger"}
     extras = {"migration"} if version == 2 else set()
-    if (set(data) != set(expected) | {"schema_version", "forward", "rollback"} | extras or
+    if (set(data) != set(expected) | database_keys | {"schema_version", "forward", "rollback"} | extras or
             any(data[key] != value for key, value in expected.items())):
-        raise ValueError("public database does not match the qualified API pair")
+        raise ValueError("reference compatibility record differs from the qualified API pair")
     proofs = []
     for direction in ("forward", "rollback"):
         entries = data[direction]
@@ -156,14 +156,17 @@ def compatible(repo, release, before, after, database):
         proofs.extend(entries.values())
     if len(set(proofs)) != 4 or any(re.fullmatch(publisher.DIGEST, evidence) is None for evidence in proofs):
         raise ValueError("invalid native API qualification identities")
-    if version == 1:
-        return None
-    migration = data["migration"]
-    if (not isinstance(migration, dict) or migration.keys() != {"schema", "ledger"}
-            or not all(isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value)
-                       for value in migration.values())
-            or migration["ledger"] == database["ledger"]):
+    starting = {key: data[key] for key in database_keys}
+    live = {key: database[key] for key in database_keys}
+    migration = data.get("migration")
+    if version == 2 and (not isinstance(migration, dict) or migration.keys() != database_keys
+                         or migration["ledger"] == starting["ledger"]):
         raise ValueError("invalid qualified post-migration database")
+    for state in (starting,) if migration is None else (starting, migration):
+        if not all(isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) for value in state.values()):
+            raise ValueError("invalid qualified database identity")
+    if live != starting and live != migration:
+        raise ValueError("public database does not match a qualified state")
     return migration
 
 
@@ -280,7 +283,7 @@ def lane(repo, latest, target, baseline, posture, progress):
 
         ready()
         apply(target, active, stages, archives, ready, finish, rollback_allowed,
-              migrate=migrate if migration is not None else None)
+              migrate=migrate if migration is not None and database != expected else None)
         print(f"reference-update.{target}: activated {desired.source[:12]}", flush=True)
 
 

@@ -32,13 +32,14 @@ class ReferenceContract(unittest.TestCase):
         }
         release = SimpleNamespace(revision="a" * 40)
 
-        def validate(contents):
+        def validate(contents, observed=database):
             raw = json.dumps(contents).encode()
             candidate.compatibility = hashlib.sha256(raw).hexdigest()
             with patch("reference_update.git", return_value=raw):
-                return compatible(None, release, previous, candidate, database)
+                return compatible(None, release, previous, candidate, observed)
 
         self.assertEqual(validate(record), advanced)
+        self.assertEqual(validate(record, advanced), advanced)
         for invalid in (
             dict(record, rollback=None),
             dict(record, ledger="9" * 64),
