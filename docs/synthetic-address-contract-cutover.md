@@ -9,9 +9,8 @@ The operator authorizes one attended schema-changing cutover for the enrolled
 SecPal-owned synthetic reference pair `app.secpal.dev` / `api.secpal.dev` and
 Lab guests CX23 (163965414), CX33 (163717938), and CAX21 (169716995).
 Use [deployment #93](https://github.com/SecPal/deployment/issues/93) for the
-activation and recovery controls. The routine timers retain the
-migration-free [Lab](fcos-lab-rollout.md) and
-[public reference](public-reference-updates.md) contracts. The operator accepts
+activation and recovery controls. Routine timers use the [Lab](fcos-lab-rollout.md) and
+[public reference](public-reference-updates.md) contracts for later changes. The operator accepts
 the fenced, independently verified logical recovery point below for this
 single cutover on the four named synthetic installations. All other
 state-changing rollouts retain their existing recovery rules, including the
@@ -117,7 +116,59 @@ separate final restore captured and verified under the write fence in step 3.
    writes accepted after the viewer fence was lifted.
 6. Adopt the verified running artifact and schema identities through the
    existing enrollment and protected deployment state before resuming the
-   migration-free timers. Record the observed result for each target in #93.
+   component update timers. Record the observed result for each target in #93.
+
+## Post-cutover enrollment
+
+The Lab pins adopt the already-running API pair and Frontend index in this
+contract. The combined pin change authorizes enrollment of this observed state.
+It carries no compatibility pin for starting a new backend activation. Future
+updates use the ordinary independently admitted component transactions.
+
+On each of the three guests and the public reference, verify the native signed
+publisher subjects, the running exact image pins, application readiness, and
+the unchanged PostgreSQL system identity recorded above. The approved
+post-cutover schema hash is
+`62126b55ff35c255997e59c4a4356f360b8990a36a3b085a597141bfdd3aa889` and the
+migration ledger hash is
+`650271e203e03a473618dbe7f7bcb1e9e9a26e4627ce4a27cef2c7f932e87e93`. Reuse
+the existing schema and ledger hash procedures. Keep the migration login closed.
+
+Keep both update timers stopped and wait for their services to finish. Use the
+protected-main revision containing this enrollment procedure and verify the
+GitHub commit signature. Retain the verified OCI archives in the existing Lab
+archive store with both native platforms, their SPDX data and attestations.
+
+1. On each Lab guest, run
+   [the attended enrollment](../scripts/fcos-lab-adopt-address-baseline.sh)
+   as the existing administrator. Pass the target slug, root-owned staging
+   directory from the cutover, exact protected revision and SHA-256 of the
+   proof tar on stdin. The tar contains `api-proof.txt` and
+   `frontend-proof.txt` in that order. In the API file, put the unpublished
+   runtime-pair receipt, bundle and source-security report on three separate
+   base64 lines. In the frontend file, put the pre-registry receipt, its bundle,
+   the prepared document and OCI index on four separate base64 lines.
+   The procedure holds the existing guest lock, verifies runtime and PostgreSQL
+   identities and preserves the previous journal, policy and migration
+   override. It removes only the idle override left by this cutover.
+2. When all three guests report the same protected fingerprint, archive the
+   previous idle coordinator journal and update `SECPAL_FCOS_BASELINE` to
+   the same protected revision. Run the existing coordinator in
+   `--component-updates` mode with the installed adapter and state directory,
+   omitting `--archive-proposals` on this first run. Its initialization requires
+   matching observations from all three guests. Run the regular rollout service
+   and start its timer after success.
+3. On the reference, run
+   [the attended enrollment](../scripts/reference_adopt_address_baseline.py)
+   using the existing root-managed reference venv with `-I`. Pass the same
+   protected revision. The procedure holds the existing reference lock and
+   verifies publisher signatures, running native artifacts, public exposure,
+   authenticated readiness and PostgreSQL identity before adopting the
+   observed state. Run the ordinary reference update service and start its
+   timer after success.
+
+Enrollment preserves running image and database identities. A failure leaves
+the affected timer stopped for investigation.
 
 [api]: https://github.com/SecPal/api/pull/3114
 [frontend]: https://github.com/SecPal/frontend/pull/2280
