@@ -100,7 +100,8 @@ candidate=$(record "$revision" "$wanted" "$front_ref" "$front_config" update "$f
         '.backend = ($images+{pair:$pair,expires:$expiry})')
 previous=$(cat "$store/accepted.json")
 if [[ $previous == "$candidate" && "$foundation" == "$revision" ]]; then
-    check_installed && matches "$candidate"
+    check_installed
+    matches "$candidate"
     printf '%s %s\n' "$target" "$wanted"
     exit
 fi
@@ -137,6 +138,8 @@ restore(){
     exit "$rc"
 }
 trap restore EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 unlink "$migrate"
 rmdir "${migrate%/*}"
 runtime systemctl --user daemon-reload

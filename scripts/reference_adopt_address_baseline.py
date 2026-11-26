@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import sys
 import tempfile
 
@@ -87,6 +88,8 @@ def main():
     import reference_runtime
     import reference_update
 
+    signal.signal(signal.SIGTERM, reference_update.interrupted)
+    signal.signal(signal.SIGINT, reference_update.interrupted)
     os.umask(0o077)
     tempfile.tempdir = "/var/tmp"
     fd = os.open(reference_update.LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
