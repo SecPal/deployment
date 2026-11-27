@@ -4,7 +4,7 @@
 # Isolated source builds use these constraints. They are separate from the installed tools.
 # PyYAML builds from source on the qualified CPython 3.15 runner.
 Cython==3.3.1
-packaging==26.3
+packaging==26.4
 setuptools==84.2.1
 wheel==0.48.0
 # REUSE builds from source in both tooling environments.
