@@ -32,6 +32,12 @@ owns state and recovery authority. Its failure-class-specific recovery evidence
 and [ADR-022 topology rules](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-deployment-topology-high-availability-adr022.md)
 apply independently of the platform adapter.
 
+Use the [deployment roadmap](../roadmap.md) for current FCOS qualification and
+Production Acceptance. The retained [Rocky host contract](production-host.md)
+and [native PostgreSQL contract](native-postgresql.md) bind earlier evidence
+to its original subjects. [Retained cloud recovery](../rocky-cloud-qualification.md)
+has its own exact-run scope.
+
 ## Repository responsibilities
 
 This repository owns public, portable deployment contracts and their evidence,
