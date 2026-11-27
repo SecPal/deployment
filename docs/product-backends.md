@@ -88,12 +88,12 @@ the fragment contains no public listener, TLS material or routing decision.
 
 ## Validation and qualification
 
-Active GCP provisioning and the `product-backend-policy` dispatcher are retired.
-The following historical GCP transport narrative is retained as context, not an
-active requirement or successful provider proof. The native backend observer,
-effective-policy/negative-access tests and accepted #248 reference-host evidence
-remain; the real host invariants above are unchanged. See
-[the retirement and retained cleanup boundary](rocky-cloud-qualification.md).
+The native backend observer and effective-policy tests cover the fixed-loopback
+contract above. The [reference-host evidence](https://github.com/SecPal/deployment/issues/248)
+is scoped to its original hosts and source. The
+[GCP backend qualification](https://github.com/SecPal/deployment/issues/294)
+was closed as not planned after dispatch was retired.
+[Retained cloud recovery](rocky-cloud-qualification.md)
 
 Focused repository evidence:
 
@@ -109,7 +109,7 @@ python3 scripts/validate-product-backend-qualification.py
 The qualification regression exercises the real production renderer, closed
 source manifest, HTTP fixture installation and bounded cleanup both before and
 after application-network retirement. Metadata tests independently reconstruct
-the selected closure with pinned OpenTofu for both maintained Rocky profiles.
+the historical source closure for both Rocky profiles.
 
 The namespace test applies the actual nftables policy in a disposable user and
 network namespace. It exercises intended and unrelated UIDs, exact loopback
@@ -135,86 +135,6 @@ runtime overrides from generated services. An inactive stale socket pathname
 is not a runtime API dependency. It creates only its own named units/networks
 and removes them after the test.
 
-These tests prove the source contract. Historically, privileged proof was
-extracted from #101 to evidence-only
-[#294](https://github.com/SecPal/deployment/issues/294) by explicit graph-first
-replanning because privileged execution trusts only accepted protected main.
-PR #293 could not be its own cloud/root authority. #101 owns the implementation,
-local/native evidence and maintained qualification path. #294 originally owned
-the real host result, cleanup and provider empty-state evidence; that execution
-is now deferred and #294 is closed as not planned. A post-merge defect requires a new corrective leaf,
-rather than reopening #101 or adding another primary delivery PR to it.
-
-The existing Rocky workflow has the closed `product-backend-policy` selector.
-Its fixed entrypoint is
-`scripts/ci-cloud/run-product-backend-qualification.sh`; it executes
-`qualify-product-backends.py` from accepted control installed under
-`/opt/secpal-control`, using only two bounded numeric run arguments. The selector
-rejects caller target SHAs and retains the authenticated frozen #80 host pair.
-It adds no PR resolver, executable-path input, provider, workflow family or
-arbitrary privileged command facility.
-
-Preparation publishes a closed source manifest binding accepted control SHA,
-profile, preparation run/attempt and the exact fixed executable/import/policy
-closure. Qualification retrieves it from that exact preparation and reconfirms
-it before provider authority. A plain host or PostgreSQL preparation cannot
-supply this capability. Aggregate-hashed bootstrap transport installs the closure
-and manifest as root-owned immutable files. The product profile carries its own
-optional payload in place of the PostgreSQL optional payload; both reuse the
-existing host preparation, identity-free handoff, continuation and cleanup.
-OpenTofu metadata admission and exact reconstruction tests cover both profiles.
-
-The qualifier installs the actual administrator helper/contract and service,
-requires Enforcing, disables only the qualification host's pasta bind-all
-boolean, and requires HAProxy connect-any already off. It activates the actual
-policy, queries loaded kernel SELinux port mappings and access decisions, reads
-live nftables rules, and uses the packaged host-native `haproxy.service` with its
-real non-login UID and `haproxy_t` worker context. Backend-only HTTP health checks
-run across three native rootless product recreations. A local Unix stats socket
-reports HTTP 200 health; no public HAProxy routing is constructed here.
-
-The same run exercises unrelated local UID, IPv6-loopback and external-veth
-access denial, an actual unrelated-port HAProxy SELinux denial, and mandatory
-startup refusal when the policy barrier is missing or has a stale digest.
-Stopping the actual policy service and withdrawing its dedicated nftables table
-must leave both previously running product units inactive, their listeners absent
-and the barrier withdrawn. The host control-plane metadata firewall is preserved;
-unit ordering binds the same synchronous withdrawal to nftables service stop.
-External denial includes a healthy private-address listener as its positive control. Frontend has only the edge
-network and no private credentials or bind mounts. Product images remain digest
-pinned, rootless and separate; local Podman uses no runtime API/socket or IP
-lookup. Synthetic HTTP fixture initialization is never production secret material.
-
-Observations and diagnostic identities are closed and bounded. Pure admission
-reuses the existing Rocky signed-RPM owner and the backend policy owner.
-Accepted-main control independently authenticates source hashes, preparation and
-resource identities, the frozen host evidence digest and all required effective
-facts from raw access decisions, installed rules, service/cgroup/process identity,
-HTTP statistics and network results. Guest output has no self-authorizing PASS
-field. The closed backend preparation profile installs `haproxy` and
-`setools-console` through the existing reviewed DNF preparation transaction.
-These packages, their dependencies and package-created accounts belong to the
-prepared VM baseline; the observer performs no package transaction. It compares
-before/after RPM catalog and public account-file digests, which control admits
-independently. Provider destruction removes the entire prepared baseline.
-Host cleanup stops only
-qualification services, removes owned policy/module/rules/units/networks/test
-state and restores the original HAProxy configuration and pasta boolean. Exact
-container, image, network, listener, service, file and policy absence is read back
-and independently admitted; nftables is restored active. The
-generated edge-network service is stopped and reset alongside the product
-services, and all three user-unit states must be inactive after reload. The
-existing unconditional provider cleanup destroys the exact continuation state.
-The proof leaf also requires authoritative provider empty-state read-back.
-
-Both `gcp-rocky-10-2-x86-64` and `gcp-rocky-10-2-arm64` were required for #294:
-Issue #80 supports both qualified architectures, and no maintained architecture-neutral
-waiver exists for this new host policy/runtime seam. Fixture and source PASS do
-not qualify the privileged installed boundary. Real privileged execution is
-intentionally not performed within #101.
-
-Issue #305 is #101's post-merge corrective leaf under #90; #101 remains completed.
-Issue #294 is now closed as not planned and its provider execution remains deferred.
-This source correction dispatches no GCP work and grants no privileged-host,
-provider, Managed Production, HA or customer-production acceptance. It does
-not implement #81's native PostgreSQL mapping or #219's HAProxy runtime/routing.
+The repository tests qualify the source behavior. FCOS and customer
+Production Acceptance require separate evidence under their owning deliveries.
+[Current deployment qualification](roadmap.md)

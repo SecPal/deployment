@@ -12,10 +12,11 @@ The Managed reference is Fedora CoreOS Stable under
 The [deployment roadmap](../roadmap.md) tracks Managed implementation and
 qualification.
 
-This document defines the repository's Rocky Linux 10.2 host-facts and
-qualification contract for the retained native profile. It uses SELinux
-Enforcing, rootless Podman, systemd-user and native Quadlet. Its evidence is
-specific to that platform.
+This document defines the host facts and qualification for the previous
+Rocky Linux 10.2 reference. The retained native contract and its evidence use
+SELinux Enforcing, rootless Podman, systemd-user and native Quadlet on that
+specific platform. The original source and recovery boundaries are linked from
+[Retained Rocky cloud recovery](../rocky-cloud-qualification.md).
 
 Host-facts schema version 2 supersedes the historical version 1 Debian fact
 shape without rewriting old evidence. The checked-in positive host documents

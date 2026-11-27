@@ -5,6 +5,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Scoped Fedora EPEL provenance for Certbot
 
+This supply exception belongs to the previous Rocky host profile. Its package
+and runtime observations apply to their recorded source and hosts. The
+[current deployment roadmap](../roadmap.md) tracks qualification on FCOS.
+
 ## Decision and delivery boundary
 
 [Deployment #308](https://github.com/SecPal/deployment/issues/308) owns this

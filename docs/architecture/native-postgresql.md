@@ -5,8 +5,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Native PostgreSQL 18
 
-This document describes the retained native Rocky reference and its consumers.
-Managed Hosting uses the [FCOS PostgreSQL container contract](../postgresql-qualification.md).
+This document describes the previous native Rocky reference and the retained
+consumers of its exact evidence. Managed Hosting uses the
+[FCOS PostgreSQL container contract](../postgresql-qualification.md).
 
 The native declaration is
 [`postgresql-contract.json`](../../config/production/postgresql-contract.json).
@@ -19,9 +20,9 @@ both amd64 and arm64. PG16/17, PGDG and container compatibility paths are absent
 
 ## First installation and configuration
 
-General host installation remains #92. The PostgreSQL portion consumes the
-exact package version/release and configuration bytes in the declaration;
-rendering performs no host mutation:
+The PostgreSQL renderer for that profile consumes the package
+version/release and configuration bytes in the declaration. Rendering is
+read-only:
 
 ```sh
 python3 -I scripts/render-native-postgresql.py --runtime-uid 20000

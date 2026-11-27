@@ -5,9 +5,8 @@ SPDX-License-Identifier: CC0-1.0
 
 # SecPal Deployment
 
-SecPal Deployment is the public reference for reproducible SecPal integration,
-self-hosting, deployment contracts, container orchestration, edge and security
-integration, and operational procedures for backup, restore, and updates.
+Public integration, self-hosting, and deployment contracts for SecPal's
+open-source security operations software.
 
 ## Current platform
 
@@ -19,11 +18,9 @@ PostgreSQL, HAProxy and CrowdSec where suitable. AMD64 and ARM64 qualification
 uses native systems. Self-Hosted installations consume the portable contracts
 and can use other qualified platform adapters.
 
-[Architecture scope](docs/architecture/scope.md) routes to the accepted decisions
-for runtime, Edge, state and recovery. [Current delivery](docs/roadmap.md) records
-which contracts are implemented, what the FCOS lab has qualified, and which
-production acceptance evidence remains open. There are no production customer
-installations.
+Use the architecture index for accepted decisions on runtime, Edge, state, and
+recovery. The roadmap links current implementation and qualification owners.
+[Architecture scope](docs/architecture/scope.md) · [Current delivery](docs/roadmap.md)
 
 ## Integration and FCOS lab
 
@@ -35,9 +32,10 @@ fixture prerequisites.
 
 The [FCOS application proof](docs/fcos-application-poc.md) exercises private HTTPS
 and persistent rootless volumes with synthetic data. The
-[FCOS lab rollout](docs/fcos-lab-rollout.md) documents the admitted update and
+[FCOS lab rollout](docs/fcos-lab-rollout.md) documents admitted lab update and
 recovery paths. Lab qualification and Managed Production Acceptance have
-separate evidence.
+separate evidence. Customer Production Acceptance requires evidence for the
+customer deployment under its owning delivery.
 
 ## Repository boundaries
 

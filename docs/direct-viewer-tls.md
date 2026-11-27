@@ -14,6 +14,9 @@ PROTECTED Origin certificates have separate authorities.
 
 ## Supply and execution authority
 
+The package and host-service procedures in this section describe the native
+Rocky profile. The [deployment roadmap](roadmap.md) tracks FCOS Edge qualification.
+
 The only package owner is the accepted
 [Certbot provenance contract](architecture/certbot-package-provenance.md) and
 `config/production/certbot-package-policy.json`, policy

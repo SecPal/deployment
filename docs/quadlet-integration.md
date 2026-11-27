@@ -183,11 +183,12 @@ floors.
 ## Exact-target cloud workload interface
 
 The retained #119/#121 workload interface provides two closed operations in
-target code. The Rocky workflow connects it after host admission through the
-[existing evidence pipeline](cloud-workload-evidence-layers.md). Real provider
-acceptance remains owned by #123; source integration does not claim a cloud PASS. `workload-prepare-start` derives the fixture identifier and port
-from the already admitted commit, installs a checksum-pinned GitHub CLI in the
-private fixture, repeats both product attestation gates, stages immutable
+target code. The former Rocky qualification dispatcher is retired. The
+[workload evidence contract](cloud-workload-evidence-layers.md) records the
+scope of its earlier evidence. `workload-prepare-start` derives the fixture
+identifier and port from the already admitted commit, installs a
+checksum-pinned GitHub CLI in the private fixture, repeats both product
+attestation gates, stages immutable
 `localhost/secpal-ci-…@sha256:…` identities, renders the closed unit set, and
 publishes it through `/usr/local/bin/secpal-ci-quadlet-fixture`. It does not
 start a service. The main-controlled collector admits the closed root-owned
@@ -219,7 +220,7 @@ request is a cleanup failure. The published product images are deliberately
 not removed.
 
 Disposable workload evidence is separate from the Ubuntu browser matrix and
-from independent Rocky production-host qualification. A workload artifact is
+from previously collected Rocky host evidence. A workload artifact is
 evidence only after independent collection and closed-schema admission.
 Publishing Quadlets alone is not a passing claim. The retired Debian
 provisioning workflow and its operator protocol remain in Git history.

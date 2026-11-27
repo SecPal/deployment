@@ -5,6 +5,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Shared host-native HAProxy base
 
+The RPM and host-service procedures below belong to the previous Rocky
+reference and its exact native evidence. The current FCOS rollout and
+infrastructure qualification are tracked in the [deployment roadmap](roadmap.md).
+
 Deployment #219 owns the shared runtime, HTTP routing, health, hygiene, logging
 and configuration lifecycle. It consumes #101's fixed backend and host-policy
 owner, `product_backend_contract.py` and `product-backend-policy`. It does not

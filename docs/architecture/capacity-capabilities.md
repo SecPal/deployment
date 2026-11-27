@@ -275,13 +275,11 @@ query a provider, inspect a host, dispatch qualification, or perform cleanup.
 
 ## Current provider qualification boundary
 
-The active `gcp-rocky-10-2-arm64` selector and `c4a-standard-4` machine type
-remain bounded #118/#123 provider-run inputs and architecture evidence. They
-are not `capacity_profile` values and are not a universal ARM recommendation.
-Existing evidence predates this schema and does not retroactively qualify `M`;
-[provider replay #123](https://github.com/SecPal/deployment/issues/123) can
-assemble this artifact from its reviewed real-system observations
-when that leaf runs. No provider run is dispatched by this contract delivery.
+The former `gcp-rocky-10-2-arm64` selector and `c4a-standard-4` machine type
+were provider-specific inputs. Qualification of a `capacity_profile` requires
+observations under this schema for the selected architecture and adapter.
+Earlier Rocky evidence retains its original scope.
+[Retired provider qualification](https://github.com/SecPal/deployment/issues/123)
 
 [provider adapter contract #169](https://github.com/SecPal/deployment/issues/169)
 may later request the public `capability` object and resolve it through a
