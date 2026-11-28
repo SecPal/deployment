@@ -24,25 +24,25 @@ if (defined('SECPAL_TEST_SECRET_ROOT')) {
     $databaseRoot = $testRoot.'/database';
 }
 
-$fail = static function (): never {
+function secpalSecretFailure(): never
+{
     fwrite(STDERR, "ERROR: production application secret contract is invalid.\n");
     exit(78);
-};
+}
 
 if (!is_string($secretRoot) || $secretRoot === '' || $secretRoot[0] !== '/') {
-    $fail();
+    secpalSecretFailure();
 }
 if (!function_exists('posix_geteuid') || !function_exists('posix_getegid')) {
-    $fail();
+    secpalSecretFailure();
 }
 $expectedUid = posix_geteuid();
 $expectedGid = posix_getegid();
 
-$readFile = static function (string $root, string $name, int $mode) use (
-    $fail,
-    $expectedUid,
-    $expectedGid,
-): string {
+function secpalReadSecretFile(string $root, string $name, int $mode): string
+{
+    $expectedUid = posix_geteuid();
+    $expectedGid = posix_getegid();
     $path = $root.'/'.$name;
     $metadata = @lstat($path);
     if ($metadata === false || ($metadata['mode'] & 0170000) !== 0100000
@@ -51,37 +51,55 @@ $readFile = static function (string $root, string $name, int $mode) use (
         || $metadata['uid'] !== $expectedUid
         || $metadata['gid'] !== $expectedGid
         || $metadata['size'] > 4096) {
-        $fail();
+        secpalSecretFailure();
     }
     $value = @file_get_contents($path, false, null, 0, 4097);
     if ($value === false || strlen($value) > 4096) {
-        $fail();
+        secpalSecretFailure();
     }
     return $value;
-};
+}
 
-$stripOptionalFinalLf = static function (string $value) use ($fail): string {
+function secpalStripOptionalFinalLf(string $value): string
+{
     if (str_contains($value, "\r")) {
-        $fail();
+        secpalSecretFailure();
     }
     if (str_ends_with($value, "\n")) {
         $value = substr($value, 0, -1);
     }
     if (str_contains($value, "\n")) {
-        $fail();
+        secpalSecretFailure();
     }
     return $value;
-};
+}
 
-$appKey = $stripOptionalFinalLf($readFile($secretRoot, 'app-key', 0400));
-$previous = $readFile($secretRoot, 'app-previous-keys', 0400);
-$databasePassword = $stripOptionalFinalLf($readFile($databaseRoot, 'postgres-password', 0400));
-$databaseUsername = $stripOptionalFinalLf($readFile($databaseRoot, 'postgres-username', 0400));
-$databaseCa = $readFile($databaseRoot, 'postgres-ca.crt', 0400);
+/** @return array{username: string, password: string, sslrootcert: string} */
+function secpalDatabaseCredentials(string $root): array
+{
+    $databasePassword = secpalStripOptionalFinalLf(secpalReadSecretFile($root, 'postgres-password', 0400));
+    $databaseUsername = secpalStripOptionalFinalLf(secpalReadSecretFile($root, 'postgres-username', 0400));
+    $databaseCa = secpalReadSecretFile($root, 'postgres-ca.crt', 0400);
+    $reservedDatabaseNames = ['postgres' => true, 'secpal_owner' => true, 'secpal_runtime' => true, 'secpal_migration' => true, 'secpal_backup' => true, 'secpal_replication' => true];
+    if (!preg_match('/\A[A-Za-z0-9._~!#$%&*+\-\/=?^]{24,128}\z/D', $databasePassword)
+        || !preg_match('/\A[a-z][a-z0-9_]{0,62}\z/D', $databaseUsername)
+        || isset($reservedDatabaseNames[$databaseUsername])
+        || !str_starts_with($databaseCa, "-----BEGIN CERTIFICATE-----\n")) {
+        secpalSecretFailure();
+    }
+    return [
+        'username' => $databaseUsername,
+        'password' => $databasePassword,
+        'sslrootcert' => $root.'/postgres-ca.crt',
+    ];
+}
+
+$appKey = secpalStripOptionalFinalLf(secpalReadSecretFile($secretRoot, 'app-key', 0400));
+$previous = secpalReadSecretFile($secretRoot, 'app-previous-keys', 0400);
+$databaseCredentials = secpalDatabaseCredentials($databaseRoot);
 $kekPath = $secretRoot.'/tenant-kek';
 $kekMetadata = @lstat($kekPath);
 
-$reservedDatabaseNames = ['postgres' => true, 'secpal_owner' => true, 'secpal_runtime' => true, 'secpal_migration' => true, 'secpal_backup' => true, 'secpal_replication' => true];
 $keyPattern = '/\Abase64:[A-Za-z0-9+\/]{43}=\z/D';
 $previousBody = str_ends_with($previous, "\n") ? substr($previous, 0, -1) : $previous;
 $previousKeys = $previousBody === '' ? [] : explode("\n", $previousBody);
@@ -91,10 +109,6 @@ if (!preg_match($keyPattern, $appKey)
     || count($previousKeys) > 3
     || count(array_unique($previousKeys)) !== count($previousKeys)
     || array_filter($previousKeys, static fn (string $key): bool => !preg_match($keyPattern, $key)) !== []
-    || !preg_match('/\A[A-Za-z0-9._~!#$%&*+\-\/=?^]{24,128}\z/D', $databasePassword)
-    || !preg_match('/\A[a-z][a-z0-9_]{0,62}\z/D', $databaseUsername)
-    || isset($reservedDatabaseNames[$databaseUsername])
-    || !str_starts_with($databaseCa, "-----BEGIN CERTIFICATE-----\n")
     || $kekMetadata === false
     || ($kekMetadata['mode'] & 0170000) !== 0100000
     || ($kekMetadata['mode'] & 0777) !== 0600
@@ -102,7 +116,7 @@ if (!preg_match($keyPattern, $appKey)
     || $kekMetadata['uid'] !== $expectedUid
     || $kekMetadata['gid'] !== $expectedGid
     || $kekMetadata['size'] !== 32) {
-    $fail();
+    secpalSecretFailure();
 }
 
 foreach (array_keys(getenv()) as $name) {
@@ -119,9 +133,9 @@ foreach (array_unique(array_merge(array_keys($_ENV), array_keys($_SERVER))) as $
 $values = [
     'APP_KEY' => $appKey,
     'APP_PREVIOUS_KEYS' => implode(',', $previousKeys),
-    'DB_PASSWORD' => $databasePassword,
+    'DB_PASSWORD' => $databaseCredentials['password'],
     'KEK_PATH' => $kekPath,
-    'DB_USERNAME' => $databaseUsername,
+    'DB_USERNAME' => $databaseCredentials['username'],
     'DB_SSLMODE' => 'verify-full',
     'DB_SSLROOTCERT' => $databaseRoot.'/postgres-ca.crt',
     'DB_HOST' => 'db.secpal.internal',
@@ -137,4 +151,4 @@ foreach ($values as $name => $value) {
     $_SERVER[$name] = $value;
 }
 
-unset($appKey, $previous, $previousKeys, $databasePassword, $databaseUsername, $databaseCa, $previousBody, $values);
+unset($appKey, $previous, $previousKeys, $databaseCredentials, $previousBody, $values);

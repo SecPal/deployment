@@ -1328,7 +1328,9 @@ def main() -> int:
         validate_host_facts(inventory, host_facts, synthetic=arguments.synthetic)
     except ContractViolation as exc:
         abort(str(exc))
-    print("Production inventory v1 and supplied Rocky host facts v2 satisfy admission.")
+    print(
+        f"Production inventory v{inventory['schema_version']} and supplied Rocky host facts v2 satisfy admission."
+    )
     return 0
 
 

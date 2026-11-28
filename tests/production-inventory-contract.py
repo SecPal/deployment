@@ -152,7 +152,7 @@ def main() -> int:
     ] = [
         ("unknown-field", lambda d: d.update({"unexpected": True}), None),
         ("missing-schema-version", lambda d: d.pop("schema_version"), None),
-        ("future-schema-version", lambda d: d.update({"schema_version": 2}), None),
+        ("future-schema-version", lambda d: d.update({"schema_version": 3}), None),
         (
             "relative-public-storage-path",
             lambda d: set_nested(d, ("paths", "public_application_storage", "path"), "data/public"),
