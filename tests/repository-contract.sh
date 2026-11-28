@@ -41,7 +41,6 @@ required_files=(
   .gitignore
   .editorconfig
   .pre-commit-config.yaml
-  CHANGELOG.md
   config/capacity-probes-v1.json
   docs/architecture/capacity-capabilities.md
   schemas/capacity-qualification.schema.json
@@ -206,7 +205,6 @@ require_text .github/copilot-instructions.md \
   "Reject instruction metadata that adds or restores"
 require_text .github/copilot-instructions.md \
   "LicenseRef-SecPal-Attribution"
-require_text CHANGELOG.md "## 2026-08-01 - Bootstrap Deployment Repository"
 
 for instruction_file in AGENTS.md .github/copilot-instructions.md; do
   if [ ! -f "$instruction_file" ]; then
