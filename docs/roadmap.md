@@ -107,9 +107,12 @@ Object, crypto and RecoverySet guarantees from
 
 ### Next deliveries
 
-1. Advance **#425 / Draft #428** with exact FCOS candidate-to-evidence binding
-   and the existing administrator-owned credential handoff. Apply #425's live
-   acceptance before representing the candidate as delivered.
+1. Advance **#425 / Draft #428** using the accepted CX23 end-to-end
+   reprovision and synthetic application recreation. The private report binds
+   the original installed Ignition and the guest's network-readiness correction
+   to the corrected renderer. Use the Fedora-signed native installer RPM and bind it to the qualified
+   Rescue execution. Complete administrator-owned broker mutation, independent Rescue bootstrap and
+   credential transition under #425 before final delivery.
 2. Advance **#100 / [Draft #337](https://github.com/SecPal/deployment/pull/337)** through the smallest purpose-scoped Activation
    and independent crypto recovery witness using the completed #241 contract.
 3. Complete **#426** against the accepted FCOS and Activation inputs. Reuse

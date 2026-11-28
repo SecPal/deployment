@@ -347,6 +347,156 @@
       }
     },
     {
+      "id": "fcos-artifacts.cache.verify",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.cache.verify",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.image.aarch64.digest",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.image.aarch64.digest",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.image.aarch64.signature",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.image.aarch64.signature",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.image.x86_64.digest",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.image.x86_64.digest",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.image.x86_64.signature",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.image.x86_64.signature",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.installer.aarch64.rpm",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.installer.aarch64.rpm",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.installer.key",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.installer.key",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.installer.output",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.installer.output",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.installer.x86_64.rpm",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.installer.x86_64.rpm",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.key.import",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.key.import",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.pins.read",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.pins.read",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.tool.butane.digest",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.tool.butane.digest",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.tool.butane.signature",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.tool.butane.signature",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.tool.ignition_validator.digest",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.tool.ignition_validator.digest",
+        "kind": "semantic"
+      }
+    },
+    {
+      "id": "fcos-artifacts.tool.ignition_validator.signature",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "fcos-artifacts.tool.ignition_validator.signature",
+        "kind": "semantic"
+      }
+    },
+    {
       "id": "hetzner-broker.action.inspect",
       "reachable": true,
       "fallible": true,
