@@ -865,3 +865,46 @@ valid RecoverySet, compatible rollback and live acceptance before
 enabling an automatic public rollout. The existing lab timer remains scoped
 to the enrolled private fixture. The native FCOS OS driver follows the
 host's selected maintenance mode.
+
+### Monitor the enrolled PostgreSQL certificate
+
+Run the separate `secpal-fcos-postgres-tls.timer` in the existing
+`secpal-runtime` user manager on each lab guest. The independent administrator
+installs the service and timer into that account's user unit directory and
+`scripts/fcos-lab-postgres-tls.php` as
+`~/.local/lib/secpal-fcos-postgres-tls/probe.php`. Start the oneshot and require
+a valid sample before enabling its daily timer. The rollout timer is independent.
+
+The probe uses the running FPM container's PostgreSQL network and read-only CA
+file. It checks the server certificate presented for `db.secpal.internal`
+using TLS 1.3, and closes after the handshake. This check sends no database
+credentials or SQL. It needs neither a database port on the guest host nor a
+new SSH permission.
+
+Use the existing private health reporting path for Home Assistant. Publish
+only the most recent probe JSON from each guest's unit journal via the existing
+administrative WireGuard path. Add the three named reports to the existing
+private health exporter after its operator approves the collection mechanism.
+The rollout SSH credential only supports its fixed release protocol. It must
+retain that scope.
+
+Treat a missing report, an unsuccessful unit without a newer sample, and a
+sample older than 26 hours as monitoring failures. Each sample contains
+`observed_at` and `status`. A verified peer also reports `expires_at` and
+`seconds_remaining`. Alert at `warn_30d`, `warn_14d` and `warn_7d`. Treat
+`invalid_tls`, `trust_unavailable` and `unreachable` as failures on the first
+sample. Keep health-export transport failures visible independently of the
+last database observation.
+
+### Qualify a future certificate renewal
+
+Keep renewal a separately authorized, per-guest maintenance operation. Stage
+only the PostgreSQL certificate and its applicable trust material. Check the
+key match, SANs, chain, validity, ownership and modes before replacing any
+live file. Preserve the existing SCRAM, KEK and tenant keys. Where trust
+changes, prove the overlap and rollback path for the application clients first.
+Rehearse on the disposable fixture, then qualify a controlled renewal on one
+guest with the existing PostgreSQL reload and recovery procedures. Confirm the
+presented certificate, verify-full, API readiness, both workers, scheduler and
+AppSec before proceeding to another guest. Automatic live renewal stays
+disabled until that separate qualification has passed.
